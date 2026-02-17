@@ -18,13 +18,20 @@ find "$PROJECT_ROOT" -type f -name "*.sh" -exec chmod +x {} \;
 # --------------------------------------------------
 # Source core modules
 # --------------------------------------------------
-source ui.sh
-source state.sh
-source bootmode.sh
-source lib/disk.sh
-source executor.sh
-source microcode.sh
-source limine.sh
+
+# Resolve script directory safely
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+
+# Load modules
+source "$SCRIPT_DIR/ui.sh"
+source "$SCRIPT_DIR/state.sh"
+source "$SCRIPT_DIR/bootmode.sh"
+source "$SCRIPT_DIR/disk.sh"
+source "$SCRIPT_DIR/filesystem.sh"
+source "$SCRIPT_DIR/luks.sh"
+source "$SCRIPT_DIR/limine.sh"
+source "$SCRIPT_DIR/microcode.sh"
+source "$SCRIPT_DIR/executor.sh"
 
 # --------------------------------------------------
 # Dependency check
