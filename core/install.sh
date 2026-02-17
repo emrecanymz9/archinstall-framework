@@ -18,13 +18,13 @@ find "$PROJECT_ROOT" -type f -name "*.sh" -exec chmod +x {} \;
 # --------------------------------------------------
 # Source core modules
 # --------------------------------------------------
-source core/ui.sh
-source core/state.sh
-source core/bootmode.sh
-source core/lib/disk.sh
-source core/executor.sh
-source core/microcode.sh
-source core/limine.sh
+source ui.sh
+source state.sh
+source bootmode.sh
+source lib/disk.sh
+source executor.sh
+source microcode.sh
+source limine.sh
 
 # --------------------------------------------------
 # Dependency check
