@@ -24,23 +24,41 @@ fi
 export NO_COLOR=1
 
 # ---------------------------------------------------------------------------
+# On a physical/virtual linux console (e.g. VMware, VirtualBox) the shadow
+# that dialog draws by default sometimes renders as garbage characters.
+# --no-shadow disables the drop-shadow entirely for cleaner output on TERM=linux.
+# Only applied when running on a TTY; SSH/emulator sessions keep the default.
+# ---------------------------------------------------------------------------
+if [[ "${TERM:-}" == "linux" ]] && [[ -t 0 ]]; then
+    export DIALOGOPTS="${DIALOGOPTS:+$DIALOGOPTS }--no-shadow"
+fi
+
+# ---------------------------------------------------------------------------
 # strip_ansi – remove ANSI / VT escape sequences from a string.
 # dialog does not interpret ANSI codes; passing coloured output from commands
 # (e.g. sbctl, lsblk --color) directly to --msgbox/--menu causes visible
 # garbage like \E[0m or ^[[32m in the dialog box.
 #
-# Strips both real ESC (0x1B) byte sequences AND literal backslash-escaped
-# strings that appear as visible text (e.g. \033[31m, \e[0m, \x1b[1m).
+# Strips:
+#   • Real ESC (0x1B) CSI/OSC/single-char sequences
+#   • Literal backslash-escaped patterns that appear as visible text:
+#       \033[31m, \e[0m, \x1b[1m, \[32m
+#   • Carriage returns (\r / 0x0D) – prevents ^M appearing in dialog boxes
+#   • Non-printable control characters (0x00-0x08, 0x0B-0x0C, 0x0E-0x1F, 0x7F)
+#     while preserving \n (0x0A) and \t (0x09) which dialog handles correctly
 # ---------------------------------------------------------------------------
 strip_ansi() {
     printf '%s' "$*" | sed \
+        -e 's/\r//g' \
         -e 's/\x1B\[[0-9;:]*[A-Za-z]//g' \
         -e 's/\x1B][^\x07]*\x07//g' \
         -e 's/\x1B[][()#%*+][0-9A-Za-z]//g' \
         -e 's/\x1B.//g' \
         -e 's/\\033\[[0-9;]*[A-Za-z]//g' \
         -e 's/\\e\[[0-9;]*[A-Za-z]//g' \
-        -e 's/\\x1b\[[0-9;]*[A-Za-z]//g'
+        -e 's/\\x1b\[[0-9;]*[A-Za-z]//g' \
+        -e 's/\\\[[0-9;]*[A-Za-z]//g' \
+        -e 's/[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]//g'
 }
 
 # ---------------------------------------------------------------------------

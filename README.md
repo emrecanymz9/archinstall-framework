@@ -254,15 +254,20 @@ export TERM=linux
 ### What the installer does to prevent this
 
 * `installer/ui.sh` sets `TERM` automatically — `linux` on a physical/virtual
-  console (TTY), `xterm-256color` on non-TTY sessions (SSH, pipes, etc.).
+  console (TTY, including VMware/VirtualBox), `xterm-256color` on non-TTY
+  sessions (SSH, pipes, etc.). The variable is exported so all subprocesses see it.
 * `installer/ui.sh` exports `NO_COLOR=1` so that subprocesses (pacman, lsblk,
   etc.) suppress their own ANSI color output, preventing escape codes from
   leaking into dialog text.
+* On `TERM=linux` TTY sessions (e.g. VMware console), `DIALOGOPTS=--no-shadow`
+  is set automatically so that dialog's drop-shadow does not render as garbage
+  characters on the linux virtual-console font.
 * `require_tools()` smoke-tests `tput` and resets `TERM=linux` if it fails.
-* Every string passed to `dialog` is run through `strip_ansi()`, which removes
-  both real ESC-byte CSI/OSC sequences and literal `\033[…`, `\e[…`, `\x1b[…`
-  patterns, so coloured output from system commands is never displayed as raw
-  escape characters inside a dialog box.
+* Every string passed to `dialog` is run through `strip_ansi()`, which removes:
+  - Real ESC-byte CSI/OSC sequences (`\x1B[…`, `\x1B]…`)
+  - Literal backslash-escaped patterns: `\033[…`, `\e[…`, `\x1b[…`, `\[…`
+  - Carriage returns (`\r` / `^M`) that cause broken lines in dialog boxes
+  - Non-printable control characters (0x00–0x1F except `\n`/`\t`, and 0x7F)
 
 ### Quick fixes (if you still see garbage)
 
