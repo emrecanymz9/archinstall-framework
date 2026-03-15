@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# core/executor.sh – logging, command execution, arch-chroot wrapper
+# installer/executor.sh – logging, command execution, arch-chroot wrapper
 set -Eeuo pipefail
 
 LOG_FILE="${LOG_FILE:-/tmp/archinstall.log}"

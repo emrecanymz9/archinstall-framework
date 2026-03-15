@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# core/luks.sh – encryption selection and LUKS2 setup
+# installer/luks.sh – encryption selection and LUKS2 setup
 set -Eeuo pipefail
 
 # ---------------------------------------------------------------------------

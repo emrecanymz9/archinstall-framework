@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# core/limine.sh – bootloader selection and installation (Limine + systemd-boot/UKI)
+# installer/limine.sh – bootloader selection and installation (Limine + systemd-boot/UKI)
 set -Eeuo pipefail
 
 # ---------------------------------------------------------------------------

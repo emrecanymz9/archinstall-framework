@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# core/bootmode.sh – boot mode detection and selection dialog
+# installer/bootmode.sh – boot mode detection and selection dialog
 set -Eeuo pipefail
 
 # ---------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# core/ui.sh – dialog UI helpers with adaptive terminal sizing
+# installer/ui.sh – dialog UI helpers with adaptive terminal sizing
 set -Eeuo pipefail
 
 # ---------------------------------------------------------------------------
@@ -21,7 +21,7 @@ _dlg_dims() {
 _dlg() {
     local tmpfile rc
     tmpfile=$(mktemp)
-    dialog --backtitle "ArchInstall Framework" "$@" 2>"$tmpfile"; rc=$?
+    dialog --backtitle "${UI_BACKTITLE:-ArchInstall Framework}" "$@" 2>"$tmpfile"; rc=$?
     cat "$tmpfile"; rm -f "$tmpfile"
     return "$rc"
 }
@@ -33,14 +33,14 @@ _dlg() {
 # ui_msgbox <title> <text>
 ui_msgbox() {
     read -r H W _ <<< "$(_dlg_dims)"
-    dialog --backtitle "ArchInstall Framework" \
+    dialog --backtitle "${UI_BACKTITLE:-ArchInstall Framework}" \
            --title "$1" --msgbox "$2" "$H" "$W"
 }
 
 # ui_yesno <title> <text>  →  returns 0 for Yes, 1 for No
 ui_yesno() {
     read -r H W _ <<< "$(_dlg_dims)"
-    dialog --backtitle "ArchInstall Framework" \
+    dialog --backtitle "${UI_BACKTITLE:-ArchInstall Framework}" \
            --title "$1" --yesno "$2" "$H" "$W"
 }
 
@@ -83,7 +83,7 @@ ui_passwordbox() {
 ui_gauge_msg() {
     local title="$1" text="$2" pct="$3"
     read -r H W _ <<< "$(_dlg_dims)"
-    echo "$pct" | dialog --backtitle "ArchInstall Framework" \
+    echo "$pct" | dialog --backtitle "${UI_BACKTITLE:-ArchInstall Framework}" \
         --title "$title" --gauge "$text" 7 "$W" "$pct"
 }
 
