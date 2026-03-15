@@ -214,6 +214,71 @@ To enable Secure Boot after Phase 2:
 
 ---
 
+## Troubleshooting: dialog shows escape sequences / unreadable text
+
+If `dialog` boxes display raw escape sequences such as `\E[0m`, `\033[32m`, or
+`^[[1m` instead of readable text, the cause is almost always one of these:
+
+### 1. `TERM` is unset or set to an unknown value
+
+`dialog` needs a valid terminal type to render its UI. The installer sets
+`TERM=linux` automatically when the variable is unset, but if you export an
+unknown value beforehand the fix is:
+
+```bash
+export TERM=linux          # safe for any Linux TTY / VM console
+# or, for a full-colour terminal emulator:
+export TERM=xterm-256color
+```
+
+### 2. Running inside a terminal multiplexer with a mismatched `TERM`
+
+If you launch the installer from inside `tmux` or `screen` but `TERM` is not
+set to match (e.g. `TERM=tmux-256color` when dialog was built without that
+terminfo entry), set:
+
+```bash
+export TERM=xterm-256color
+./installer/install.sh
+```
+
+### 3. VMware / VirtualBox console
+
+On a raw VM console (not an SSH session), use:
+
+```bash
+export TERM=linux
+./installer/install.sh
+```
+
+### What the installer does to prevent this
+
+* `installer/ui.sh` sets `TERM` automatically — `linux` on a physical/virtual
+  console (TTY), `xterm-256color` on non-TTY sessions (SSH, pipes, etc.).
+* `installer/ui.sh` exports `NO_COLOR=1` so that subprocesses (pacman, lsblk,
+  etc.) suppress their own ANSI color output, preventing escape codes from
+  leaking into dialog text.
+* `require_tools()` smoke-tests `tput` and resets `TERM=linux` if it fails.
+* Every string passed to `dialog` is run through `strip_ansi()`, which removes
+  both real ESC-byte CSI/OSC sequences and literal `\033[…`, `\e[…`, `\x1b[…`
+  patterns, so coloured output from system commands is never displayed as raw
+  escape characters inside a dialog box.
+
+### Quick fixes (if you still see garbage)
+
+```bash
+# Disable color output in tools that respect NO_COLOR
+NO_COLOR=1 ./installer/install.sh
+
+# Set a well-known TERM value before running the installer
+TERM=xterm-256color ./installer/install.sh
+
+# Both together
+NO_COLOR=1 TERM=xterm-256color ./installer/install.sh
+```
+
+---
+
 ## Logging and troubleshooting
 
 | Phase | Log location |
