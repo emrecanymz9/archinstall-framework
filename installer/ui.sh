@@ -3,6 +3,23 @@
 set -Eeuo pipefail
 
 # ---------------------------------------------------------------------------
+# ui_sanitize <text>  →  stdout: text stripped of ANSI escape sequences.
+# Handles both real ESC (0x1B) byte sequences and literal backslash-escaped
+# sequences that appear as visible garbage in dialog (e.g. \033[31m, \e[0m,
+# \x1b[1m).  Call this on any string before passing it to a dialog widget.
+# ---------------------------------------------------------------------------
+ui_sanitize() {
+    local s="$*"
+    # Single sed pass: strip real ESC+CSI sequences (0x1B byte) and literal
+    # backslash-escaped sequences written as plain text (\033[…, \e[…, \x1b[…).
+    printf '%s' "$s" | sed \
+        -e 's/\x1b\[[0-9;]*[A-Za-z]//g' \
+        -e 's/\\033\[[0-9;]*[A-Za-z]//g' \
+        -e 's/\\e\[[0-9;]*[A-Za-z]//g' \
+        -e 's/\\x1b\[[0-9;]*[A-Za-z]//g'
+}
+
+# ---------------------------------------------------------------------------
 # Adaptive dimensions (recalculated on each call so resizing works)
 # ---------------------------------------------------------------------------
 _dlg_dims() {
@@ -32,56 +49,71 @@ _dlg() {
 
 # ui_msgbox <title> <text>
 ui_msgbox() {
+    local title; title=$(ui_sanitize "$1")
+    local text;  text=$(ui_sanitize "$2")
     read -r H W _ <<< "$(_dlg_dims)"
     dialog --backtitle "${UI_BACKTITLE:-ArchInstall Framework}" \
-           --title "$1" --msgbox "$2" "$H" "$W"
+           --title "$title" --msgbox "$text" "$H" "$W"
 }
 
 # ui_yesno <title> <text>  →  returns 0 for Yes, 1 for No
 ui_yesno() {
+    local title; title=$(ui_sanitize "$1")
+    local text;  text=$(ui_sanitize "$2")
     read -r H W _ <<< "$(_dlg_dims)"
     dialog --backtitle "${UI_BACKTITLE:-ArchInstall Framework}" \
-           --title "$1" --yesno "$2" "$H" "$W"
+           --title "$title" --yesno "$text" "$H" "$W"
 }
 
 # ui_menu <title> <prompt> <tag1> <item1> [tag2 item2 …]  →  stdout: chosen tag
 ui_menu() {
-    local title="$1" prompt="$2"; shift 2
+    local title; title=$(ui_sanitize "$1")
+    local prompt; prompt=$(ui_sanitize "$2")
+    shift 2
     read -r H W MH <<< "$(_dlg_dims)"
     _dlg --title "$title" --menu "$prompt" "$H" "$W" "$MH" "$@"
 }
 
 # ui_radiolist <title> <prompt> <tag1> <item1> <on|off> …  →  stdout: chosen tag
 ui_radiolist() {
-    local title="$1" prompt="$2"; shift 2
+    local title; title=$(ui_sanitize "$1")
+    local prompt; prompt=$(ui_sanitize "$2")
+    shift 2
     read -r H W MH <<< "$(_dlg_dims)"
     _dlg --title "$title" --radiolist "$prompt" "$H" "$W" "$MH" "$@"
 }
 
 # ui_checklist <title> <prompt> <tag1> <item1> <on|off> …  →  stdout: space-sep tags
 ui_checklist() {
-    local title="$1" prompt="$2"; shift 2
+    local title; title=$(ui_sanitize "$1")
+    local prompt; prompt=$(ui_sanitize "$2")
+    shift 2
     read -r H W MH <<< "$(_dlg_dims)"
     _dlg --title "$title" --checklist "$prompt" "$H" "$W" "$MH" "$@"
 }
 
 # ui_inputbox <title> <prompt> [default]  →  stdout: entered text
 ui_inputbox() {
-    local title="$1" prompt="$2" default="${3:-}"
+    local title; title=$(ui_sanitize "$1")
+    local prompt; prompt=$(ui_sanitize "$2")
+    local default="${3:-}"
     read -r H W _ <<< "$(_dlg_dims)"
     _dlg --title "$title" --inputbox "$prompt" "$H" "$W" "$default"
 }
 
 # ui_passwordbox <title> <prompt>  →  stdout: entered password
 ui_passwordbox() {
-    local title="$1" prompt="$2"
+    local title; title=$(ui_sanitize "$1")
+    local prompt; prompt=$(ui_sanitize "$2")
     read -r H W _ <<< "$(_dlg_dims)"
     _dlg --title "$title" --insecure --passwordbox "$prompt" "$H" "$W"
 }
 
 # ui_gauge <title> <text> <pct>  (non-interactive progress; use with a loop)
 ui_gauge_msg() {
-    local title="$1" text="$2" pct="$3"
+    local title; title=$(ui_sanitize "$1")
+    local text;  text=$(ui_sanitize "$2")
+    local pct="$3"
     read -r H W _ <<< "$(_dlg_dims)"
     echo "$pct" | dialog --backtitle "${UI_BACKTITLE:-ArchInstall Framework}" \
         --title "$title" --gauge "$text" 7 "$W" "$pct"

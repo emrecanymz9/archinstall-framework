@@ -237,6 +237,32 @@ rm /var/lib/archinstall/phase2-done
 sudo /opt/archinstall/postinstall/install.sh
 ```
 
+### TUI / dialog rendering issues
+
+If `dialog` boxes display garbled text with literal escape sequences such as
+`\033[31m`, `\e[0m`, or `^[[1m`, the terminal or a helper is injecting ANSI
+color codes as plain text into the UI strings.
+
+**Quick fixes:**
+
+```bash
+# 1. Disable color output in tools that respect NO_COLOR
+NO_COLOR=1 ./installer/install.sh
+
+# 2. Set a well-known TERM value before running the installer
+TERM=xterm-256color ./installer/install.sh
+
+# 3. Both together
+NO_COLOR=1 TERM=xterm-256color ./installer/install.sh
+```
+
+The framework's `ui_sanitize()` helper (in `installer/ui.sh`) automatically
+strips both real ESC byte sequences and literal `\033[…`, `\e[…`, `\x1b[…`
+patterns from every string passed to `dialog`, so the UI itself is protected.
+If you still see garbage, the source is most likely an external command whose
+output you are embedding in a prompt string — check that you are not piping
+colored command output directly into a `ui_*` call.
+
 ---
 
 ## Directory structure
