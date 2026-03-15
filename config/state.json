@@ -1,0 +1,21 @@
+{
+  "boot_mode":         "",
+  "install_mode":      "",
+  "target_disk":       "",
+  "efi_partition":     "",
+  "root_partition":    "",
+  "root_mapped":       "",
+  "partition_table":   "",
+  "encryption":        false,
+  "luks_name":         "cryptroot",
+  "filesystem":        "btrfs",
+  "bootloader":        "limine",
+  "hostname":          "",
+  "username":          "",
+  "root_locked":       true,
+  "microcode":         "",
+  "free_seg_start":    "",
+  "free_seg_end":      "",
+  "phase1_done":       false,
+  "phase2_done":       false
+}
