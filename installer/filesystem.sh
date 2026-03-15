@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# core/filesystem.sh – filesystem selection, formatting, and mounting
+# installer/filesystem.sh – filesystem selection, formatting, and mounting
 set -Eeuo pipefail
 
 # ---------------------------------------------------------------------------

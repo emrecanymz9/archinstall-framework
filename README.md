@@ -20,10 +20,10 @@ ArchInstall Framework is a **dialog-based terminal installer** that guides you t
 
 The installer runs in **two phases**:
 
-| Phase | Runs in | What it does |
-|-------|---------|-------------|
-| Phase 1 | Arch ISO (live) | Disk, encrypt, filesystem, base system, bootloader, user accounts |
-| Phase 2 | Installed system (first boot) | KDE, GPU drivers, audio, gaming, dev tools, Secure Boot |
+| Phase | Name | Runs in | What it does |
+|-------|------|---------|-------------|
+| Phase 1 | **Installer** | Arch ISO (live) | Disk, encrypt, filesystem, base system, bootloader, user accounts |
+| Phase 2 | **Post Install** | Installed system (first boot) | KDE, GPU drivers, audio, gaming, dev tools, Secure Boot |
 
 ---
 
@@ -49,14 +49,14 @@ pacman -Sy --needed dialog jq git parted cryptsetup dosfstools btrfs-progs \
 git clone https://github.com/emrecanymz9/archinstall-framework.git
 cd archinstall-framework
 
-# 4. Run Phase 1
-./core/install.sh
+# 4. Run Phase 1 (Installer)
+./installer/install.sh
 ```
 
-Phase 2 runs automatically on first boot. You can also run it manually:
+Post Install (Phase 2) runs automatically on first boot. You can also run it manually:
 
 ```bash
-sudo /opt/archinstall/kde/install.sh
+sudo /opt/archinstall/postinstall/install.sh
 ```
 
 ---
@@ -232,9 +232,9 @@ cat /var/log/archinstall-phase2.log
 # Check Phase 2 service status
 systemctl status archinstall-phase2.service
 
-# Re-run Phase 2 manually
+# Re-run Post Install manually
 rm /var/lib/archinstall/phase2-done
-sudo /opt/archinstall/kde/install.sh
+sudo /opt/archinstall/postinstall/install.sh
 ```
 
 ---
@@ -243,8 +243,8 @@ sudo /opt/archinstall/kde/install.sh
 
 ```
 archinstall-framework/
-├── core/
-│   ├── install.sh      # Phase 1 orchestrator
+├── installer/
+│   ├── install.sh      # Phase 1 orchestrator (Installer)
 │   ├── bootmode.sh     # UEFI/BIOS detection and selection
 │   ├── disk.sh         # Disk selection, install modes, partitioning
 │   ├── filesystem.sh   # btrfs/ext4 formatting and mounting
@@ -254,8 +254,10 @@ archinstall-framework/
 │   ├── executor.sh     # Logging, run_cmd, chroot_run
 │   ├── state.sh        # State management (config/state.json)
 │   └── ui.sh           # dialog wrappers with adaptive sizing
-├── kde/
-│   └── install.sh      # Phase 2 orchestrator
+├── postinstall/
+│   ├── install.sh      # Phase 2 orchestrator (Post Install)
+│   └── desktops/
+│       └── kde.sh      # KDE Plasma 6 desktop install flow
 ├── modules/
 │   ├── gpu.sh          # GPU driver detection/install
 │   ├── audio.sh        # PipeWire stack

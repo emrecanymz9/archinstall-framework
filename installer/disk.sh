@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# core/disk.sh – disk selection, install-mode, partitioning
+# installer/disk.sh – disk selection, install-mode, partitioning
 set -Eeuo pipefail
 
 # Exported after partitioning (consumed by luks.sh, filesystem.sh, limine.sh)

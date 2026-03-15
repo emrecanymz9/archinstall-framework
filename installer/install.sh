@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# core/install.sh – Phase 1 orchestrator (ISO environment)
+# installer/install.sh – Phase 1 orchestrator (ISO environment)
 set -Eeuo pipefail
 
 # ---------------------------------------------------------------------------
@@ -9,22 +9,20 @@ FRAMEWORK_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export FRAMEWORK_ROOT
 export MOUNT_POINT="/mnt"
 export LOG_FILE="/tmp/archinstall.log"
-
-# Ensure scripts are executable
-find "$FRAMEWORK_ROOT" -name "*.sh" -exec chmod +x {} \;
+export UI_BACKTITLE="ArchInstall Framework — Installer"
 
 # ---------------------------------------------------------------------------
 # Source modules (defines functions; does not execute them)
 # ---------------------------------------------------------------------------
-source "$FRAMEWORK_ROOT/core/ui.sh"
-source "$FRAMEWORK_ROOT/core/state.sh"
-source "$FRAMEWORK_ROOT/core/executor.sh"
-source "$FRAMEWORK_ROOT/core/bootmode.sh"
-source "$FRAMEWORK_ROOT/core/disk.sh"
-source "$FRAMEWORK_ROOT/core/luks.sh"
-source "$FRAMEWORK_ROOT/core/filesystem.sh"
-source "$FRAMEWORK_ROOT/core/limine.sh"
-source "$FRAMEWORK_ROOT/core/microcode.sh"
+source "$FRAMEWORK_ROOT/installer/ui.sh"
+source "$FRAMEWORK_ROOT/installer/state.sh"
+source "$FRAMEWORK_ROOT/installer/executor.sh"
+source "$FRAMEWORK_ROOT/installer/bootmode.sh"
+source "$FRAMEWORK_ROOT/installer/disk.sh"
+source "$FRAMEWORK_ROOT/installer/luks.sh"
+source "$FRAMEWORK_ROOT/installer/filesystem.sh"
+source "$FRAMEWORK_ROOT/installer/limine.sh"
+source "$FRAMEWORK_ROOT/installer/microcode.sh"
 
 # ===========================================================================
 # LOCAL HELPER FUNCTIONS
@@ -176,8 +174,10 @@ _install_base() {
 
     # Copy framework to installed system for Phase 2
     mkdir -p "$MOUNT_POINT/opt/archinstall"
-    cp -r "$FRAMEWORK_ROOT"/* "$MOUNT_POINT/opt/archinstall/"
-    chmod -R +x "$MOUNT_POINT/opt/archinstall"
+    cp -r "$FRAMEWORK_ROOT/installer"   "$MOUNT_POINT/opt/archinstall/"
+    cp -r "$FRAMEWORK_ROOT/postinstall" "$MOUNT_POINT/opt/archinstall/"
+    cp -r "$FRAMEWORK_ROOT/modules"     "$MOUNT_POINT/opt/archinstall/"
+    cp -r "$FRAMEWORK_ROOT/config"      "$MOUNT_POINT/opt/archinstall/"
 
     log_info "Base system installed."
 }
@@ -266,7 +266,7 @@ _install_phase2_service() {
 
     cat > "$mp/etc/systemd/system/archinstall-phase2.service" <<'EOF'
 [Unit]
-Description=ArchInstall Framework - Phase 2 (KDE + Modules)
+Description=ArchInstall Framework - Phase 2 (Post Install)
 Documentation=file:///opt/archinstall/README.md
 After=network-online.target
 Wants=network-online.target
@@ -274,7 +274,7 @@ ConditionPathExists=!/var/lib/archinstall/phase2-done
 
 [Service]
 Type=oneshot
-ExecStart=/opt/archinstall/kde/install.sh
+ExecStart=/opt/archinstall/postinstall/install.sh
 ExecStartPost=/bin/bash -c 'mkdir -p /var/lib/archinstall && touch /var/lib/archinstall/phase2-done'
 RemainAfterExit=yes
 StandardOutput=journal+console
@@ -373,13 +373,14 @@ main() {
     mark_done "phase1_done"
 
     ui_msgbox "Installation Complete!" \
-"Phase 1 installation is complete!
+"Phase 1 (Installer) is complete!
 
 The system is ready to boot into Arch Linux.
 
 On first boot:
-  - Phase 2 will run automatically (KDE + modules)
-  - You can also run it manually: /opt/archinstall/kde/install.sh
+  - Post Install (Phase 2) will run automatically
+  - You can also run it manually:
+    sudo /opt/archinstall/postinstall/install.sh
 
 Log file: $LOG_FILE
 

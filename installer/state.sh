@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# core/state.sh – JSON state management via jq
+# installer/state.sh – JSON state management via jq
 set -Eeuo pipefail
 
 # FRAMEWORK_ROOT must be set before sourcing this file

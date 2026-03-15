@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# core/microcode.sh – CPU microcode detection and installation
+# installer/microcode.sh – CPU microcode detection and installation
 set -Eeuo pipefail
 
 # ---------------------------------------------------------------------------
