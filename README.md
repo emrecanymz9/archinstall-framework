@@ -253,12 +253,29 @@ export TERM=linux
 
 ### What the installer does to prevent this
 
-* `installer/ui.sh` exports `TERM=linux` when the variable is empty or unset.
+* `installer/ui.sh` sets `TERM` automatically — `linux` on a physical/virtual
+  console (TTY), `xterm-256color` on non-TTY sessions (SSH, pipes, etc.).
+* `installer/ui.sh` exports `NO_COLOR=1` so that subprocesses (pacman, lsblk,
+  etc.) suppress their own ANSI color output, preventing escape codes from
+  leaking into dialog text.
 * `require_tools()` smoke-tests `tput` and resets `TERM=linux` if it fails.
 * Every string passed to `dialog` is run through `strip_ansi()`, which removes
   both real ESC-byte CSI/OSC sequences and literal `\033[…`, `\e[…`, `\x1b[…`
   patterns, so coloured output from system commands is never displayed as raw
   escape characters inside a dialog box.
+
+### Quick fixes (if you still see garbage)
+
+```bash
+# Disable color output in tools that respect NO_COLOR
+NO_COLOR=1 ./installer/install.sh
+
+# Set a well-known TERM value before running the installer
+TERM=xterm-256color ./installer/install.sh
+
+# Both together
+NO_COLOR=1 TERM=xterm-256color ./installer/install.sh
+```
 
 ---
 

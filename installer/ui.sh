@@ -4,11 +4,24 @@ set -Eeuo pipefail
 
 # ---------------------------------------------------------------------------
 # Safe TERM default – dialog requires a valid terminal type.
-# If TERM is unset (e.g. running under a systemd service or bare TTY that
-# never exported TERM), dialog outputs raw escape sequences as literal text.
+# If TERM is unset or "dumb" (e.g. running under a systemd service, bare TTY,
+# or piped session), dialog outputs raw escape sequences as literal text.
+# Use linux for a physical/virtual console, xterm-256color for everything else.
 # ---------------------------------------------------------------------------
-: "${TERM:=linux}"
-export TERM
+if [[ -z "${TERM:-}" ]] || [[ "${TERM:-}" == "dumb" ]]; then
+    if [[ -t 0 ]]; then
+        export TERM=linux           # physical/virtual console (TTY)
+    else
+        export TERM=xterm-256color  # SSH or other terminal emulator
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# Disable colored output from subprocesses (pacman, lsblk, etc.) so that ANSI
+# escape codes cannot leak into text displayed inside dialog windows.
+# Override with NO_COLOR=0 in your environment if you need colours elsewhere.
+# ---------------------------------------------------------------------------
+export NO_COLOR=1
 
 # ---------------------------------------------------------------------------
 # strip_ansi – remove ANSI / VT escape sequences from a string.
@@ -133,20 +146,35 @@ ui_gauge_msg() {
 # Dependency check – call before starting the installer
 # ---------------------------------------------------------------------------
 require_tools() {
+    # Check for dialog first: without it we cannot show any TUI at all.
+    if ! command -v dialog &>/dev/null; then
+        echo "ERROR: 'dialog' is not installed." >&2
+        echo "       The installer requires dialog to draw its TUI." >&2
+        echo "       Install it with:" >&2
+        echo "         pacman -Sy --needed dialog" >&2
+        exit 1
+    fi
+
     local missing=()
-    for cmd in dialog jq parted lsblk blkid cryptsetup pacstrap genfstab \
+    for cmd in jq parted lsblk blkid cryptsetup pacstrap genfstab \
                arch-chroot mkfs.fat mkfs.btrfs mkfs.ext4 efibootmgr; do
         command -v "$cmd" &>/dev/null || missing+=("$cmd")
     done
     if (( ${#missing[@]} > 0 )); then
-        echo "ERROR: Missing required tools: ${missing[*]}"
-        echo "Install with: pacman -Sy --needed dialog jq parted cryptsetup dosfstools btrfs-progs e2fsprogs efibootmgr arch-install-scripts"
+        echo "ERROR: Missing required tools: ${missing[*]}" >&2
+        echo "       Install with:" >&2
+        echo "         pacman -Sy --needed dialog jq parted cryptsetup dosfstools btrfs-progs e2fsprogs efibootmgr arch-install-scripts" >&2
         exit 1
     fi
 
     # Validate that TERM is usable by dialog (tput smoke-test).
-    # An unset or unknown TERM causes dialog to emit raw escape sequences.
+    # An unknown TERM value causes dialog to emit raw escape sequences even
+    # when the variable is set.  Apply the same TTY detection as at startup.
     if ! tput clear &>/dev/null; then
-        export TERM=linux
+        if [[ -t 0 ]]; then
+            export TERM=linux
+        else
+            export TERM=xterm-256color
+        fi
     fi
 }
