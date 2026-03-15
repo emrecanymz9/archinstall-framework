@@ -1,96 +1,77 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# core/executor.sh – logging, command execution, arch-chroot wrapper
+set -Eeuo pipefail
 
-# --------------------------------------------------
-# Create GPT partition table (wipe mode)
-# --------------------------------------------------
-create_gpt_layout() {
-    local disk="$1"
+LOG_FILE="${LOG_FILE:-/tmp/archinstall.log}"
 
-    # Create GPT label
-    parted -s "$disk" mklabel gpt
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+log_info()  { echo "[INFO]  $(date '+%H:%M:%S') $*" | tee -a "$LOG_FILE"; }
+log_warn()  { echo "[WARN]  $(date '+%H:%M:%S') $*" | tee -a "$LOG_FILE" >&2; }
+log_error() { echo "[ERROR] $(date '+%H:%M:%S') $*" | tee -a "$LOG_FILE" >&2; }
+log_step()  { echo "" | tee -a "$LOG_FILE"; \
+              echo "════════════════════════════════════════" | tee -a "$LOG_FILE"; \
+              echo "  STEP: $*" | tee -a "$LOG_FILE"; \
+              echo "════════════════════════════════════════" | tee -a "$LOG_FILE"; }
 
-    # EFI partition (550MB)
-    parted -s "$disk" mkpart ESP fat32 1MiB 551MiB
-    parted -s "$disk" set 1 esp on
-
-    # Root partition (rest of disk)
-    parted -s "$disk" mkpart ROOT 551MiB 100%
-
-    EFI_PART="${disk}1"
-    ROOT_PART="${disk}2"
+# ---------------------------------------------------------------------------
+# run_cmd – run a command, log it, stream output to log, die on failure
+# ---------------------------------------------------------------------------
+run_cmd() {
+    log_info "RUN: $*"
+    if ! "$@" >> "$LOG_FILE" 2>&1; then
+        log_error "Command failed: $*"
+        log_error "See $LOG_FILE for details"
+        return 1
+    fi
 }
 
-# --------------------------------------------------
-# Reuse existing ESP
-# --------------------------------------------------
-reuse_existing_esp() {
-    local disk="$1"
-
-    EFI_PART=$(lsblk -lpno NAME,FSTYPE "$disk" | awk '$2=="vfat"{print $1; exit}')
-    ROOT_PART="$2"
+# run_cmd_interactive – like run_cmd but also shows output on screen
+run_cmd_interactive() {
+    log_info "RUN: $*"
+    if ! "$@" 2>&1 | tee -a "$LOG_FILE"; then
+        log_error "Command failed: $*"
+        return 1
+    fi
 }
 
-# --------------------------------------------------
-# Setup LUKS2 encryption
-# --------------------------------------------------
-setup_luks() {
-    local part="$1"
+# ---------------------------------------------------------------------------
+# chroot_run – run a command inside the installed system
+# Usage: chroot_run "command with args"   (string is passed to bash -c)
+# ---------------------------------------------------------------------------
+MOUNT_POINT="${MOUNT_POINT:-/mnt}"
 
-    cryptsetup luksFormat --type luks2 "$part"
-    cryptsetup open "$part" cryptroot
-
-    ROOT_MAPPED="/dev/mapper/cryptroot"
+chroot_run() {
+    local cmd="$1"
+    log_info "CHROOT: $cmd"
+    if ! arch-chroot "$MOUNT_POINT" \
+           /usr/bin/env -i \
+           HOME=/root \
+           PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+           TERM="${TERM:-linux}" \
+           bash -c "$cmd" >> "$LOG_FILE" 2>&1; then
+        log_error "chroot command failed: $cmd"
+        return 1
+    fi
 }
 
-# --------------------------------------------------
-# Setup Btrfs filesystem
-# --------------------------------------------------
-setup_btrfs() {
-    local target="$1"
-
-    mkfs.btrfs -f -L ARCH "$target"
-
-    mount "$target" /mnt
-
-    # Create subvolumes
-    btrfs subvolume create /mnt/@
-    btrfs subvolume create /mnt/@home
-    btrfs subvolume create /mnt/@snapshots
-
-    umount /mnt
-
-    mount -o subvol=@,compress=zstd:-5 "$target" /mnt
-    mkdir -p /mnt/{home,.snapshots,boot}
-    mount -o subvol=@home,compress=zstd:-5 "$target" /mnt/home
-    mount -o subvol=@snapshots,compress=zstd:-5 "$target" /mnt/.snapshots
+# chroot_run_interactive – shows output on screen (for pacstrap-like tasks)
+chroot_run_interactive() {
+    local cmd="$1"
+    log_info "CHROOT(interactive): $cmd"
+    arch-chroot "$MOUNT_POINT" \
+        /usr/bin/env -i \
+        HOME=/root \
+        PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+        TERM="${TERM:-linux}" \
+        bash -c "$cmd" 2>&1 | tee -a "$LOG_FILE"
 }
 
-# --------------------------------------------------
-# Mount EFI
-# --------------------------------------------------
-mount_efi() {
-    mkdir -p /mnt/boot
-    mkfs.fat -F32 "$EFI_PART"
-    mount "$EFI_PART" /mnt/boot
-}
-
-# --------------------------------------------------
-# Install base system
-# --------------------------------------------------
-install_base() {
-    pacstrap /mnt \
-        base \
-        base-devel \
-        linux-zen \
-        linux-zen-headers \
-        linux-firmware \
-        btrfs-progs \
-        efibootmgr \
-        networkmanager \
-        vim \
-        sudo \
-        git
-
-    genfstab -U /mnt >> /mnt/etc/fstab
+# ---------------------------------------------------------------------------
+# die – print error and exit
+# ---------------------------------------------------------------------------
+die() {
+    log_error "$*"
+    exit 1
 }
