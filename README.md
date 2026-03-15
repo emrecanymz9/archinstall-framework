@@ -239,6 +239,35 @@ sudo /opt/archinstall/postinstall/install.sh
 
 ---
 
+## Dialog TUI – readable text guaranteed
+
+The installer automatically ensures the dialog TUI is always readable:
+
+- **`TERM` is set automatically** — If `TERM` is unset or set to `dumb` (common on early boot or plain SSH sessions), the installer sets it to `linux` (on a TTY) or `xterm-256color` (otherwise) before any dialog call.  You do not need to export `TERM` manually.
+- **`NO_COLOR=1` is exported** — This signals all subprocesses (pacman, lsblk, etc.) to suppress ANSI color output, so no raw escape sequences can leak into dialog text.
+- **Text is sanitised** — All strings passed to dialog are filtered to strip any remaining real (`ESC[`) and literal (`\e[`, `\033[`, `\x1b[`) escape sequences.
+
+### What used to go wrong
+
+Without these safeguards, dialog windows could display garbled text like `\[0;10m` or `\033[1;32m` instead of readable content.  This happened when `TERM` was unset (dialog fell back to raw escape codes) or when a tool wrote ANSI codes that ended up inside a message box.
+
+### Override
+
+If you need colour output from other scripts running alongside the installer, unset `NO_COLOR` after sourcing `ui.sh`:
+
+```bash
+unset NO_COLOR
+```
+
+If you need a specific terminal type, export it **before** sourcing `ui.sh`:
+
+```bash
+export TERM=xterm-256color
+source /path/to/installer/ui.sh
+```
+
+---
+
 ## Directory structure
 
 ```
