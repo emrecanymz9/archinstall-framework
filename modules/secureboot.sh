@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# modules/secureboot.sh – Secure Boot via sbctl (Phase 2, post-reboot)
+# modules/secureboot.sh - Secure Boot via sbctl (Phase 2, post-reboot)
 set -Eeuo pipefail
 
 setup_secureboot() {
@@ -14,7 +14,7 @@ setup_secureboot() {
 }
 
 _do_secureboot_enroll() {
-    log_info "System is in Setup Mode – proceeding with sbctl enrollment."
+    log_info "System is in Setup Mode - proceeding with sbctl enrollment."
 
     run_cmd_interactive pacman -S --noconfirm --needed sbctl
 
@@ -76,22 +76,22 @@ _show_secureboot_instructions() {
 "Secure Boot status: $sb_status\n\n\
 To set up Secure Boot:\n\
 \n\
-  Step 1 – Enter firmware (UEFI) settings\n\
-    • Clear/delete existing Secure Boot keys\n\
-    • Enable 'Setup Mode' or 'Custom Mode'\n\
-    • This allows enrolling your own keys\n\
+  Step 1 - Enter firmware (UEFI) settings\n\
+    - Clear/delete existing Secure Boot keys\n\
+    - Enable 'Setup Mode' or 'Custom Mode'\n\
+    - This allows enrolling your own keys\n\
 \n\
-  Step 2 – Reboot into Arch Linux\n\
-    • Run this script again: /opt/archinstall/modules/secureboot.sh\n\
-    • Or run: sbctl create-keys && sbctl enroll-keys --microsoft\n\
+  Step 2 - Reboot into Arch Linux\n\
+    - Run this script again: /opt/archinstall/modules/secureboot.sh\n\
+    - Or run: sbctl create-keys && sbctl enroll-keys --microsoft\n\
 \n\
-  Step 3 – Sign EFI binaries\n\
-    • sbctl sign-all\n\
+  Step 3 - Sign EFI binaries\n\
+    - sbctl sign-all\n\
 \n\
-  Step 4 – Enable Secure Boot in firmware\n\
-    • Reboot into firmware settings\n\
-    • Enable Secure Boot\n\
-    • Boot Arch Linux\n\
+  Step 4 - Enable Secure Boot in firmware\n\
+    - Reboot into firmware settings\n\
+    - Enable Secure Boot\n\
+    - Boot Arch Linux\n\
 \n\
 NOTE: Hardware varies. Some systems require vendor-specific steps.\n\
       The --microsoft flag adds Microsoft CA for hardware compatibility\n\

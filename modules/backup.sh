@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# modules/backup.sh – Backup and snapshot tools (snapper for btrfs, timeshift for ext4)
+# modules/backup.sh - Backup and snapshot tools (snapper for btrfs, timeshift for ext4)
 set -Eeuo pipefail
 
 install_backup() {

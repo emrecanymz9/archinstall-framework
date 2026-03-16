@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# postinstall/install.sh – Phase 2 orchestrator (Post Install)
+# postinstall/install.sh - Phase 2 orchestrator (Post Install)
 # Runs automatically on first boot via systemd, or manually by the user.
 set -Eeuo pipefail
 
 FRAMEWORK_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export FRAMEWORK_ROOT
 export LOG_FILE="${LOG_FILE:-/var/log/archinstall-phase2.log}"
-export UI_BACKTITLE="ArchInstall Framework — Post Install"
+export UI_BACKTITLE="ArchInstall Framework - Post Install"
 
 source "$FRAMEWORK_ROOT/installer/ui.sh"
 source "$FRAMEWORK_ROOT/installer/state.sh"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# modules/zram.sh – ZRAM configuration and verification
+# modules/zram.sh - ZRAM configuration and verification
 set -Eeuo pipefail
 
 configure_zram() {

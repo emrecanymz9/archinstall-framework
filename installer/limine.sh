@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# installer/limine.sh – bootloader selection and installation (Limine + systemd-boot/UKI)
+# installer/limine.sh - bootloader selection and installation (Limine + systemd-boot/UKI)
 set -Eeuo pipefail
 
 # ---------------------------------------------------------------------------
-# ask_bootloader  →  sets BOOTLOADER ("limine"|"systemd-boot"), saves to state
+# ask_bootloader  ->  sets BOOTLOADER ("limine"|"systemd-boot"), saves to state
 # Note: systemd-boot/UKI only available on UEFI
 # ---------------------------------------------------------------------------
 ask_bootloader() {
@@ -31,7 +31,7 @@ systemd-boot + UKI: generates a Unified Kernel Image containing\n\
 }
 
 # ---------------------------------------------------------------------------
-# install_bootloader  →  dispatches to the correct backend
+# install_bootloader  ->  dispatches to the correct backend
 # ---------------------------------------------------------------------------
 install_bootloader() {
     case "$BOOTLOADER" in
@@ -152,7 +152,7 @@ ${microcode_entry}    module_path: boot:///boot/initramfs-linux-zen-fallback.img
     cmdline: ${cmdline}
 EOF
 
-    # Deploy to MBR – use TARGET_DISK directly (most reliable for BIOS)
+    # Deploy to MBR - use TARGET_DISK directly (most reliable for BIOS)
     local disk_base
     disk_base=$(basename "$TARGET_DISK")
     chroot_run "limine bios-install /dev/${disk_base}"

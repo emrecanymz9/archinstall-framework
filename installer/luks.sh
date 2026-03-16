@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# installer/luks.sh – encryption selection and LUKS2 setup
+# installer/luks.sh - encryption selection and LUKS2 setup
 set -Eeuo pipefail
 
 # ---------------------------------------------------------------------------
-# ask_encryption  →  sets ENCRYPTION (true/false), saves to state
+# ask_encryption  ->  sets ENCRYPTION (true/false), saves to state
 # ---------------------------------------------------------------------------
 ask_encryption() {
     local choice
@@ -28,7 +28,7 @@ Unencrypted: no passphrase at boot, simpler setup.\n\
 }
 
 # ---------------------------------------------------------------------------
-# setup_luks  →  formats ROOT_PART with LUKS2, opens it
+# setup_luks  ->  formats ROOT_PART with LUKS2, opens it
 # Sets ROOT_MAPPED to /dev/mapper/<luks_name>
 # ---------------------------------------------------------------------------
 setup_luks() {
@@ -43,7 +43,7 @@ setup_luks() {
         pass1=$(ui_passwordbox "LUKS2 Passphrase" \
             "Enter encryption passphrase:\n(This passphrase unlocks your disk at every boot)") \
             || { clear; exit 0; }
-        pass2=$(ui_passwordbox "LUKS2 Passphrase – Confirm" \
+        pass2=$(ui_passwordbox "LUKS2 Passphrase - Confirm" \
             "Re-enter the passphrase to confirm:") \
             || { clear; exit 0; }
         if [[ "$pass1" == "$pass2" ]]; then
@@ -75,7 +75,7 @@ setup_luks() {
 }
 
 # ---------------------------------------------------------------------------
-# setup_noencrypt  →  ROOT_MAPPED = ROOT_PART (no encryption)
+# setup_noencrypt  ->  ROOT_MAPPED = ROOT_PART (no encryption)
 # ---------------------------------------------------------------------------
 setup_noencrypt() {
     ROOT_MAPPED="$ROOT_PART"

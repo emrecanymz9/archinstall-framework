@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# modules/gaming.sh – Gaming tools: Steam, GameMode, MangoHud, Lutris, Wine
+# modules/gaming.sh - Gaming tools: Steam, GameMode, MangoHud, Lutris, Wine
 set -Eeuo pipefail
 
 install_gaming() {

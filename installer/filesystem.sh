@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# installer/filesystem.sh – filesystem selection, formatting, and mounting
+# installer/filesystem.sh - filesystem selection, formatting, and mounting
 set -Eeuo pipefail
 
 # ---------------------------------------------------------------------------
-# ask_filesystem  →  sets FILESYSTEM ("btrfs"|"ext4"), saves to state
+# ask_filesystem  ->  sets FILESYSTEM ("btrfs"|"ext4"), saves to state
 # ---------------------------------------------------------------------------
 ask_filesystem() {
     local choice
@@ -23,7 +23,7 @@ ext4: simple, reliable, widely supported, no built-in snapshots." \
 }
 
 # ---------------------------------------------------------------------------
-# format_root  →  formats ROOT_MAPPED with chosen filesystem
+# format_root  ->  formats ROOT_MAPPED with chosen filesystem
 # ---------------------------------------------------------------------------
 format_root() {
     log_step "Formatting root: $ROOT_MAPPED  [$FILESYSTEM]"
@@ -35,7 +35,7 @@ format_root() {
 }
 
 # ---------------------------------------------------------------------------
-# format_efi  →  formats EFI_PART as FAT32 (skip if reusing existing ESP)
+# format_efi  ->  formats EFI_PART as FAT32 (skip if reusing existing ESP)
 # NEW_ESP is exported by disk.sh partitioning helpers when a new ESP is
 # created; it is empty when an existing ESP is reused.
 # ---------------------------------------------------------------------------
@@ -50,7 +50,7 @@ format_efi() {
 }
 
 # ---------------------------------------------------------------------------
-# mount_filesystems  →  mount root (+ subvols) and ESP
+# mount_filesystems  ->  mount root (+ subvols) and ESP
 # ---------------------------------------------------------------------------
 mount_filesystems() {
     local mp="${MOUNT_POINT:-/mnt}"
@@ -99,7 +99,7 @@ _mount_ext4() {
 }
 
 # ---------------------------------------------------------------------------
-# unmount_filesystems  →  unmount in reverse order
+# unmount_filesystems  ->  unmount in reverse order
 # ---------------------------------------------------------------------------
 unmount_filesystems() {
     local mp="${MOUNT_POINT:-/mnt}"

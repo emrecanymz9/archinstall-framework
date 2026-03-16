@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# modules/gpu.sh – GPU driver detection and installation
+# modules/gpu.sh - GPU driver detection and installation
 set -Eeuo pipefail
 
 install_gpu_drivers() {

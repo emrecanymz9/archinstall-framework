@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# installer/state.sh – JSON state management via jq
+# installer/state.sh - JSON state management via jq
 set -Eeuo pipefail
 
 # FRAMEWORK_ROOT must be set before sourcing this file
 STATE_FILE="${FRAMEWORK_ROOT}/config/state.json"
 
 # ---------------------------------------------------------------------------
-# init_state – write the initial empty state template
+# init_state - write the initial empty state template
 # ---------------------------------------------------------------------------
 init_state() {
     mkdir -p "$(dirname "$STATE_FILE")"
@@ -56,14 +56,14 @@ set_state_str() {
 }
 
 # ---------------------------------------------------------------------------
-# get_state <key>  →  stdout: raw JSON value (strings already unquoted by -r)
+# get_state <key>  ->  stdout: raw JSON value (strings already unquoted by -r)
 # ---------------------------------------------------------------------------
 get_state() {
     jq -r ".$1" "$STATE_FILE"
 }
 
 # ---------------------------------------------------------------------------
-# state_is_done <phase>  →  returns 0 if true, 1 otherwise
+# state_is_done <phase>  ->  returns 0 if true, 1 otherwise
 # ---------------------------------------------------------------------------
 state_is_done() {
     [[ "$(get_state "$1")" == "true" ]]

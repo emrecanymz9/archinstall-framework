@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# modules/bluetooth.sh – Bluetooth stack installation and configuration
+# modules/bluetooth.sh - Bluetooth stack installation and configuration
 set -Eeuo pipefail
 
 install_bluetooth() {

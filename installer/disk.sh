@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# installer/disk.sh – disk selection, install-mode, partitioning
+# installer/disk.sh - disk selection, install-mode, partitioning
 set -Eeuo pipefail
 
 # Exported after partitioning (consumed by luks.sh, filesystem.sh, limine.sh)
@@ -23,7 +23,7 @@ part_dev() {
 }
 
 # ---------------------------------------------------------------------------
-# list_disks  →  stdout lines: "name|size|model|serial"
+# list_disks  ->  stdout lines: "name|size|model|serial"
 # ---------------------------------------------------------------------------
 list_disks() {
     lsblk -d -o NAME,SIZE,MODEL,SERIAL,TYPE --noheadings --bytes \
@@ -36,7 +36,7 @@ list_disks() {
 }
 
 # ---------------------------------------------------------------------------
-# select_disk  →  sets TARGET_DISK, saves to state
+# select_disk  ->  sets TARGET_DISK, saves to state
 # ---------------------------------------------------------------------------
 select_disk() {
     local disks
@@ -69,7 +69,7 @@ select_disk() {
 }
 
 # ---------------------------------------------------------------------------
-# detect_free_segments  →  stdout lines: "start_MiB|end_MiB|size_MiB"
+# detect_free_segments  ->  stdout lines: "start_MiB|end_MiB|size_MiB"
 # ---------------------------------------------------------------------------
 detect_free_segments() {
     local disk="$1"
@@ -81,7 +81,7 @@ detect_free_segments() {
 }
 
 # ---------------------------------------------------------------------------
-# detect_linux_partitions  →  stdout lines: "dev|size|fstype|label"
+# detect_linux_partitions  ->  stdout lines: "dev|size|fstype|label"
 # ---------------------------------------------------------------------------
 detect_linux_partitions() {
     local disk="$1"
@@ -92,7 +92,7 @@ detect_linux_partitions() {
 }
 
 # ---------------------------------------------------------------------------
-# detect_windows  →  returns 0 if Windows detected on disk
+# detect_windows  ->  returns 0 if Windows detected on disk
 # ---------------------------------------------------------------------------
 detect_windows() {
     local disk="$1"
@@ -100,7 +100,7 @@ detect_windows() {
 }
 
 # ---------------------------------------------------------------------------
-# detect_existing_esp  →  stdout: device path of existing ESP, or empty
+# detect_existing_esp  ->  stdout: device path of existing ESP, or empty
 # ---------------------------------------------------------------------------
 detect_existing_esp() {
     local disk="$1"
@@ -111,7 +111,7 @@ detect_existing_esp() {
 }
 
 # ---------------------------------------------------------------------------
-# choose_install_mode  →  sets INSTALL_MODE, saves to state
+# choose_install_mode  ->  sets INSTALL_MODE, saves to state
 # ---------------------------------------------------------------------------
 choose_install_mode() {
     local disk="$1"
@@ -131,7 +131,7 @@ choose_install_mode() {
 
     # Build context note
     local context_note=""
-    "$has_windows" && context_note+="⚠  Windows partitions detected on this disk.\n"
+    "$has_windows" && context_note+="[!]  Windows partitions detected on this disk.\n"
     "$has_linux"   && context_note+="   Linux partition(s) found on this disk.\n"
     "$has_free"    && context_note+="   Unallocated free space found on this disk.\n"
     [[ -z "$context_note" ]] && context_note="   No Windows or Linux partitions detected.\n"
@@ -139,9 +139,9 @@ choose_install_mode() {
     local choice
     choice=$(ui_radiolist "Install Mode" \
         "${context_note}\nChoose how to install Arch Linux:" \
-        "wipe"      "Use entire disk — WIPE everything and install"                "on" \
-        "freespace" "Use unallocated free space — dual-boot safe"                  "off" \
-        "reinstall" "Reinstall on existing Linux partition — wipe Linux only"      "off" \
+        "wipe"      "Use entire disk - WIPE everything and install"                "on" \
+        "freespace" "Use unallocated free space - dual-boot safe"                  "off" \
+        "reinstall" "Reinstall on existing Linux partition - wipe Linux only"      "off" \
     ) || { clear; exit 0; }
 
     # Validate mode availability
@@ -153,7 +153,7 @@ choose_install_mode() {
 To create free space for dual-booting:\n\
   1. Boot into Windows\n\
   2. Open 'Disk Management' (diskmgmt.msc)\n\
-  3. Right-click your Windows partition → Shrink Volume\n\
+  3. Right-click your Windows partition -> Shrink Volume\n\
   4. Reboot into the Arch ISO and re-run the installer.\n\n\
 The installer will NEVER shrink NTFS partitions automatically."
                 exit 0
@@ -198,7 +198,7 @@ _show_free_segments() {
 }
 
 # ---------------------------------------------------------------------------
-# select_free_segment  →  sets FREE_SEG_START, FREE_SEG_END (MiB)
+# select_free_segment  ->  sets FREE_SEG_START, FREE_SEG_END (MiB)
 # ---------------------------------------------------------------------------
 select_free_segment() {
     local disk="$1"
@@ -215,11 +215,11 @@ select_free_segment() {
 
     FREE_SEG_START="$best_start"
     FREE_SEG_END="$best_end"
-    log_info "Free segment selected: ${best_start} MiB – ${best_end} MiB (${best_size} MiB)"
+    log_info "Free segment selected: ${best_start} MiB - ${best_end} MiB (${best_size} MiB)"
 }
 
 # ---------------------------------------------------------------------------
-# select_linux_partition  →  sets TARGET_LINUX_PART, saves to state
+# select_linux_partition  ->  sets TARGET_LINUX_PART, saves to state
 # ---------------------------------------------------------------------------
 select_linux_partition() {
     local disk="$1"
@@ -234,7 +234,7 @@ select_linux_partition() {
     local choice
     choice=$(ui_menu "Select Target Partition" \
         "Choose the existing Linux partition to reinstall on.\n\n\
-⚠  This partition will be COMPLETELY WIPED.\n\
+[!]  This partition will be COMPLETELY WIPED.\n\
    All data on it will be lost.\n\
    Other partitions will NOT be touched." \
         "${menu_args[@]}") || { clear; exit 0; }
@@ -245,14 +245,14 @@ select_linux_partition() {
 }
 
 # ---------------------------------------------------------------------------
-# confirm_destructive – require user to type disk/partition name before wiping
+# confirm_destructive - require user to type disk/partition name before wiping
 # ---------------------------------------------------------------------------
 confirm_destructive() {
     local target="$1" label="${2:-disk}"
     local short_name
     short_name=$(basename "$target")
 
-    ui_msgbox "⚠  FINAL WARNING" \
+    ui_msgbox "[!]  FINAL WARNING" \
 "You are about to DESTROY DATA on:\n\n\
   Device:  $target\n\n\
 This action is IRREVERSIBLE.\n\n\
@@ -271,7 +271,7 @@ In the next dialog, type exactly:\n\n  $short_name\n\nto confirm, or cancel to a
 }
 
 # ---------------------------------------------------------------------------
-# do_partition – partition the disk according to INSTALL_MODE and BOOT_MODE
+# do_partition - partition the disk according to INSTALL_MODE and BOOT_MODE
 # Sets EFI_PART and ROOT_PART when done.
 # ---------------------------------------------------------------------------
 do_partition() {
@@ -289,7 +289,7 @@ do_partition() {
     log_info "EFI_PART=$EFI_PART  ROOT_PART=$ROOT_PART"
 }
 
-# ── WIPE ────────────────────────────────────────────────────────────────────
+# -- WIPE --------------------------------------------------------------------
 _partition_wipe() {
     local disk="$1"
     log_step "Partitioning (wipe): $disk  [boot_mode=$BOOT_MODE]"
@@ -306,7 +306,7 @@ _partition_wipe() {
         ROOT_PART=$(part_dev "$disk" 2)
         NEW_ESP=true
     else
-        # BIOS → MBR; no ESP needed; Limine goes to MBR
+        # BIOS -> MBR; no ESP needed; Limine goes to MBR
         run_cmd parted -s "$disk" mklabel msdos
         run_cmd parted -s "$disk" mkpart primary 1MiB 100%
         run_cmd parted -s "$disk" set 1 boot on
@@ -319,7 +319,7 @@ _partition_wipe() {
     sleep 1
 }
 
-# ── FREE SPACE ──────────────────────────────────────────────────────────────
+# -- FREE SPACE --------------------------------------------------------------
 _partition_freespace() {
     local disk="$1"
     log_step "Partitioning (freespace): $disk  [boot_mode=$BOOT_MODE]"
@@ -369,7 +369,7 @@ _partition_freespace() {
     sleep 1
 }
 
-# ── REINSTALL ───────────────────────────────────────────────────────────────
+# -- REINSTALL ---------------------------------------------------------------
 _partition_reinstall() {
     local disk="$1"
     log_step "Partitioning (reinstall): $disk"
