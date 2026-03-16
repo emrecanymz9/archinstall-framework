@@ -35,23 +35,34 @@ export NO_COLOR=1
 # string so that it is safe to pass as dialog box text.
 #
 # Strips:
-#   - Real ESC (0x1B) byte CSI/OSC/DCS and other VT sequences
+#   - Real ESC (0x1B) byte CSI sequences (all forms, including private-mode
+#     sequences such as \x1B[?25l, \x1B[?1000h, \x1B[>1m, \x1B[!p, etc.)
+#   - OSC (Operating System Command) sequences
+#   - Other two-byte ESC sequences (character set designations, etc.)
 #   - Literal backslash-escaped sequences (\033[, \e[, \x1b[)
 #   - Carriage return (\r) which causes dialog rendering issues
 #   - Non-printable control characters (0x00-0x08, 0x0B-0x0C, 0x0E-0x1F, 0x7F)
 #   - Non-ASCII bytes (>0x7F) which display as garbage on many Linux TTYs
+#   - Bullets (U+2022 encoded as multi-byte), en/em dashes, smart quotes and
+#     similar Unicode symbols that render as "M-b..." on a Linux TTY font
 #
 # Preserves: printable ASCII (0x20-0x7E), TAB (0x09), and LF (0x0A).
+#
+# NOTE FOR CONTRIBUTORS: All UI text fed into dialog (titles, prompts, menu
+# items) MUST consist of printable ASCII only.  Non-ASCII characters—bullets
+# (•), en/em dashes (–/—), smart quotes, etc.—render as garbage on the Linux
+# console font used in the Arch ISO.  Use plain ASCII equivalents instead:
+#   bullet  →  -       en-dash/em-dash  →  -       smart quote  →  ' or "
 # ---------------------------------------------------------------------------
 strip_ansi() {
     printf '%s' "$*" | LC_ALL=C sed \
-        -e 's/\x1B\[[0-9;:]*[A-Za-z]//g' \
+        -e 's/\x1B\[[0-9;:?<>!]*[@-~]//g' \
         -e 's/\x1B][^\x07]*\x07//g' \
         -e 's/\x1B[][()#%*+][0-9A-Za-z]//g' \
         -e 's/\x1B.//g' \
-        -e 's/\\033\[[0-9;]*[A-Za-z]//g' \
-        -e 's/\\e\[[0-9;]*[A-Za-z]//g' \
-        -e 's/\\x1b\[[0-9;]*[A-Za-z]//g' \
+        -e 's/\\033\[[0-9;?]*[@-~]//g' \
+        -e 's/\\e\[[0-9;?]*[@-~]//g' \
+        -e 's/\\x1b\[[0-9;?]*[@-~]//g' \
         -e 's/\r//g' | \
     tr -cd '\11\12\40-\176'
 }
@@ -72,11 +83,17 @@ _dlg_dims() {
 
 # Internal: run dialog, write result to stdout, return dialog's exit code
 # Usage: _dlg <dialog args...>
+#
+# dialog writes the user's selection to stderr.  On some terminal types it may
+# also emit cursor/mouse-tracking setup sequences to the same fd before or
+# after the real value.  We sanitize the captured output through strip_ansi so
+# that any leaked escape sequences are stripped before the value is used as
+# text in a subsequent dialog call.
 _dlg() {
     local tmpfile rc
     tmpfile=$(mktemp)
     dialog --backtitle "$(strip_ansi "${UI_BACKTITLE:-ArchInstall Framework}")" "$@" 2>"$tmpfile"; rc=$?
-    cat "$tmpfile"; rm -f "$tmpfile"
+    strip_ansi "$(cat "$tmpfile")"; rm -f "$tmpfile"
     return "$rc"
 }
 
@@ -106,8 +123,12 @@ ui_menu() {
     local title; title=$(strip_ansi "$1")
     local prompt; prompt=$(strip_ansi "$2")
     shift 2
+    # Sanitize every item tag/label so non-ASCII chars in caller code can't
+    # cause garbled rendering inside dialog windows.
+    local items=()
+    for arg in "$@"; do items+=("$(strip_ansi "$arg")"); done
     read -r H W MH <<< "$(_dlg_dims)"
-    _dlg --title "$title" --menu "$prompt" "$H" "$W" "$MH" "$@"
+    _dlg --title "$title" --menu "$prompt" "$H" "$W" "$MH" "${items[@]}"
 }
 
 # ui_radiolist <title> <prompt> <tag1> <item1> <on|off> ...  ->  stdout: chosen tag
@@ -115,8 +136,10 @@ ui_radiolist() {
     local title; title=$(strip_ansi "$1")
     local prompt; prompt=$(strip_ansi "$2")
     shift 2
+    local items=()
+    for arg in "$@"; do items+=("$(strip_ansi "$arg")"); done
     read -r H W MH <<< "$(_dlg_dims)"
-    _dlg --title "$title" --radiolist "$prompt" "$H" "$W" "$MH" "$@"
+    _dlg --title "$title" --radiolist "$prompt" "$H" "$W" "$MH" "${items[@]}"
 }
 
 # ui_checklist <title> <prompt> <tag1> <item1> <on|off> ...  ->  stdout: space-sep tags
@@ -124,8 +147,10 @@ ui_checklist() {
     local title; title=$(strip_ansi "$1")
     local prompt; prompt=$(strip_ansi "$2")
     shift 2
+    local items=()
+    for arg in "$@"; do items+=("$(strip_ansi "$arg")"); done
     read -r H W MH <<< "$(_dlg_dims)"
-    _dlg --title "$title" --checklist "$prompt" "$H" "$W" "$MH" "$@"
+    _dlg --title "$title" --checklist "$prompt" "$H" "$W" "$MH" "${items[@]}"
 }
 
 # ui_inputbox <title> <prompt> [default]  ->  stdout: entered text

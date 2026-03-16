@@ -18,6 +18,12 @@ detect_boot_mode() {
 # Sets global BOOT_MODE and saves to state.
 # ---------------------------------------------------------------------------
 bootmode_screen() {
+    # Clear the terminal before launching the first dialog widget.
+    # Without this, any log/banner text printed before this function is called
+    # remains on screen and the dialog TUI appears to "wait" for user input
+    # before rendering on some Linux console (TTY) configurations.
+    clear
+
     local detected
     detected=$(detect_boot_mode)
 

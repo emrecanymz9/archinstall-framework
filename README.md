@@ -260,9 +260,17 @@ export TERM=linux
   leaking into dialog text.
 * `require_tools()` smoke-tests `tput` and resets `TERM=linux` if it fails.
 * Every string passed to `dialog` is run through `strip_ansi()`, which removes
-  both real ESC-byte CSI/OSC sequences and literal `\033[…`, `\e[…`, `\x1b[…`
-  patterns, so coloured output from system commands is never displayed as raw
-  escape characters inside a dialog box.
+  real ESC-byte CSI sequences (including private-mode sequences like
+  `\x1B[?25l` and `\x1B[?1000h`), OSC sequences, all literal `\033[…`/`\e[…`
+  patterns, and non-ASCII bytes.  This ensures that coloured or decorated
+  output from system commands is never displayed as raw garbage inside a dialog
+  box.
+* `_dlg()` also sanitizes its own captured output (dialog's stderr), so
+  terminal-setup sequences that dialog itself may emit before writing the
+  user's selection are stripped before the value is used in subsequent calls.
+* `bootmode_screen()` calls `clear` before launching the first dialog widget to
+  ensure the terminal is in a clean state, preventing the TUI from appearing to
+  wait for user input before rendering.
 
 ### Quick fixes (if you still see garbage)
 
@@ -276,6 +284,51 @@ TERM=xterm-256color ./installer/install.sh
 # Both together
 NO_COLOR=1 TERM=xterm-256color ./installer/install.sh
 ```
+
+---
+
+## UI sanitization and ASCII compliance (for contributors)
+
+All text fed into `dialog` (titles, prompts, menu tags, and item labels) **must
+consist entirely of printable ASCII characters (0x20–0x7E)**.  The Linux
+console font used in the Arch ISO does not include Unicode box-drawing
+characters, accented letters, or symbols.  Characters outside the ASCII
+printable range render as multi-byte garbage sequences (`M-bM-^@M-^S` etc.)
+on a Linux TTY.
+
+**Rules when writing new dialog text:**
+
+| Instead of | Use |
+|-----------|-----|
+| Bullet `•` (U+2022) | Hyphen `-` |
+| En-dash `–` (U+2013) | Hyphen `-` |
+| Em-dash `—` (U+2014) | Hyphen `-` or ` - ` |
+| Smart quote `'` / `'` | Apostrophe `'` |
+| Smart quote `"` / `"` | Double-quote `"` |
+| Any other non-ASCII symbol | Plain ASCII equivalent |
+
+**How sanitization works (`installer/ui.sh`):**
+
+* `strip_ansi()` — removes all ANSI/VT escape sequences (including private-mode
+  CSI such as `\x1B[?25l`) and strips every byte outside printable ASCII plus
+  TAB and LF.  Applied to every title, prompt, and item argument before being
+  passed to `dialog`, and to the output captured from `dialog` after each call.
+* The `tr -cd '\11\12\40-\176'` step at the end of `strip_ansi` is the final
+  hard stop: anything that is not TAB (0x09), LF (0x0A), or printable ASCII
+  (0x20–0x7E) is deleted unconditionally.
+
+**Testing on Arch ISO TTY:**
+
+Run the installer in a real or virtual Linux console (`TERM=linux`) and verify
+that every dialog window shows clean, readable text with no `^[`, `M-b`, or
+similar artefacts.  Check with:
+
+```bash
+LC_ALL=C grep -nP '[^\x09\x0A\x0D\x20-\x7E]' installer/*.sh
+```
+
+This command should produce no output.  Any match indicates a non-ASCII
+character that must be replaced before committing.
 
 ---
 
