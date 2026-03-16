@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# installer/bootmode.sh – boot mode detection and selection dialog
+# installer/bootmode.sh - boot mode detection and selection dialog
 set -Eeuo pipefail
 
 # ---------------------------------------------------------------------------
-# detect_boot_mode  →  stdout: "uefi" | "bios"
+# detect_boot_mode  ->  stdout: "uefi" | "bios"
 # ---------------------------------------------------------------------------
 detect_boot_mode() {
     if [[ -d /sys/firmware/efi ]]; then
@@ -14,7 +14,7 @@ detect_boot_mode() {
 }
 
 # ---------------------------------------------------------------------------
-# bootmode_screen – present radiolist, show instructions, allow exit
+# bootmode_screen - present radiolist, show instructions, allow exit
 # Sets global BOOT_MODE and saves to state.
 # ---------------------------------------------------------------------------
 bootmode_screen() {
@@ -36,20 +36,20 @@ bootmode_screen() {
     # Show mode-specific firmware instructions
     case "$choice" in
         uefi)
-            ui_msgbox "UEFI Mode – Firmware Checklist" \
+            ui_msgbox "UEFI Mode - Firmware Checklist" \
 "Before continuing, verify in your firmware (UEFI) settings:\n
-  • Boot mode:     UEFI  (not Legacy/CSM)\n
-  • Secure Boot:   DISABLED  (re-enable after install via sbctl)\n
-  • CSM/Legacy:    DISABLED\n
-  • Boot device:   USB drive with this ISO\n
+  - Boot mode:     UEFI  (not Legacy/CSM)\n
+  - Secure Boot:   DISABLED  (re-enable after install via sbctl)\n
+  - CSM/Legacy:    DISABLED\n
+  - Boot device:   USB drive with this ISO\n
 \nIf any of the above needs changing, choose Exit below,\nadjust firmware settings, then reboot and re-run the installer."
             ;;
         bios)
-            ui_msgbox "BIOS Mode – Firmware Checklist" \
+            ui_msgbox "BIOS Mode - Firmware Checklist" \
 "Before continuing, verify in your firmware (BIOS) settings:\n
-  • Boot mode:     Legacy / CSM  (not UEFI)\n
-  • Boot device:   USB drive with this ISO\n
-  • Secure Boot:   Not applicable in BIOS mode\n
+  - Boot mode:     Legacy / CSM  (not UEFI)\n
+  - Boot device:   USB drive with this ISO\n
+  - Secure Boot:   Not applicable in BIOS mode\n
 \nNote: BIOS mode uses MBR disk layout.\nIf you need UEFI, choose Exit, adjust settings, and reboot."
             ;;
     esac

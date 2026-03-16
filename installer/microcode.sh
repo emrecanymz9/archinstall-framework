@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# installer/microcode.sh – CPU microcode detection and installation
+# installer/microcode.sh - CPU microcode detection and installation
 set -Eeuo pipefail
 
 # ---------------------------------------------------------------------------
-# detect_microcode  →  sets MICROCODE ("intel-ucode"|"amd-ucode"|"")
+# detect_microcode  ->  sets MICROCODE ("intel-ucode"|"amd-ucode"|"")
 # ---------------------------------------------------------------------------
 detect_microcode() {
     if grep -qi "GenuineIntel" /proc/cpuinfo 2>/dev/null; then
@@ -18,7 +18,7 @@ detect_microcode() {
 }
 
 # ---------------------------------------------------------------------------
-# install_microcode  →  installs the detected microcode package in chroot
+# install_microcode  ->  installs the detected microcode package in chroot
 # ---------------------------------------------------------------------------
 install_microcode() {
     detect_microcode

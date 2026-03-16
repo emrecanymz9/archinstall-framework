@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# postinstall/desktops/kde.sh – KDE Plasma 6 desktop install flow
+# postinstall/desktops/kde.sh - KDE Plasma 6 desktop install flow
 # Called by postinstall/install.sh; can also be run standalone.
 set -Eeuo pipefail
 
 FRAMEWORK_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export FRAMEWORK_ROOT
 export LOG_FILE="${LOG_FILE:-/var/log/archinstall-phase2.log}"
-export UI_BACKTITLE="${UI_BACKTITLE:-ArchInstall Framework — Post Install (KDE)}"
+export UI_BACKTITLE="${UI_BACKTITLE:-ArchInstall Framework - Post Install (KDE)}"
 
 source "$FRAMEWORK_ROOT/installer/ui.sh"
 source "$FRAMEWORK_ROOT/installer/state.sh"
@@ -155,7 +155,7 @@ main_kde() {
     install_backup
 
     # ---------------------------------------------------------------------------
-    # Step 11: Secure Boot (sbctl) – instructions + optional automation
+    # Step 11: Secure Boot (sbctl) - instructions + optional automation
     # ---------------------------------------------------------------------------
     log_step "Step 11: Secure Boot"
     source "$FRAMEWORK_ROOT/modules/secureboot.sh"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# modules/network.sh – Network configuration and tools
+# modules/network.sh - Network configuration and tools
 set -Eeuo pipefail
 
 install_network_tools() {

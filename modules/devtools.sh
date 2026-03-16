@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# modules/devtools.sh – Development and cybersecurity tools
+# modules/devtools.sh - Development and cybersecurity tools
 set -Eeuo pipefail
 
 install_devtools() {

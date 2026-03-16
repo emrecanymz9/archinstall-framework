@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# installer/install.sh – Phase 1 orchestrator (ISO environment)
+# installer/install.sh - Phase 1 orchestrator (ISO environment)
 set -Eeuo pipefail
 
 # ---------------------------------------------------------------------------
@@ -9,7 +9,7 @@ FRAMEWORK_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export FRAMEWORK_ROOT
 export MOUNT_POINT="/mnt"
 export LOG_FILE="/tmp/archinstall.log"
-export UI_BACKTITLE="ArchInstall Framework — Installer"
+export UI_BACKTITLE="ArchInstall Framework - Installer"
 
 # ---------------------------------------------------------------------------
 # Source modules (defines functions; does not execute them)
@@ -30,7 +30,7 @@ source "$FRAMEWORK_ROOT/installer/microcode.sh"
 # ===========================================================================
 
 _collect_identity() {
-    # ── Hostname ──
+    # -- Hostname --
     while true; do
         HOSTNAME=$(ui_inputbox "Computer Name (Hostname)" \
 "Choose a name for this computer.
@@ -51,7 +51,7 @@ and be 1-63 characters long."
     done
     set_state_str "hostname" "$HOSTNAME"
 
-    # ── Username ──
+    # -- Username --
     while true; do
         USERNAME=$(ui_inputbox "Username (Login Name)" \
 "Choose your Linux login username.
@@ -72,7 +72,7 @@ be 1-32 characters, and not be 'root'."
     done
     set_state_str "username" "$USERNAME"
 
-    # ── User password ──
+    # -- User password --
     while true; do
         USER_PASS=$(ui_passwordbox "User Password" \
             "Enter password for user '$USERNAME':") || { clear; exit 0; }
@@ -85,7 +85,7 @@ be 1-32 characters, and not be 'root'."
         ui_msgbox "Password Mismatch" "Passwords do not match. Please try again."
     done
 
-    # ── Root password / lock ──
+    # -- Root password / lock --
     local root_choice
     root_choice=$(ui_radiolist "Root Account" \
 "Configure the root (administrator) account.
@@ -290,7 +290,7 @@ EOF
 }
 
 # ===========================================================================
-# MAIN – executes after all functions are defined
+# MAIN - executes after all functions are defined
 # ===========================================================================
 main() {
     # Must run as root

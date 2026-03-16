@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# modules/audio.sh – PipeWire audio stack installation
+# modules/audio.sh - PipeWire audio stack installation
 set -Eeuo pipefail
 
 install_audio() {
