@@ -35,23 +35,30 @@ export NO_COLOR=1
 # string so that it is safe to pass as dialog box text.
 #
 # Strips:
-#   - Real ESC (0x1B) byte CSI/OSC/DCS and other VT sequences
+#   - Real ESC (0x1B) byte CSI/OSC/DCS and other VT sequences including
+#     private-mode sequences such as \e[?1000h (mouse tracking), \e[?1049h
+#     (alternate screen), \e[?2004h (bracketed paste), \e[>0c (device attrs),
+#     and any sequence whose parameters begin with '?' or '>' (not just digits).
 #   - Literal backslash-escaped sequences (\033[, \e[, \x1b[)
 #   - Carriage return (\r) which causes dialog rendering issues
 #   - Non-printable control characters (0x00-0x08, 0x0B-0x0C, 0x0E-0x1F, 0x7F)
 #   - Non-ASCII bytes (>0x7F) which display as garbage on many Linux TTYs
 #
+# NOTE: All text shown inside dialog boxes MUST be plain printable ASCII.
+#       Do not embed Unicode, fancy quotes, bullets (•), en/em dashes (–/—),
+#       or any character outside the 0x20-0x7E range in dialog text strings.
+#
 # Preserves: printable ASCII (0x20-0x7E), TAB (0x09), and LF (0x0A).
 # ---------------------------------------------------------------------------
 strip_ansi() {
     printf '%s' "$*" | LC_ALL=C sed \
-        -e 's/\x1B\[[0-9;:]*[A-Za-z]//g' \
+        -e 's/\x1B\[[^A-Za-z]*[A-Za-z]//g' \
         -e 's/\x1B][^\x07]*\x07//g' \
         -e 's/\x1B[][()#%*+][0-9A-Za-z]//g' \
         -e 's/\x1B.//g' \
-        -e 's/\\033\[[0-9;]*[A-Za-z]//g' \
-        -e 's/\\e\[[0-9;]*[A-Za-z]//g' \
-        -e 's/\\x1b\[[0-9;]*[A-Za-z]//g' \
+        -e 's/\\033\[[^A-Za-z]*[A-Za-z]//g' \
+        -e 's/\\e\[[^A-Za-z]*[A-Za-z]//g' \
+        -e 's/\\x1b\[[^A-Za-z]*[A-Za-z]//g' \
         -e 's/\r//g' | \
     tr -cd '\11\12\40-\176'
 }
@@ -75,7 +82,7 @@ _dlg_dims() {
 _dlg() {
     local tmpfile rc
     tmpfile=$(mktemp)
-    dialog --backtitle "$(strip_ansi "${UI_BACKTITLE:-ArchInstall Framework}")" "$@" 2>"$tmpfile"; rc=$?
+    dialog --backtitle "$(strip_ansi "${UI_BACKTITLE:-ArchInstall Framework}")" "$@" 2>"$tmpfile" >/dev/tty; rc=$?
     cat "$tmpfile"; rm -f "$tmpfile"
     return "$rc"
 }
@@ -91,14 +98,14 @@ _dlg() {
 ui_msgbox() {
     read -r H W _ <<< "$(_dlg_dims)"
     dialog --backtitle "$(strip_ansi "${UI_BACKTITLE:-ArchInstall Framework}")" \
-           --title "$(strip_ansi "$1")" --msgbox "$(strip_ansi "$2")" "$H" "$W"
+           --title "$(strip_ansi "$1")" --msgbox "$(strip_ansi "$2")" "$H" "$W" >/dev/tty
 }
 
 # ui_yesno <title> <text>  ->  returns 0 for Yes, 1 for No
 ui_yesno() {
     read -r H W _ <<< "$(_dlg_dims)"
     dialog --backtitle "$(strip_ansi "${UI_BACKTITLE:-ArchInstall Framework}")" \
-           --title "$(strip_ansi "$1")" --yesno "$(strip_ansi "$2")" "$H" "$W"
+           --title "$(strip_ansi "$1")" --yesno "$(strip_ansi "$2")" "$H" "$W" >/dev/tty
 }
 
 # ui_menu <title> <prompt> <tag1> <item1> [tag2 item2 ...]  ->  stdout: chosen tag
@@ -152,7 +159,7 @@ ui_gauge_msg() {
     local pct="$3"
     read -r H W _ <<< "$(_dlg_dims)"
     echo "$pct" | dialog --backtitle "$(strip_ansi "${UI_BACKTITLE:-ArchInstall Framework}")" \
-        --title "$title" --gauge "$text" 7 "$W" "$pct"
+        --title "$title" --gauge "$text" 7 "$W" "$pct" >/dev/tty
 }
 
 # ---------------------------------------------------------------------------

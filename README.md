@@ -260,9 +260,28 @@ export TERM=linux
   leaking into dialog text.
 * `require_tools()` smoke-tests `tput` and resets `TERM=linux` if it fails.
 * Every string passed to `dialog` is run through `strip_ansi()`, which removes
-  both real ESC-byte CSI/OSC sequences and literal `\033[…`, `\e[…`, `\x1b[…`
-  patterns, so coloured output from system commands is never displayed as raw
-  escape characters inside a dialog box.
+  both real ESC-byte CSI/OSC sequences (including private-mode sequences such as
+  `\e[?1000h`, `\e[?1049h`, `\e[?2004h`) and literal `\033[…`, `\e[…`, `\x1b[…`
+  patterns, so coloured or control output from system commands is never
+  displayed as raw escape characters inside a dialog box.
+* All `dialog` calls redirect their display output to `/dev/tty` so that the
+  TUI is always rendered on the real terminal, even when the function is invoked
+  inside a `$(…)` command substitution. This ensures dialog appears instantly
+  without requiring the user to press Enter.
+
+### ASCII-only rule for dialog text (for contributors)
+
+All user-visible strings passed to any `ui_*` function **must use plain
+printable ASCII** (characters in the range `0x20`–`0x7E`). Do **not** use:
+
+- Unicode bullets (`•`, `·`, `▸`, …) — use `-` or `*` instead
+- En/em dashes (`–`, `—`) — use `-` instead
+- Smart/curly quotes (`'`, `'`, `"`, `"`) — use `'` and `"` instead
+- Any character outside the 7-bit ASCII printable range
+
+The `strip_ansi()` function strips non-ASCII bytes as a last resort, but
+the source strings should be clean ASCII to begin with so that the intent
+is clear in code review.
 
 ### Quick fixes (if you still see garbage)
 
