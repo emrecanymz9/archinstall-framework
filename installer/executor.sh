@@ -10,10 +10,7 @@ LOG_FILE="${LOG_FILE:-/tmp/archinstall.log}"
 log_info()  { echo "[INFO]  $(date '+%H:%M:%S') $*" | tee -a "$LOG_FILE"; }
 log_warn()  { echo "[WARN]  $(date '+%H:%M:%S') $*" | tee -a "$LOG_FILE" >&2; }
 log_error() { echo "[ERROR] $(date '+%H:%M:%S') $*" | tee -a "$LOG_FILE" >&2; }
-log_step()  { echo "" | tee -a "$LOG_FILE"; \
-              echo "========================================" | tee -a "$LOG_FILE"; \
-              echo "  STEP: $*" | tee -a "$LOG_FILE"; \
-              echo "========================================" | tee -a "$LOG_FILE"; }
+log_step()  { printf '\n========================================\n  STEP: %s\n========================================\n' "$*" >> "$LOG_FILE"; }
 
 # ---------------------------------------------------------------------------
 # run_cmd - run a command, log it, stream output to log, die on failure
