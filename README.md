@@ -251,6 +251,52 @@ export TERM=linux
 ./installer/install.sh
 ```
 
+**Dialog does not appear after "Step 1" — must press Enter**
+
+This is a known issue on VM/TTY consoles (VMware Workstation, VirtualBox) where
+the Linux line-discipline is in a non-standard state after text is printed to the
+terminal.  The installer now calls `stty sane` before every `dialog` invocation
+and runs `clear` before the first dialog window, so this should no longer occur.
+If you still experience it, run:
+
+```bash
+stty sane
+./installer/install.sh
+```
+
+**Disk not detected ("No installable disks detected")**
+
+In VMware, disks often have empty `MODEL` and `SERIAL` fields.  Earlier versions
+of the installer used `lsblk` column-counting that misidentified the `TYPE` field
+when `MODEL`/`SERIAL` were blank, causing all disks to be silently skipped.  The
+fix uses `lsblk --pairs` (`-P`) output which encodes every field as `KEY="value"`,
+so empty fields are parsed correctly.
+
+If you still see "No installable disks detected", verify the disk is visible:
+
+```bash
+# Should list your disk (e.g. sda, sdb, nvme0n1)
+lsblk -d -o NAME,SIZE,MODEL,TYPE
+
+# Direct kernel view — always lists all block devices
+ls /sys/block/
+
+# Detailed pairs output (what the installer uses)
+lsblk -d -P -o NAME,SIZE,MODEL,SERIAL,TYPE --bytes
+```
+
+In VMware: go to **VM → Settings → Hardware → Add → Hard Disk** and make sure
+the disk is connected (not just added to configuration).  The disk does not need
+to be formatted or partitioned — the installer handles that.
+
+**Garbled / unreadable text inside dialog windows**
+
+Characters like `?7l`, `?1000h`, or `^[` appearing in dialog text are DEC private
+VT sequences that some `dialog`/ncurses versions write to stderr alongside the
+selected value.  The installer now strips these from every `dialog` return value
+using an extended `strip_ansi()` pattern that covers `\033[?…`, `\033[>…`, and
+`\033[!…` sequences in addition to standard CSI sequences.
+
 ### What the installer does to prevent this
 
 * `installer/ui.sh` sets `TERM` automatically — `linux` on a physical/virtual
@@ -260,9 +306,18 @@ export TERM=linux
   leaking into dialog text.
 * `require_tools()` smoke-tests `tput` and resets `TERM=linux` if it fails.
 * Every string passed to `dialog` is run through `strip_ansi()`, which removes
-  both real ESC-byte CSI/OSC sequences and literal `\033[…`, `\e[…`, `\x1b[…`
-  patterns, so coloured output from system commands is never displayed as raw
-  escape characters inside a dialog box.
+  both real ESC-byte CSI/OSC sequences (including DEC private sequences such as
+  `\033[?7l`, `\033[?1000h`, and mouse-control sequences) and literal
+  `\033[…`, `\e[…`, `\x1b[…` patterns, so coloured output from system commands
+  is never displayed as raw escape characters inside a dialog box.
+* `_dlg()` calls `stty sane` before every `dialog` invocation and sanitizes
+  the dialog stderr output (user selections) to strip any stray escape sequences
+  written by ncurses/dialog on VM consoles.
+* `installer/install.sh` calls `clear` before the first dialog to put the
+  terminal in a clean state, preventing the "must press Enter" issue on VMware.
+* `list_disks()` uses `lsblk --pairs` (`-P`) output so that disks with empty
+  `MODEL`/`SERIAL` (common in VMware) are always detected correctly, with a
+  `/sys/block` fallback for environments where `lsblk` is unavailable.
 
 ### Quick fixes (if you still see garbage)
 

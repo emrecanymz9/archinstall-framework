@@ -35,7 +35,10 @@ export NO_COLOR=1
 # string so that it is safe to pass as dialog box text.
 #
 # Strips:
-#   - Real ESC (0x1B) byte CSI/OSC/DCS and other VT sequences
+#   - Real ESC (0x1B) byte CSI sequences including DEC private sequences
+#     (\033[...h/l, \033[?...h/l, mouse control, etc.)
+#   - OSC / DCS sequences (\033] and \033P)
+#   - Other VT sequences (\033 followed by any character)
 #   - Literal backslash-escaped sequences (\033[, \e[, \x1b[)
 #   - Carriage return (\r) which causes dialog rendering issues
 #   - Non-printable control characters (0x00-0x08, 0x0B-0x0C, 0x0E-0x1F, 0x7F)
@@ -45,13 +48,14 @@ export NO_COLOR=1
 # ---------------------------------------------------------------------------
 strip_ansi() {
     printf '%s' "$*" | LC_ALL=C sed \
-        -e 's/\x1B\[[0-9;:]*[A-Za-z]//g' \
+        -e 's/\x1B\[[0-9;:?<>!]*[A-Za-z]//g' \
         -e 's/\x1B][^\x07]*\x07//g' \
+        -e 's/\x1BP[^\\]*\\//g' \
         -e 's/\x1B[][()#%*+][0-9A-Za-z]//g' \
         -e 's/\x1B.//g' \
-        -e 's/\\033\[[0-9;]*[A-Za-z]//g' \
-        -e 's/\\e\[[0-9;]*[A-Za-z]//g' \
-        -e 's/\\x1b\[[0-9;]*[A-Za-z]//g' \
+        -e 's/\\033\[[0-9;:?<>!]*[A-Za-z]//g' \
+        -e 's/\\e\[[0-9;:?<>!]*[A-Za-z]//g' \
+        -e 's/\\x1b\[[0-9;:?<>!]*[A-Za-z]//g' \
         -e 's/\r//g' | \
     tr -cd '\11\12\40-\176'
 }
@@ -75,8 +79,21 @@ _dlg_dims() {
 _dlg() {
     local tmpfile rc
     tmpfile=$(mktemp)
+    # Reset terminal to a sane state before launching dialog.
+    # On VM/TTY consoles (e.g. VMware) text written to the terminal before the
+    # first dialog call can leave the TTY in a state where ncurses waits for a
+    # keypress.  stty sane resets line-discipline flags so dialog appears
+    # immediately without requiring the user to press Enter.
+    stty sane 2>/dev/null || true
     dialog --backtitle "$(strip_ansi "${UI_BACKTITLE:-ArchInstall Framework}")" "$@" 2>"$tmpfile"; rc=$?
-    cat "$tmpfile"; rm -f "$tmpfile"
+    # Strip stray escape sequences that some dialog/ncurses versions write to
+    # stderr alongside the selection result; these would otherwise appear as
+    # garbage in the next dialog's prompt text.
+    LC_ALL=C sed \
+        -e 's/\x1B\[[0-9;:?<>!]*[A-Za-z]//g' \
+        -e 's/\x1B.//g' \
+        -e 's/\r//g' < "$tmpfile" | tr -cd '\11\12\40-\176'
+    rm -f "$tmpfile"
     return "$rc"
 }
 
@@ -90,15 +107,13 @@ _dlg() {
 # ui_msgbox <title> <text>
 ui_msgbox() {
     read -r H W _ <<< "$(_dlg_dims)"
-    dialog --backtitle "$(strip_ansi "${UI_BACKTITLE:-ArchInstall Framework}")" \
-           --title "$(strip_ansi "$1")" --msgbox "$(strip_ansi "$2")" "$H" "$W"
+    _dlg --title "$(strip_ansi "$1")" --msgbox "$(strip_ansi "$2")" "$H" "$W"
 }
 
 # ui_yesno <title> <text>  ->  returns 0 for Yes, 1 for No
 ui_yesno() {
     read -r H W _ <<< "$(_dlg_dims)"
-    dialog --backtitle "$(strip_ansi "${UI_BACKTITLE:-ArchInstall Framework}")" \
-           --title "$(strip_ansi "$1")" --yesno "$(strip_ansi "$2")" "$H" "$W"
+    _dlg --title "$(strip_ansi "$1")" --yesno "$(strip_ansi "$2")" "$H" "$W"
 }
 
 # ui_menu <title> <prompt> <tag1> <item1> [tag2 item2 ...]  ->  stdout: chosen tag

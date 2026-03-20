@@ -24,15 +24,62 @@ part_dev() {
 
 # ---------------------------------------------------------------------------
 # list_disks  ->  stdout lines: "name|size|model|serial"
+#
+# Uses lsblk --pairs (-P) output so that empty MODEL/SERIAL fields (common on
+# VMware and some physical machines) do not shift awk column positions and
+# cause the disk to be silently skipped.  Falls back to /sys/block enumeration
+# if lsblk returns no results (e.g. very old kernels or restricted environments).
 # ---------------------------------------------------------------------------
+
+# _sanitize_field <string>  ->  stdout: printable ASCII, leading/trailing spaces stripped
+_sanitize_field() {
+    printf '%s' "${1:-}" | tr -cd '[:print:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
+
 list_disks() {
-    lsblk -d -o NAME,SIZE,MODEL,SERIAL,TYPE --noheadings --bytes \
-        | awk '$5 == "disk" { printf "%s|%s|%s|%s\n", $1, $2, $3, $4 }' \
-        | while IFS='|' read -r name bytes model serial; do
-            local gib
-            gib=$(awk "BEGIN{printf \"%.1f GiB\", $bytes/1073741824}")
+    local found=false
+
+    # Primary: lsblk --pairs format - key="value" per field, handles empty values
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        local name="" size="" model="" serial="" type=""
+        # Extract each key="value" token via BASH_REMATCH
+        [[ "$line" =~ NAME=\"([^\"]*)\" ]]   && name="${BASH_REMATCH[1]}"
+        [[ "$line" =~ SIZE=\"([^\"]*)\" ]]   && size="${BASH_REMATCH[1]}"
+        [[ "$line" =~ MODEL=\"([^\"]*)\" ]]  && model="${BASH_REMATCH[1]}"
+        [[ "$line" =~ SERIAL=\"([^\"]*)\" ]] && serial="${BASH_REMATCH[1]}"
+        [[ "$line" =~ TYPE=\"([^\"]*)\" ]]   && type="${BASH_REMATCH[1]}"
+        [[ "$type" != "disk" ]]  && continue
+        [[ -z "$name" ]]         && continue
+        [[ -z "$size" || "$size" == "0" ]] && continue
+        local gib
+        gib=$(awk "BEGIN{printf \"%.1f GiB\", $size/1073741824}")
+        model=$(_sanitize_field "$model")
+        serial=$(_sanitize_field "$serial")
+        printf "%s|%s|%s|%s\n" "$name" "$gib" "${model:-Unknown}" "${serial:-N/A}"
+        found=true
+    done < <(lsblk -d -P -o NAME,SIZE,MODEL,SERIAL,TYPE --bytes 2>/dev/null)
+
+    # Fallback: enumerate /sys/block - works even when lsblk returns nothing
+    if ! "$found"; then
+        local dev
+        for dev in /sys/block/*/; do
+            local name
+            name=$(basename "$dev")
+            # Skip virtual/pseudo devices (loop, ram, sr, zram, dm, md, fd)
+            [[ "$name" =~ ^(loop|ram|sr|zram|dm-|md|fd) ]] && continue
+            # Must have a 'device' subdir (physical/virtual disk, not just a mapper)
+            [[ -e "/sys/block/$name/device" ]] || continue
+            local sectors size_bytes gib model serial
+            sectors=$(< "/sys/block/$name/size" 2>/dev/null) || continue
+            size_bytes=$(( sectors * 512 ))
+            (( size_bytes > 0 )) || continue
+            gib=$(awk "BEGIN{printf \"%.1f GiB\", $size_bytes/1073741824}")
+            model=$(_sanitize_field "$(tr -d '\n' < "/sys/block/$name/device/model" 2>/dev/null || true)")
+            serial=$(_sanitize_field "$(tr -d '\n' < "/sys/block/$name/device/serial" 2>/dev/null || true)")
             printf "%s|%s|%s|%s\n" "$name" "$gib" "${model:-Unknown}" "${serial:-N/A}"
-          done
+        done
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -43,7 +90,19 @@ select_disk() {
     disks=$(list_disks)
 
     if [[ -z "$disks" ]]; then
-        ui_msgbox "Error" "No installable disks detected."
+        # Provide diagnostic info so users can troubleshoot (e.g. VMware setups)
+        local diag
+        diag=$(lsblk -d -o NAME,SIZE,MODEL,TYPE 2>/dev/null || echo "(lsblk unavailable)")
+        ui_msgbox "Error: No Installable Disks Found" \
+"No installable disks were detected.\n\n\
+Current block devices:\n${diag}\n\n\
+If your disk is not listed above:\n\
+  - In VMware: add the disk in VM Settings -> Hardware -> Add -> Hard Disk\n\
+  - Verify the disk is visible: lsblk -d\n\
+  - Check /sys/block/ for raw device entries\n\
+  - Ensure the disk is not mounted or in use\n\n\
+See the log for more details: $LOG_FILE"
+        log_error "No disks found. lsblk output: $diag"
         exit 1
     fi
 

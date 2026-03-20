@@ -303,6 +303,11 @@ main() {
     init_state
     log_info "ArchInstall Framework starting. Log: $LOG_FILE"
 
+    # Clear the screen so dialog appears immediately on the next call.
+    # Without this, on VM/TTY consoles (e.g. VMware Workstation) ncurses can
+    # wait for a keypress before rendering its first window.
+    clear
+
     log_step "Step 1: Boot mode selection"
     bootmode_screen
 
