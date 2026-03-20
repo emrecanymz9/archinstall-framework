@@ -1,12 +1,12 @@
 # ArchInstall Framework
 
-A deterministic, modular, Bash-based Arch Linux installer for advanced users who want a clean, reproducible setup — without having to remember every command.
+A modular, Bash-based Arch Linux installer designed as a **daily OS** — custom, modern, and inspired by CachyOS but built from scratch for any hardware. Run it on a PC, laptop, server, or a VM (for testing). It works anywhere you have a Linux TTY/console.
 
 ---
 
 ## What it is
 
-ArchInstall Framework is a **dialog-based terminal installer** that guides you through a full Arch Linux installation with KDE Plasma 6, covering:
+ArchInstall Framework is a **step-by-step TUI installer** that guides you through a full Arch Linux installation with KDE Plasma 6, covering:
 
 - Disk partitioning (three modes)
 - Optional LUKS2 full-disk encryption
@@ -25,15 +25,52 @@ The installer runs in **two phases**:
 | Phase 1 | **Installer** | Arch ISO (live) | Disk, encrypt, filesystem, base system, bootloader, user accounts |
 | Phase 2 | **Post Install** | Installed system (first boot) | KDE, GPU drivers, audio, gaming, dev tools, Secure Boot |
 
+> **VM usage:** A VM (VMware, VirtualBox, QEMU, etc.) is a fully supported platform — great for testing before deploying to real hardware, but also valid as a permanent install target.
+
 ---
 
 ## Goals
 
-- **Simple UX, safe defaults** — dialog-based menus, never silently wipes
+- **Universal platform** — PC, laptop, desktop, console, or VM; any environment with a Linux TTY
+- **Full TUI dialog installer** — all steps driven by dialog menus (like CachyOS), custom and modular
+- **Bash fallback for debugging** — when `dialog` is not installed, every prompt automatically falls back to plain bash (`select`, `read`, yes/no via Enter) so you can test on a minimal system
+- **Simple UX, safe defaults** — dialog menus, never silently wipes
 - **Deterministic** — fixed package sets, clear phase separation
 - **Modular** — each concern lives in its own script
 - **Strict Bash** — `set -Eeuo pipefail` everywhere
 - **Resumable** — state tracked in `config/state.json` via `jq`
+
+---
+
+## UI modes: dialog TUI vs. bash fallback
+
+The installer supports two UI modes that are selected automatically:
+
+| Mode | When | How it looks |
+|------|------|-------------|
+| `dialog` | `dialog` package is installed (default on Arch ISO) | Full TUI with bordered windows, arrow-key navigation |
+| `bash` | `dialog` not installed, or `UI_MODE=bash` is set | Plain terminal prompts: numbered menus, `[y/n]`, Enter to confirm |
+
+### Forcing bash mode (for debugging / early development)
+
+```bash
+# Run in bash fallback mode without dialog
+UI_MODE=bash ./installer/install.sh
+
+# Or export for the whole session
+export UI_MODE=bash
+./installer/install.sh
+```
+
+### Forcing dialog mode
+
+```bash
+# Install dialog first (standard on Arch ISO)
+pacman -Sy --needed dialog
+./installer/install.sh
+```
+
+When `dialog` is not found and `UI_MODE` is not forced, the installer prints a notice and switches to bash fallback automatically — it never aborts just because `dialog` is missing.
 
 ---
 
@@ -52,6 +89,11 @@ cd archinstall-framework
 # 4. Run Phase 1 (Installer)
 ./installer/install.sh
 ```
+
+> **Minimal / debug run** (no `dialog` needed):
+> ```bash
+> UI_MODE=bash ./installer/install.sh
+> ```
 
 Post Install (Phase 2) runs automatically on first boot. You can also run it manually:
 
@@ -216,6 +258,13 @@ To enable Secure Boot after Phase 2:
 
 ## Troubleshooting: dialog shows escape sequences / unreadable text
 
+> **Quickest fix: switch to bash fallback mode**
+> ```bash
+> UI_MODE=bash ./installer/install.sh
+> ```
+> This skips `dialog` entirely and uses plain bash prompts — useful when testing
+> or when the environment doesn't cooperate with ncurses.
+
 If `dialog` boxes display raw escape sequences such as `\E[0m`, `\033[32m`, or
 `^[[1m` instead of readable text, the cause is almost always one of these:
 
@@ -373,7 +422,7 @@ archinstall-framework/
 │   ├── microcode.sh    # CPU microcode detection
 │   ├── executor.sh     # Logging, run_cmd, chroot_run
 │   ├── state.sh        # State management (config/state.json)
-│   └── ui.sh           # dialog wrappers with adaptive sizing
+│   └── ui.sh           # dialog TUI wrappers + bash fallback (UI_MODE)
 ├── postinstall/
 │   ├── install.sh      # Phase 2 orchestrator (Post Install)
 │   └── desktops/
