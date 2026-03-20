@@ -156,11 +156,15 @@ The next screens will let you choose how to use this disk."
 # ---------------------------------------------------------------------------
 detect_free_segments() {
     local disk="$1"
+    # parted exits non-zero when the disk has no recognised partition table
+    # (e.g. a brand-new, completely unformatted disk).  The '|| true' ensures
+    # the pipeline always returns 0 so callers guarded by 'set -Eeuo pipefail'
+    # are not silently killed by the non-zero exit.
     parted -m -s "$disk" unit MiB print free 2>/dev/null \
         | awk -F: '$5 == "free" {
             gsub("MiB","",$2); gsub("MiB","",$3); gsub("MiB","",$4)
             if ($4+0 > 100) printf "%s|%s|%s\n", $2, $3, $4
-          }'
+          }' || true
 }
 
 # ---------------------------------------------------------------------------

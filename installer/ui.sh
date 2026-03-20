@@ -88,8 +88,15 @@ _dlg() {
     # this redirection, clear's escape sequences (\033[H\033[2J) pollute the
     # captured stdout, contaminating choice variables with garbage like "[H[2J".
     stty sane 2>/dev/null || true
-    clear >/dev/tty 2>/dev/null || true
-    dialog --backtitle "$(strip_ansi "${UI_BACKTITLE:-ArchInstall Framework}")" "$@" 2>"$tmpfile"; rc=$?
+    # Full terminal reset: RIS (ESC c) resets all terminal attributes and clears
+    # the screen in one sequence; more reliable than 'clear' alone on VM TTYs.
+    printf '\033c' >/dev/tty 2>/dev/null || clear >/dev/tty 2>/dev/null || true
+    # Redirect dialog's stdout explicitly to /dev/tty so that ncurses TUI
+    # rendering never reaches the caller's stdout (which may be a pipe when
+    # _dlg is called inside a $() command substitution).  Without this, some
+    # ncurses builds emit initialization sequences (e.g. mouse-enable \033[?1000h)
+    # to stdout before opening /dev/tty, contaminating the captured result.
+    dialog --backtitle "$(strip_ansi "${UI_BACKTITLE:-ArchInstall Framework}")" "$@" >/dev/tty 2>"$tmpfile"; rc=$?
     # Strip stray escape sequences that some dialog/ncurses versions write to
     # stderr alongside the selection result; these would otherwise appear as
     # garbage in the next dialog's prompt text.
