@@ -82,9 +82,11 @@ _dlg() {
     # Reset terminal to a sane state before launching dialog.
     # On VM/TTY consoles (e.g. VMware) text written to the terminal before the
     # first dialog call can leave the TTY in a state where ncurses waits for a
-    # keypress.  stty sane resets line-discipline flags so dialog appears
-    # immediately without requiring the user to press Enter.
+    # keypress.  stty sane resets line-discipline flags and clear wipes any
+    # text written to the TTY, so dialog appears immediately without requiring
+    # the user to press Enter.
     stty sane 2>/dev/null || true
+    clear 2>/dev/null || true
     dialog --backtitle "$(strip_ansi "${UI_BACKTITLE:-ArchInstall Framework}")" "$@" 2>"$tmpfile"; rc=$?
     # Strip stray escape sequences that some dialog/ncurses versions write to
     # stderr alongside the selection result; these would otherwise appear as

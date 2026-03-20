@@ -56,7 +56,9 @@ list_disks() {
         gib=$(awk "BEGIN{printf \"%.1f GiB\", $size/1073741824}")
         model=$(_sanitize_field "$model")
         serial=$(_sanitize_field "$serial")
-        printf "%s|%s|%s|%s\n" "$name" "$gib" "${model:-Unknown}" "${serial:-N/A}"
+        local part_count
+        part_count=$(lsblk -lno TYPE "/dev/$name" 2>/dev/null | grep -c "^part$" || echo "0")
+        printf "%s|%s|%s|%s|%s\n" "$name" "$gib" "${model:-Unknown}" "${serial:-N/A}" "$part_count"
         found=true
     done < <(lsblk -d -P -o NAME,SIZE,MODEL,SERIAL,TYPE --bytes 2>/dev/null)
 
@@ -77,7 +79,9 @@ list_disks() {
             gib=$(awk "BEGIN{printf \"%.1f GiB\", $size_bytes/1073741824}")
             model=$(_sanitize_field "$(tr -d '\n' < "/sys/block/$name/device/model" 2>/dev/null || true)")
             serial=$(_sanitize_field "$(tr -d '\n' < "/sys/block/$name/device/serial" 2>/dev/null || true)")
-            printf "%s|%s|%s|%s\n" "$name" "$gib" "${model:-Unknown}" "${serial:-N/A}"
+            local part_count
+            part_count=$(lsblk -lno TYPE "/dev/$name" 2>/dev/null | grep -c "^part$" || echo "0")
+            printf "%s|%s|%s|%s|%s\n" "$name" "$gib" "${model:-Unknown}" "${serial:-N/A}" "$part_count"
         done
     fi
 }
@@ -94,26 +98,40 @@ select_disk() {
         local diag
         diag=$(lsblk -d -o NAME,SIZE,MODEL,TYPE 2>/dev/null || echo "(lsblk unavailable)")
         ui_msgbox "Error: No Installable Disks Found" \
-"No installable disks were detected.\n\n\
-Current block devices:\n${diag}\n\n\
-If your disk is not listed above:\n\
-  - In VMware: add the disk in VM Settings -> Hardware -> Add -> Hard Disk\n\
-  - Verify the disk is visible: lsblk -d\n\
-  - Check /sys/block/ for raw device entries\n\
-  - Ensure the disk is not mounted or in use\n\n\
+"No installable disks were detected.
+
+Current block devices:
+${diag}
+
+If your disk is not listed above:
+  - In VMware: add the disk in VM Settings -> Hardware -> Add -> Hard Disk
+  - Verify the disk is visible: lsblk -d
+  - Check /sys/block/ for raw device entries
+  - Ensure the disk is not mounted or in use
+
 See the log for more details: $LOG_FILE"
         log_error "No disks found. lsblk output: $diag"
         exit 1
     fi
 
     local menu_args=()
-    while IFS='|' read -r name size model serial; do
-        menu_args+=("$name" "${size}  ${model}  [S/N: ${serial}]")
+    while IFS='|' read -r name size model serial parts; do
+        local part_label
+        if [[ "${parts:-0}" -eq 0 ]]; then
+            part_label="unpartitioned"
+        elif [[ "${parts:-0}" -eq 1 ]]; then
+            part_label="1 partition"
+        else
+            part_label="${parts} partitions"
+        fi
+        menu_args+=("$name" "${size}  ${model:-Unknown}  [${part_label}]")
     done <<< "$disks"
 
     local choice
     choice=$(ui_menu "Disk Selection" \
-        "Select the disk to install Arch Linux on.\n\nWARNING: The next steps may erase data on the selected disk." \
+        "Select the disk to install Arch Linux on.
+
+WARNING: The next steps may erase data on the selected disk." \
         "${menu_args[@]}") || { clear; exit 0; }
 
     TARGET_DISK="/dev/${choice}"
@@ -124,7 +142,13 @@ See the log for more details: $LOG_FILE"
     local detail
     detail=$(lsblk -o NAME,SIZE,FSTYPE,PARTLABEL,MOUNTPOINTS "$TARGET_DISK" 2>/dev/null || true)
     ui_msgbox "Disk Summary: $TARGET_DISK" \
-        "You selected: $TARGET_DISK\n\nCurrent layout:\n\n${detail}\n\nThe next screens will let you choose how to use this disk."
+        "You selected: $TARGET_DISK
+
+Current layout:
+
+${detail}
+
+The next screens will let you choose how to use this disk."
 }
 
 # ---------------------------------------------------------------------------
