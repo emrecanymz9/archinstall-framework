@@ -27,36 +27,26 @@ get_archiso_boot_disk() {
 
 list_disks() {
 	local archiso_disk
-	local line
 	local name
 	local size
-	local model
 	local type
+	local model
 
 	archiso_disk="$(get_archiso_boot_disk 2>/dev/null || true)"
 
-	while IFS= read -r line; do
-		[[ $line =~ NAME="([^"]*)" ]] || continue
-		name=${BASH_REMATCH[1]}
-
-		[[ $line =~ SIZE="([^"]*)" ]] || continue
-		size=${BASH_REMATCH[1]}
-
-		if [[ $line =~ MODEL="([^"]*)" ]]; then
-			model=${BASH_REMATCH[1]}
-		else
-			model="Unknown model"
-		fi
-
-		[[ $line =~ TYPE="([^"]*)" ]] || continue
-		type=${BASH_REMATCH[1]}
+	while read -r name size type; do
+		[[ -n $name && -n $size && -n $type ]] || continue
 
 		[[ $type == "disk" ]] || continue
 		[[ -n $archiso_disk && $name == "$archiso_disk" ]] && continue
+
+		model="$(lsblk -dnro MODEL "$name" 2>/dev/null || true)"
+		model=${model//$'\t'/ }
+		model=${model//$'\n'/ }
 		[[ -n $model ]] || model="Unknown model"
 
 		printf '%s\t%s\t%s\n' "$name" "$size" "$model"
-	done < <(lsblk -dpno NAME,SIZE,MODEL,TYPE -P 2>/dev/null)
+	done < <(lsblk -dnpr -o NAME,SIZE,TYPE 2>/dev/null)
 }
 
 select_disk() {
