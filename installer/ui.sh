@@ -8,8 +8,6 @@ DIALOG_RESULT=${DIALOG_RESULT:-""}
 ARCHINSTALL_UI_MAX_RETRY=${ARCHINSTALL_UI_MAX_RETRY:-3}
 ARCHINSTALL_UI_RETRY_COUNT=${ARCHINSTALL_UI_RETRY_COUNT:-0}
 ARCHINSTALL_LAST_UI_FAILURE=${ARCHINSTALL_LAST_UI_FAILURE:-false}
-ARCHINSTALL_LAST_DIALOG_STATUS=${ARCHINSTALL_LAST_DIALOG_STATUS:-0}
-ARCHINSTALL_DIALOG_OUTPUT=${ARCHINSTALL_DIALOG_OUTPUT:-""}
 ARCHINSTALL_TTY_FALLBACK_NOTICE_SHOWN=${ARCHINSTALL_TTY_FALLBACK_NOTICE_SHOWN:-false}
 
 sanitize_dialog_text() {
@@ -92,7 +90,6 @@ mark_ui_failure() {
 reset_ui_failure() {
 	ARCHINSTALL_LAST_UI_FAILURE=false
 	ARCHINSTALL_UI_RETRY_COUNT=0
-	ARCHINSTALL_LAST_DIALOG_STATUS=0
 }
 
 notify_tty_fallback() {
@@ -124,13 +121,10 @@ safe_dialog() {
 	ARCHINSTALL_LAST_UI_FAILURE=false
 	DIALOG_STATUS=0
 	DIALOG_RESULT=""
-	ARCHINSTALL_LAST_DIALOG_STATUS=0
-	ARCHINSTALL_DIALOG_OUTPUT=""
 
 	if ui_force_tty; then
 		ARCHINSTALL_LAST_UI_FAILURE=true
 		DIALOG_STATUS=1
-		ARCHINSTALL_LAST_DIALOG_STATUS=1
 		return 1
 	fi
 
@@ -139,7 +133,6 @@ safe_dialog() {
 		mark_ui_failure
 		set_ui_mode tty
 		DIALOG_STATUS=127
-		ARCHINSTALL_LAST_DIALOG_STATUS=127
 		return 1
 	fi
 
@@ -149,7 +142,6 @@ safe_dialog() {
 		mark_ui_failure
 		set_ui_mode tty
 		DIALOG_STATUS=1
-		ARCHINSTALL_LAST_DIALOG_STATUS=1
 		return 1
 	fi
 
@@ -158,13 +150,8 @@ safe_dialog() {
 	DIALOG_RESULT="$(cat "$tmpfile" 2>/dev/null || true)"
 	rm -f "$tmpfile"
 
-	ARCHINSTALL_DIALOG_OUTPUT=$DIALOG_RESULT
-	ARCHINSTALL_LAST_DIALOG_STATUS=$DIALOG_STATUS
-
 	if [[ $DIALOG_STATUS -eq 0 ]]; then
 		reset_ui_failure
-		ARCHINSTALL_DIALOG_OUTPUT=$DIALOG_RESULT
-		ARCHINSTALL_LAST_DIALOG_STATUS=0
 		return 0
 	fi
 
@@ -204,6 +191,7 @@ tty_menu() {
 	shift 5
 	options=("$@")
 	total=$((${#options[@]} / 2))
+	DIALOG_RESULT=""
 
 	printf '\n%s\n' "$(sanitize_dialog_text "$title")" >/dev/tty
 	printf '%s\n\n' "$(sanitize_dialog_text "$prompt")" >/dev/tty
@@ -233,7 +221,7 @@ tty_menu() {
 		return 1
 	fi
 
-	printf '%s\n' "${options[$(((response - 1) * 2))]}"
+	DIALOG_RESULT="${options[$(((response - 1) * 2))]}"
 	return 0
 }
 
@@ -275,6 +263,7 @@ tty_input_box() {
 	local body=${2:-"Enter a value:"}
 	local initial_value=${3:-""}
 	local response=""
+	DIALOG_RESULT=""
 
 	printf '\n%s\n' "$(sanitize_dialog_text "$title")" >/dev/tty
 	printf '%s\n' "$(sanitize_dialog_text "$body")" >/dev/tty
@@ -287,7 +276,7 @@ tty_input_box() {
 		return 1
 	fi
 
-	printf '%s\n' "$(sanitize_dialog_text "$response")"
+	DIALOG_RESULT="$(sanitize_dialog_text "$response")"
 	return 0
 }
 
@@ -295,6 +284,7 @@ tty_password_box() {
 	local title=${1:-"Password"}
 	local body=${2:-"Enter a password:"}
 	local response=""
+	DIALOG_RESULT=""
 
 	printf '\n%s\n' "$(sanitize_dialog_text "$title")" >/dev/tty
 	printf '%s\n' "$(sanitize_dialog_text "$body")" >/dev/tty
@@ -305,7 +295,7 @@ tty_password_box() {
 	fi
 	printf '\n' >/dev/tty
 
-	printf '%s\n' "$(sanitize_dialog_text "$response")"
+	DIALOG_RESULT="$(sanitize_dialog_text "$response")"
 	return 0
 }
 
@@ -317,16 +307,16 @@ menu() {
 	local menu_height=${5:-8}
 	local sanitized_title=""
 	local sanitized_prompt=""
-	local selection
 	local status
 
 	shift 5
 	sanitized_title="$(sanitize_dialog_text "$title")"
 	sanitized_prompt="$(sanitize_dialog_text "$prompt")"
+	DIALOG_RESULT=""
 
 	if ui_force_tty; then
 		notify_tty_fallback
-		selection="$(tty_menu "$title" "$prompt" "$height" "$width" "$menu_height" "$@")"
+		tty_menu "$title" "$prompt" "$height" "$width" "$menu_height" "$@"
 		status=$?
 	else
 		safe_dialog \
@@ -339,19 +329,19 @@ menu() {
 			"$height" "$width" "$menu_height" \
 			"$@" \
 			3>&1 1>&2 2>&3
-		status=${ARCHINSTALL_LAST_DIALOG_STATUS:-1}
-		selection=$ARCHINSTALL_DIALOG_OUTPUT
+		status=$DIALOG_STATUS
 		if [[ $status -ne 0 && ${ARCHINSTALL_LAST_UI_FAILURE:-false} == true ]]; then
 			notify_tty_fallback
-			selection="$(tty_menu "$title" "$prompt" "$height" "$width" "$menu_height" "$@")"
+			tty_menu "$title" "$prompt" "$height" "$width" "$menu_height" "$@"
 			status=$?
 		fi
 	fi
 
 	if [[ $status -eq 0 ]]; then
-		printf '%s\n' "$(sanitize_dialog_choice "$selection")"
+		DIALOG_RESULT="$(sanitize_dialog_choice "$DIALOG_RESULT")"
 	fi
 
+	DIALOG_STATUS=$status
 	return "$status"
 }
 
@@ -408,16 +398,16 @@ input_box() {
 	local sanitized_title=""
 	local sanitized_body=""
 	local sanitized_initial_value=""
-	local input_value
 	local status
 
 	sanitized_title="$(sanitize_dialog_text "$title")"
 	sanitized_body="$(sanitize_dialog_text "$body")"
 	sanitized_initial_value="$(sanitize_dialog_text "$initial_value")"
+	DIALOG_RESULT=""
 
 	if ui_force_tty; then
 		notify_tty_fallback
-		input_value="$(tty_input_box "$title" "$body" "$initial_value" "$height" "$width")"
+		tty_input_box "$title" "$body" "$initial_value" "$height" "$width"
 		status=$?
 	else
 		safe_dialog \
@@ -427,19 +417,19 @@ input_box() {
 			--inputbox "$sanitized_body" \
 			"$height" "$width" "$sanitized_initial_value" \
 			3>&1 1>&2 2>&3
-		status=${ARCHINSTALL_LAST_DIALOG_STATUS:-1}
-		input_value=$ARCHINSTALL_DIALOG_OUTPUT
+		status=$DIALOG_STATUS
 		if [[ $status -ne 0 && ${ARCHINSTALL_LAST_UI_FAILURE:-false} == true ]]; then
 			notify_tty_fallback
-			input_value="$(tty_input_box "$title" "$body" "$initial_value" "$height" "$width")"
+			tty_input_box "$title" "$body" "$initial_value" "$height" "$width"
 			status=$?
 		fi
 	fi
 
 	if [[ $status -eq 0 ]]; then
-		printf '%s\n' "$(sanitize_dialog_text "$input_value")"
+		DIALOG_RESULT="$(sanitize_dialog_text "$DIALOG_RESULT")"
 	fi
 
+	DIALOG_STATUS=$status
 	return "$status"
 }
 
@@ -450,15 +440,15 @@ password_box() {
 	local width=${4:-70}
 	local sanitized_title=""
 	local sanitized_body=""
-	local input_value
 	local status
 
 	sanitized_title="$(sanitize_dialog_text "$title")"
 	sanitized_body="$(sanitize_dialog_text "$body")"
+	DIALOG_RESULT=""
 
 	if ui_force_tty; then
 		notify_tty_fallback
-		input_value="$(tty_password_box "$title" "$body" "$height" "$width")"
+		tty_password_box "$title" "$body" "$height" "$width"
 		status=$?
 	else
 		safe_dialog \
@@ -469,19 +459,19 @@ password_box() {
 			--passwordbox "$sanitized_body" \
 			"$height" "$width" \
 			3>&1 1>&2 2>&3
-		status=${ARCHINSTALL_LAST_DIALOG_STATUS:-1}
-		input_value=$ARCHINSTALL_DIALOG_OUTPUT
+		status=$DIALOG_STATUS
 		if [[ $status -ne 0 && ${ARCHINSTALL_LAST_UI_FAILURE:-false} == true ]]; then
 			notify_tty_fallback
-			input_value="$(tty_password_box "$title" "$body" "$height" "$width")"
+			tty_password_box "$title" "$body" "$height" "$width"
 			status=$?
 		fi
 	fi
 
 	if [[ $status -eq 0 ]]; then
-		printf '%s\n' "$(sanitize_dialog_text "$input_value")"
+		DIALOG_RESULT="$(sanitize_dialog_text "$DIALOG_RESULT")"
 	fi
 
+	DIALOG_STATUS=$status
 	return "$status"
 }
 

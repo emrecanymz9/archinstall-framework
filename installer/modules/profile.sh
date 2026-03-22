@@ -11,15 +11,17 @@ select_common_value() {
 
 	shift 4
 
-	selected="$(menu "$title" "$prompt\n\nCurrent: ${current_value:-Not set}" 18 76 8 "$@" \
-		"custom" "Enter a custom value")"
-	status=$?
+	menu "$title" "$prompt\n\nCurrent: ${current_value:-Not set}" 18 76 8 "$@" \
+		"custom" "Enter a custom value"
+	selected="$DIALOG_RESULT"
+	status=$DIALOG_STATUS
 
 	case $status in
 		0)
 			if [[ $selected == "custom" ]]; then
-				custom_value="$(input_box "$title" "$custom_prompt" "$current_value" 12 76)"
-				status=$?
+				input_box "$title" "$custom_prompt" "$current_value" 12 76
+				custom_value="$DIALOG_RESULT"
+				status=$DIALOG_STATUS
 				if [[ $status -ne 0 || -z $custom_value ]]; then
 					return 1
 				fi

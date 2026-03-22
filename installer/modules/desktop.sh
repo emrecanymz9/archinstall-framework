@@ -51,10 +51,11 @@ display_manager_label() {
 select_desktop_profile() {
 	local selected=""
 
-	selected="$(menu "Desktop Profile" "Choose an optional desktop profile." 14 76 4 \
+	menu "Desktop Profile" "Choose an optional desktop profile." 14 76 4 \
 		"none" "No desktop environment" \
-		"kde" "KDE Plasma with Wayland and X11 session support")"
-	case $? in
+		"kde" "KDE Plasma with Wayland and X11 session support"
+	selected="$DIALOG_RESULT"
+	case $DIALOG_STATUS in
 		0)
 			printf '%s\n' "$selected"
 			return 0
@@ -77,10 +78,11 @@ select_display_manager() {
 		return 0
 	fi
 
-	selected="$(menu "Display Manager" "Choose the display manager for KDE Plasma." 14 76 4 \
+	menu "Display Manager" "Choose the display manager for KDE Plasma." 14 76 4 \
 		"sddm" "Recommended for KDE Plasma" \
-		"greetd" "greetd with tuigreet")"
-	case $? in
+		"greetd" "greetd with tuigreet"
+	selected="$DIALOG_RESULT"
+	case $DIALOG_STATUS in
 		0)
 			printf '%s\n' "$selected"
 			return 0
@@ -104,11 +106,12 @@ select_display_mode() {
 		return 0
 	fi
 
-	selected="$(menu "Display Mode" "Choose the preferred KDE session mode.\n\nCurrent: $(display_mode_label "$current_mode")" 15 78 4 \
+	menu "Display Mode" "Choose the preferred KDE session mode.\n\nCurrent: $(display_mode_label "$current_mode")" 15 78 4 \
 		"auto" "Prefer Wayland, fall back to X11 for VMs or weak graphics" \
 		"wayland" "Force startplasma-wayland" \
-		"x11" "Force startplasma-x11")"
-	case $? in
+		"x11" "Force startplasma-x11"
+	selected="$DIALOG_RESULT"
+	case $DIALOG_STATUS in
 		0)
 			printf '%s\n' "$selected"
 			return 0

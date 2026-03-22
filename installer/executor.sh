@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ARCHINSTALL_LOG=${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}
 ARCHINSTALL_INSTALL_SUCCESS=${ARCHINSTALL_INSTALL_SUCCESS:-false}
 ARCHINSTALL_CLEANUP_ACTIVE=${ARCHINSTALL_CLEANUP_ACTIVE:-false}
+ARCHINSTALL_PROGRESS_LOG=${ARCHINSTALL_PROGRESS_LOG:-/tmp/archinstall_progress.log}
 DEV_MODE=${DEV_MODE:-false}
 SKIP_PARTITION=${SKIP_PARTITION:-false}
 SKIP_PACSTRAP=${SKIP_PACSTRAP:-false}
@@ -182,9 +183,12 @@ require_commands() {
 	boot_mode="$(get_state "BOOT_MODE" 2>/dev/null || detect_boot_mode 2>/dev/null || printf 'uefi')"
 	filesystem="$(normalize_filesystem "$(get_state "FILESYSTEM" 2>/dev/null || printf 'ext4')")"
 
-	for cmd in dialog lsblk wipefs parted partprobe mkfs.ext4 mount umount pacman pacstrap ping blkid arch-chroot tee tail findmnt; do
+	for cmd in lsblk wipefs parted partprobe mkfs.ext4 mount umount pacman pacstrap ping blkid arch-chroot tee tail findmnt; do
 		command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
 	done
+	if [[ ${UI_MODE:-dialog} == "dialog" ]]; then
+		command -v dialog >/dev/null 2>&1 || missing+=("dialog")
+	fi
 
 	if [[ $boot_mode == "uefi" ]]; then
 		for cmd in mkfs.fat bootctl; do
@@ -214,6 +218,18 @@ log_line() {
 	local message=${1:-}
 
 	printf '[%s] %s\n' "$(date '+%F %T')" "$message" >> "$ARCHINSTALL_LOG"
+	if [[ -n ${ARCHINSTALL_PROGRESS_LOG:-} && ${ARCHINSTALL_PROGRESS_LOG:-} != "$ARCHINSTALL_LOG" ]]; then
+		printf '[%s] %s\n' "$(date '+%F %T')" "$message" >> "$ARCHINSTALL_PROGRESS_LOG" 2>/dev/null || true
+	fi
+}
+
+tee_install_logs() {
+	if [[ -n ${ARCHINSTALL_PROGRESS_LOG:-} && ${ARCHINSTALL_PROGRESS_LOG:-} != "$ARCHINSTALL_LOG" ]]; then
+		tee -a "$ARCHINSTALL_LOG" "$ARCHINSTALL_PROGRESS_LOG"
+		return
+	fi
+
+	tee -a "$ARCHINSTALL_LOG"
 }
 
 sanitize_stream() {
@@ -237,11 +253,11 @@ run_logged_command() {
 	log_line "Command: $(render_command "$@")"
 
 	if install_ui_uses_dialog; then
-		"$@" 2>&1 | sanitize_stream | tee -a "$ARCHINSTALL_LOG" >/dev/null
+		"$@" 2>&1 | sanitize_stream | tee_install_logs >/dev/null
 		return $?
 	fi
 
-	"$@" 2>&1 | sanitize_stream | tee -a "$ARCHINSTALL_LOG"
+	"$@" 2>&1 | sanitize_stream | tee_install_logs
 }
 
 run_logged_shell_command() {
@@ -250,11 +266,11 @@ run_logged_shell_command() {
 	log_line "Command: bash -lc $command_string"
 
 	if install_ui_uses_dialog; then
-		bash -lc "$command_string" 2>&1 | sanitize_stream | tee -a "$ARCHINSTALL_LOG" >/dev/null
+		bash -lc "$command_string" 2>&1 | sanitize_stream | tee_install_logs >/dev/null
 		return $?
 	fi
 
-	bash -lc "$command_string" 2>&1 | sanitize_stream | tee -a "$ARCHINSTALL_LOG"
+	bash -lc "$command_string" 2>&1 | sanitize_stream | tee_install_logs
 }
 
 cleanup_mounts() {

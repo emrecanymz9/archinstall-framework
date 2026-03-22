@@ -63,6 +63,17 @@ last_install_log_excerpt() {
 	tail -n 6 "$log_file" 2>/dev/null | sed 's/"/'"'"'/g' | tr -cd '\11\12\15\40-\176'
 }
 
+progress_log_excerpt() {
+	local log_file=${1:?log file is required}
+
+	if [[ ! -f $log_file ]]; then
+		printf 'Waiting for installer log output...\n'
+		return 0
+	fi
+
+	tail -n 5 "$log_file" 2>/dev/null | sed 's/"/'"'"'/g' | tr -cd '\11\12\15\40-\176'
+}
+
 install_progress_percent() {
 	local log_file=${1:?log file is required}
 	local expected_steps=${2:?expected steps is required}
@@ -90,8 +101,8 @@ install_progress_percent() {
 	printf '%s\n' "$percent"
 }
 
-show_install_progress_dialog() {
-	local log_file=${1:?log file is required}
+render_install_progress_text() {
+	local progress_log=${1:?progress log is required}
 	local percent=${2:?percent is required}
 	local current_step=${3:-Preparing install}
 	local boot_mode=${4:-auto}
@@ -100,18 +111,49 @@ show_install_progress_dialog() {
 	local display_mode=${7:-auto}
 	local excerpt=""
 
-	excerpt="$(last_install_log_excerpt "$log_file")"
-	safe_dialog \
+	excerpt="$(progress_log_excerpt "$progress_log")"
+	printf 'Installing system... %s%%\n\nCurrent step: %s\nBoot mode: %s\nFilesystem: %s\nDesktop: %s\nDisplay mode: %s\n\nLatest logs:\n%s\n' \
+		"$percent" \
+		"$(sanitize_dialog_text "$current_step")" \
+		"$(sanitize_dialog_text "$boot_mode")" \
+		"$(sanitize_dialog_text "$filesystem")" \
+		"$(sanitize_dialog_text "$(desktop_profile_label "$desktop_profile")")" \
+		"$(sanitize_dialog_text "$(display_mode_label "$display_mode")")" \
+		"$excerpt"
+}
+
+start_install_progress_dialog() {
+	local progress_fifo=${1:?progress fifo is required}
+	local progress_error_log=${2:?progress error log is required}
+
+	dialog \
 		--clear \
 		--backtitle "$ARCHINSTALL_BACKTITLE" \
 		--title "Installing Arch Linux" \
-		--timeout 1 \
-		--mixedgauge "Progress: ${percent}%\n\nCurrent step: $current_step\nBoot mode: $boot_mode\nFilesystem: $filesystem\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay mode: $(display_mode_label "$display_mode")\n\nRecent log output:\n$excerpt" \
-		22 100 "$percent" 4 \
-		"Boot" "$boot_mode" 0 \
-		"Filesystem" "$filesystem" 0 \
-		"Desktop" "$(desktop_profile_label "$desktop_profile")" 0 \
-		"Session" "$(display_mode_label "$display_mode")" 0
+		--gauge "Preparing installer..." \
+		22 100 0 \
+		< "$progress_fifo" 2> "$progress_error_log" &
+	printf '%s\n' "$!"
+}
+
+write_install_progress_dialog() {
+	local progress_fifo=${1:?progress fifo is required}
+	local percent=${2:?percent is required}
+	local current_step=${3:-Preparing install}
+	local boot_mode=${4:-auto}
+	local filesystem=${5:-ext4}
+	local desktop_profile=${6:-none}
+	local display_mode=${7:-auto}
+	local progress_log=${8:?progress log is required}
+	local message=""
+
+	message="$(render_install_progress_text "$progress_log" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode")"
+	{
+		printf 'XXX\n'
+		printf '%s\n' "$percent"
+		printf '%s\n' "$message"
+		printf 'XXX\n'
+	} > "$progress_fifo"
 }
 
 show_install_progress_tty() {
@@ -131,7 +173,7 @@ show_install_progress_tty() {
 	fi
 
 	ARCHINSTALL_LAST_TTY_PROGRESS_KEY=$progress_key
-	excerpt="$(last_install_log_excerpt "$log_file")"
+	excerpt="$(progress_log_excerpt "$log_file")"
 	clear_screen
 	printf 'Installing Arch Linux\n\n'
 	printf 'Progress: %s%%\n' "$percent"
@@ -140,7 +182,19 @@ show_install_progress_tty() {
 	printf 'Filesystem: %s\n' "$filesystem"
 	printf 'Desktop: %s\n' "$(desktop_profile_label "$desktop_profile")"
 	printf 'Display mode: %s\n\n' "$(display_mode_label "$display_mode")"
-	printf 'Recent log output:\n%s\n' "$excerpt"
+	printf 'Latest logs:\n%s\n' "$excerpt"
+}
+
+show_install_failure_dialog() {
+	local log_file=${1:?log file is required}
+	local excerpt=""
+
+	excerpt="$(tail -n 20 "$log_file" 2>/dev/null | sed 's/"/'"'"'/g' | tr -cd '\11\12\15\40-\176' || true)"
+	if [[ -z $excerpt ]]; then
+		excerpt='No log output captured.'
+	fi
+
+	error_box "Installation Failed" "The installer reported a failure.\n\nLatest log lines:\n$excerpt\n\nFull log: $log_file"
 }
 
 apply_live_console_keymap() {
@@ -164,16 +218,18 @@ select_startup_keymap() {
 	local choice=""
 	local custom_keymap=""
 
-	choice="$(menu "Console Keyboard" "Choose the live ISO console keymap.\n\nCurrent: $current_keymap" 14 70 5 \
+	menu "Console Keyboard" "Choose the live ISO console keymap.\n\nCurrent: $current_keymap" 14 70 5 \
 		"us" "US English" \
 		"trq" "Turkish Q" \
 		"de" "German" \
-		"custom" "Enter a custom keymap")"
-	case $? in
+		"custom" "Enter a custom keymap"
+	choice="$DIALOG_RESULT"
+	case $DIALOG_STATUS in
 		0)
 			if [[ $choice == "custom" ]]; then
-				custom_keymap="$(input_box "Console Keyboard" "Enter a live ISO keymap such as us, trq, or de." "$current_keymap" 12 70)"
-				case $? in
+				input_box "Console Keyboard" "Enter a live ISO keymap such as us, trq, or de." "$current_keymap" 12 70
+				custom_keymap="$DIALOG_RESULT"
+				case $DIALOG_STATUS in
 					0)
 						[[ -n $custom_keymap ]] || return 1
 						printf '%s\n' "$custom_keymap"
@@ -295,11 +351,12 @@ show_install_result_dialog() {
 
 	prompt="Disk: $disk\nDisk type: $disk_type\nFilesystem: $filesystem\nBoot mode: $boot_mode\nKeyboard: $keymap\nDesktop: $desktop_profile\nDisplay mode: $display_mode\nResolved mode: $resolved_display_mode\nZRAM: $enable_zram\nStatus: $status_label\n\nInstall log: ${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}"
 
-	choice="$(menu "Installation Complete" "$prompt" 18 72 4 \
+	menu "Installation Complete" "$prompt" 18 72 4 \
 		"reboot" "Reboot system" \
 		"shutdown" "Shutdown system" \
-		"back" "Return to main menu")"
-	case $? in
+		"back" "Return to main menu"
+	choice="$DIALOG_RESULT"
+	case $DIALOG_STATUS in
 		0)
 			case "$choice" in
 				reboot)
@@ -326,6 +383,10 @@ run_install_with_dialog() {
 	local install_pid=0
 	local install_status=1
 	local log_file="${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}"
+	local progress_log="/tmp/archinstall_progress.log"
+	local progress_fifo=""
+	local progress_error_log=""
+	local progress_dialog_pid=0
 	local expected_steps=0
 	local percent=0
 	local current_step="Preparing install"
@@ -337,13 +398,34 @@ run_install_with_dialog() {
 	local RETRY_COUNT=0
 	local tty_fallback_active=false
 
+	stop_progress_dialog() {
+		if (( progress_dialog_pid > 0 )); then
+			kill "$progress_dialog_pid" >/dev/null 2>&1 || true
+			wait "$progress_dialog_pid" 2>/dev/null || true
+			progress_dialog_pid=0
+		fi
+		[[ -n $progress_fifo ]] && rm -f "$progress_fifo"
+		[[ -n $progress_error_log ]] && rm -f "$progress_error_log"
+	}
+
 	: > "$log_file" || return 1
+	: > "$progress_log" || return 1
 	boot_mode="$(state_or_default "BOOT_MODE" "auto")"
 	filesystem="$(state_or_default "FILESYSTEM" "ext4")"
 	desktop_profile="$(state_or_default "DESKTOP_PROFILE" "none")"
 	display_mode="$(state_or_default "DISPLAY_MODE" "auto")"
 	expected_steps="$(estimate_install_step_count "$boot_mode" "$desktop_profile")"
-	INSTALL_UI_MODE=dialog run_install >> "$log_file" 2>&1 &
+	progress_fifo="$(mktemp -u /tmp/archinstall_progress_fifo.XXXXXX)"
+	progress_error_log="$(mktemp /tmp/archinstall_progress_error.XXXXXX 2>/dev/null || printf '/tmp/archinstall_progress_error.log')"
+	if ! mkfifo "$progress_fifo"; then
+		log_ui_error "[UI ERROR] could not create progress fifo; switching to TTY progress"
+		set_ui_mode tty
+		tty_fallback_active=true
+	fi
+	if [[ $tty_fallback_active == false && ${UI_MODE:-dialog} != "tty" ]]; then
+		progress_dialog_pid="$(start_install_progress_dialog "$progress_fifo" "$progress_error_log")"
+	fi
+	INSTALL_UI_MODE=dialog ARCHINSTALL_PROGRESS_LOG="$progress_log" run_install >> "$log_file" 2>&1 &
 	install_pid=$!
 
 	while kill -0 "$install_pid" 2>/dev/null; do
@@ -351,26 +433,41 @@ run_install_with_dialog() {
 		percent="$(install_progress_percent "$log_file" "$expected_steps")"
 		current_step="$(grep '^\[[0-9-]\{10\} [0-9:]\{8\}\] \[STEP\]' "$log_file" 2>/dev/null | tail -n 1 | sed 's/^.*\[STEP\] //' || printf 'Preparing install')"
 		if [[ $tty_fallback_active == true || ${UI_MODE:-dialog} == "tty" ]]; then
+			stop_progress_dialog
 			show_install_progress_tty "$log_file" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode"
 		else
-			if show_install_progress_dialog "$log_file" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode" >/dev/null; then
+			if (( progress_dialog_pid <= 0 )) || ! kill -0 "$progress_dialog_pid" 2>/dev/null; then
+				RETRY_COUNT=$((RETRY_COUNT + 1))
+				if [[ -s $progress_error_log ]]; then
+					log_ui_error "[UI ERROR] progress dialog exited: $(tr -cd '\11\12\15\40-\176' < "$progress_error_log")"
+				fi
+				if (( RETRY_COUNT >= MAX_RETRY )); then
+					set_ui_mode tty
+					tty_fallback_active=true
+					apply_runtime_mode || true
+					show_install_progress_tty "$log_file" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode"
+					continue
+				fi
+				progress_dialog_pid="$(start_install_progress_dialog "$progress_fifo" "$progress_error_log")"
+			fi
+
+			if write_install_progress_dialog "$progress_fifo" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode" "$progress_log"; then
 				RETRY_COUNT=0
 			else
-				if [[ ${ARCHINSTALL_LAST_UI_FAILURE:-false} == true ]]; then
-					RETRY_COUNT=$((RETRY_COUNT + 1))
-					if (( RETRY_COUNT >= MAX_RETRY )); then
-						log_ui_error "[UI ERROR] install progress dialog failed repeatedly; switching to TTY progress"
-						set_ui_mode tty
-						tty_fallback_active=true
-						apply_runtime_mode || true
-						show_install_progress_tty "$log_file" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode"
-					fi
+				RETRY_COUNT=$((RETRY_COUNT + 1))
+				if (( RETRY_COUNT >= MAX_RETRY )); then
+					log_ui_error "[UI ERROR] install progress dialog failed repeatedly; switching to TTY progress"
+					set_ui_mode tty
+					tty_fallback_active=true
+					apply_runtime_mode || true
+					show_install_progress_tty "$log_file" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode"
 				fi
 			fi
 		fi
 		sleep 1
 	done
 
+	stop_progress_dialog
 	wait "$install_pid"
 	install_status=$?
 	clear_screen
@@ -381,10 +478,11 @@ select_filesystem() {
 	local current_filesystem=${1:-ext4}
 	local selected=""
 
-	selected="$(menu "Filesystem" "Choose the root filesystem." 14 70 4 \
+	menu "Filesystem" "Choose the root filesystem." 14 70 4 \
 		"ext4" "Default fallback filesystem" \
-		"btrfs" "Create @ and @home subvolumes with zstd compression")"
-	case $? in
+		"btrfs" "Create @ and @home subvolumes with zstd compression"
+	selected="$DIALOG_RESULT"
+	case $DIALOG_STATUS in
 		0)
 			printf '%s\n' "$selected"
 			return 0
@@ -408,10 +506,11 @@ select_zram_preference() {
 		current_value=false
 	fi
 
-	choice="$(menu "Zram" "Choose whether to enable zram swap." 12 50 2 \
+	menu "Zram" "Choose whether to enable zram swap." 12 50 2 \
 		"yes" "Enable zram" \
-		"no" "Disable zram")"
-	case $? in
+		"no" "Disable zram"
+	choice="$DIALOG_RESULT"
+	case $DIALOG_STATUS in
 		0)
 			case "$choice" in
 				yes)
@@ -447,8 +546,9 @@ prompt_required_input() {
 	local RETRY_COUNT=0
 
 	while (( RETRY_COUNT < MAX_RETRY )); do
-		value="$(input_box "$title" "$prompt" "$initial_value" 12 76)"
-		status=$?
+		input_box "$title" "$prompt" "$initial_value" 12 76
+		value="$DIALOG_RESULT"
+		status=$DIALOG_STATUS
 		case $status in
 			0)
 				if [[ -n $value ]]; then
@@ -485,8 +585,9 @@ prompt_password() {
 	local RETRY_COUNT=0
 
 	while (( RETRY_COUNT < MAX_RETRY )); do
-		first="$(password_box "$title" "Enter the password." 12 76)"
-		status=$?
+		password_box "$title" "Enter the password." 12 76
+		first="$DIALOG_RESULT"
+		status=$DIALOG_STATUS
 		case $status in
 			0)
 				;;
@@ -504,8 +605,9 @@ prompt_password() {
 			continue
 		fi
 
-		second="$(password_box "$title" "Re-enter the password." 12 76)"
-		status=$?
+		password_box "$title" "Re-enter the password." 12 76
+		second="$DIALOG_RESULT"
+		status=$DIALOG_STATUS
 		case $status in
 			0)
 				;;
@@ -698,6 +800,10 @@ run_install_flow() {
 		status=$?
 	fi
 
+	if [[ $status -ne 0 && $status -ne 130 && $status -ne 255 ]]; then
+		show_install_failure_dialog "${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}" || true
+	fi
+
 	show_install_result_dialog "$status" || true
 
 	case $status in
@@ -718,11 +824,12 @@ show_disk_menu() {
 	local RETRY_COUNT=0
 
 	while (( RETRY_COUNT < MAX_RETRY )); do
-		choice="$(menu "Disk Setup" "Current disk: $(current_disk_label)" 16 76 6 \
+		menu "Disk Setup" "Current disk: $(current_disk_label)" 16 76 6 \
 			"select" "Discover disks and choose an install target" \
 			"clear" "Clear the saved disk selection" \
-			"back" "Return to the main menu")"
-		status=$?
+			"back" "Return to the main menu"
+		choice="$DIALOG_RESULT"
+		status=$DIALOG_STATUS
 
 		case $status in
 			0)
@@ -769,13 +876,14 @@ show_install_menu() {
 	local RETRY_COUNT=0
 
 	while (( RETRY_COUNT < MAX_RETRY )); do
-		choice="$(menu "Install System" "Selected disk: $(current_disk_label)" 16 76 6 \
+		menu "Install System" "Selected disk: $(current_disk_label)" 16 76 6 \
 			"start" "Partition disk and install the base Arch Linux system" \
 			"config" "Configure hostname, timezone, locale, keyboard, and passwords" \
 			"dev" "Toggle developer mode (current: $DEV_MODE / $INSTALL_UI_MODE)" \
 			"state" "Review the current installer state" \
-			"back" "Return to the main menu")"
-		status=$?
+			"back" "Return to the main menu"
+		choice="$DIALOG_RESULT"
+		status=$DIALOG_STATUS
 
 		case $status in
 			0)
@@ -851,12 +959,13 @@ main() {
 	warn_if_low_live_iso_space || true
 
 	while (( RETRY_COUNT < MAX_RETRY )); do
-		choice="$(menu "Main Menu" "Choose an installer action." 16 76 7 \
+		menu "Main Menu" "Choose an installer action." 16 76 7 \
 			"disk" "Disk setup and target selection" \
 			"install" "Base system installation" \
 			"state" "Show saved installer state" \
-			"exit" "Exit the installer")"
-		status=$?
+			"exit" "Exit the installer"
+		choice="$DIALOG_RESULT"
+		status=$DIALOG_STATUS
 
 		case $status in
 			0)

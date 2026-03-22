@@ -111,8 +111,9 @@ select_disk() {
 		args+=("$disk_name" "$disk_size - $disk_model | $disk_partitions")
 	done
 
-	selected_disk="$(menu "Disk Selection" "Choose the full disk target for installation." 18 90 10 "${args[@]}")"
-	status=$?
+	menu "Disk Selection" "Choose the full disk target for installation." 18 90 10 "${args[@]}"
+	selected_disk="$DIALOG_RESULT"
+	status=$DIALOG_STATUS
 
 	case $status in
 		0)
