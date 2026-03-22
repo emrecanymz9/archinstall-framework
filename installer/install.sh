@@ -25,9 +25,26 @@ show_state_summary() {
 	msg "Installer State" "Saved state:\n\nDisk: $disk\nEFI: $efi_partition\nRoot: $root_partition" 12 76
 }
 
+run_install() {
+	local status=0
+
+	install_base_system
+	status=$?
+
+	case $status in
+		0|1|255|130)
+			return 0
+			;;
+		*)
+			error_box "Installation Error" "The installer returned an unexpected status: $status"
+			return "$status"
+			;;
+	esac
+}
+
 show_disk_menu() {
-	local choice
-	local status
+	local choice=""
+	local status=0
 
 	while true; do
 		choice="$(menu "Disk Setup" "Current disk: $(current_disk_label)" 16 76 6 \
@@ -66,8 +83,8 @@ show_disk_menu() {
 }
 
 show_install_menu() {
-	local choice
-	local status
+	local choice=""
+	local status=0
 
 	while true; do
 		choice="$(menu "Install System" "Selected disk: $(current_disk_label)" 16 76 6 \
@@ -90,7 +107,11 @@ show_install_menu() {
 
 		case "$choice" in
 			start)
-				install_base_system || true
+				run_install
+				status=$?
+				if [[ $status -ne 0 ]]; then
+					return "$status"
+				fi
 				;;
 			state)
 				show_state_summary
@@ -103,11 +124,11 @@ show_install_menu() {
 }
 
 main() {
-	local choice
-	local status
+	local choice=""
+	local status=0
 
 	require_dialog || exit $?
-	ensure_state_file
+	ensure_state_file || exit 1
 
 	while true; do
 		choice="$(menu "Main Menu" "Choose an installer action." 16 76 7 \
