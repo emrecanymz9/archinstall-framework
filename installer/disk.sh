@@ -25,12 +25,43 @@ get_archiso_boot_disk() {
 	printf '%s\n' "$boot_source"
 }
 
+disk_partition_summary() {
+	local disk=${1:?disk is required}
+	local summary
+
+	summary="$(lsblk -lnpo NAME,SIZE,FSTYPE,TYPE "$disk" 2>/dev/null | awk '
+		$4 == "part" {
+			fstype = ($3 == "" ? "unknown" : $3)
+			parts[++count] = $1 " " $2 " " fstype
+		}
+		END {
+			if (count == 0) {
+				print "No existing partitions"
+				exit
+			}
+
+			for (index = 1; index <= count; index++) {
+				printf "%s%s", parts[index], (index < count ? "; " : "")
+			}
+		}
+	')"
+
+	printf '%s\n' "$summary"
+}
+
+disk_details() {
+	local disk=${1:?disk is required}
+
+	lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS,MODEL "$disk" 2>/dev/null
+}
+
 list_disks() {
 	local archiso_disk
 	local name
 	local size
 	local type
 	local model
+	local partitions
 
 	archiso_disk="$(get_archiso_boot_disk 2>/dev/null || true)"
 
@@ -44,9 +75,18 @@ list_disks() {
 		model=${model//$'\t'/ }
 		model=${model//$'\n'/ }
 		[[ -n $model ]] || model="Unknown model"
+		partitions="$(disk_partition_summary "$name")"
 
-		printf '%s\t%s\t%s\n' "$name" "$size" "$model"
+		printf '%s\t%s\t%s\t%s\n' "$name" "$size" "$model" "$partitions"
 	done < <(lsblk -dnpr -o NAME,SIZE,TYPE 2>/dev/null)
+}
+
+confirm_disk_selection() {
+	local disk=${1:?disk is required}
+	local details
+
+	details="$(disk_details "$disk")"
+	confirm "Confirm Disk Selection" "Selected full disk:\n\n$disk\n\nCurrent layout:\n$details\n\nThis installer currently uses full-disk installation only. Continuing later will erase existing partitions and data on this disk. Save this disk as the installation target?" 20 76
 }
 
 select_disk() {
@@ -56,6 +96,7 @@ select_disk() {
 	local disk_name
 	local disk_size
 	local disk_model
+	local disk_partitions
 	local selected_disk
 	local status
 
@@ -66,17 +107,23 @@ select_disk() {
 	fi
 
 	for row in "${rows[@]}"; do
-		IFS=$'\t' read -r disk_name disk_size disk_model <<< "$row"
-		args+=("$disk_name" "$disk_size - $disk_model")
+		IFS=$'\t' read -r disk_name disk_size disk_model disk_partitions <<< "$row"
+		args+=("$disk_name" "$disk_size - $disk_model | $disk_partitions")
 	done
 
-	selected_disk="$(menu "Disk Selection" "Choose the target disk for installation." 18 76 10 "${args[@]}")"
+	selected_disk="$(menu "Disk Selection" "Choose the full disk target for installation." 18 90 10 "${args[@]}")"
 	status=$?
 
 	case $status in
 		0)
+			if ! confirm_disk_selection "$selected_disk"; then
+				return 0
+			fi
+
 			set_state "DISK" "$selected_disk"
-			msg "Disk Selected" "Installation target saved as:\n\n$selected_disk"
+			unset_state "EFI_PART"
+			unset_state "ROOT_PART"
+			msg "Disk Selected" "Installation target saved as:\n\n$selected_disk\n\nThe installer will use the whole disk."
 			;;
 		1|255)
 			return "$status"

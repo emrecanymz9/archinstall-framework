@@ -60,6 +60,60 @@ confirm() {
 	dialog --clear --backtitle "$ARCHINSTALL_BACKTITLE" --title "$title" --yesno "$body" "$height" "$width"
 }
 
+input_box() {
+	local title=${1:-"Input"}
+	local body=${2:-"Enter a value:"}
+	local initial_value=${3:-""}
+	local height=${4:-10}
+	local width=${5:-70}
+	local input_value
+	local status
+
+	require_dialog || return $?
+
+	input_value="$(dialog \
+		--clear \
+		--backtitle "$ARCHINSTALL_BACKTITLE" \
+		--title "$title" \
+		--inputbox "$body" \
+		"$height" "$width" "$initial_value" \
+		3>&1 1>&2 2>&3)"
+	status=$?
+
+	if [[ $status -eq 0 ]]; then
+		printf '%s\n' "$input_value"
+	fi
+
+	return "$status"
+}
+
+password_box() {
+	local title=${1:-"Password"}
+	local body=${2:-"Enter a password:"}
+	local height=${3:-10}
+	local width=${4:-70}
+	local input_value
+	local status
+
+	require_dialog || return $?
+
+	input_value="$(dialog \
+		--clear \
+		--backtitle "$ARCHINSTALL_BACKTITLE" \
+		--title "$title" \
+		--insecure \
+		--passwordbox "$body" \
+		"$height" "$width" \
+		3>&1 1>&2 2>&3)"
+	status=$?
+
+	if [[ $status -eq 0 ]]; then
+		printf '%s\n' "$input_value"
+	fi
+
+	return "$status"
+}
+
 progress() {
 	local title=${1:-"Working"}
 	local body=${2:-"Please wait..."}

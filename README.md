@@ -25,6 +25,13 @@ VM testing is strongly recommended before using it on real hardware.
 - Disk discovery and target selection
 - File-backed installer state in /tmp/archinstall_state
 - Base system installation with pacstrap
+- Install profile prompts for hostname, timezone, locale, and user creation
+- Automatic boot mode handling: systemd-boot for UEFI and GRUB for BIOS
+- Filesystem selection with ext4 fallback or btrfs subvolumes (@ and @home)
+- Optional zram swap via zram-generator
+- Optional KDE Plasma desktop profile with SDDM or greetd
+- PipeWire audio and Bluetooth support for desktop installs
+- DEV_MODE toggle for switching between dialog gauge mode and live terminal logs
 - Safe error handling with confirmations and install logs
 
 ## Layout
@@ -59,18 +66,30 @@ bash installer/install.sh
 ## Install Flow
 
 1. Open Disk Setup and select the target disk.
-2. Open Install System and start the base installation.
-3. Confirm destructive actions when prompted.
-4. The installer will:
+2. Open Install System and configure hostname, timezone, locale, and user.
+3. Choose the root filesystem and whether to enable zram swap.
+4. Optionally select the KDE Plasma desktop profile and choose SDDM or greetd.
+5. Toggle DEV_MODE when you want live logs instead of the dialog gauge.
+6. Start the installation.
+7. Confirm destructive actions when prompted.
+8. The installer will:
   - verify network connectivity
   - refresh pacman mirrors with reflector
    - wipe the selected disk
-   - create a GPT table
-   - create a 512 MiB EFI partition and one root partition
-   - format EFI as FAT32 and root as ext4
+  - detect UEFI or BIOS boot mode automatically
+  - create a GPT layout with EFI plus root for UEFI systems
+  - create an MBR layout with a bootable root partition for BIOS systems
+  - format the required partitions as ext4 or btrfs
+  - create btrfs subvolumes @ and @home when btrfs is selected
+  - mount btrfs with zstd compression when btrfs is selected
    - mount the target to /mnt
   - retry pacstrap up to three times
    - generate /etc/fstab
+  - configure hostname, timezone, locale, NetworkManager, optional zram, and the primary user
+  - optionally install KDE Plasma, kde-applications, a display manager, PipeWire, and Bluetooth packages
+  - enable SDDM or greetd when a desktop profile is selected
+  - enable Bluetooth and PipeWire user services for desktop installs
+  - install systemd-boot on UEFI or GRUB on BIOS
 
 ## Safety Notes
 
@@ -127,16 +146,16 @@ These flags skip destructive or time-consuming phases and make it easier to test
 
 ## 🎛️ Installer UI Modes
 
-Default plain mode shows the full terminal output during installation.
+DEV_MODE=false is the default and uses the dialog progress gauge during installation.
 
 ```bash
 bash installer/install.sh
 ```
 
-Dialog mode uses a progress bar during the long-running install stage.
+DEV_MODE=true switches the installer to live terminal output for debugging.
 
 ```bash
-INSTALL_UI_MODE=dialog bash installer/install.sh
+DEV_MODE=true bash installer/install.sh
 ```
 
-Dialog mode hides most logs while the progress bar is active, so it is less useful for debugging than the default plain mode.
+Live output is better for debugging. Gauge mode is quieter and better suited for normal installs.
