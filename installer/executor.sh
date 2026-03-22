@@ -52,7 +52,7 @@ build_pacstrap_package_list() {
 	local display_manager=${6:-none}
 	local -a desktop_packages=()
 
-	package_ref=(base linux linux-firmware sudo networkmanager)
+	package_ref=(base linux linux-firmware sudo networkmanager iptables-nft mkinitcpio)
 	if [[ $filesystem == "btrfs" ]]; then
 		package_ref+=(btrfs-progs)
 	fi
@@ -100,7 +100,7 @@ require_commands() {
 	boot_mode="$(get_state "BOOT_MODE" 2>/dev/null || detect_boot_mode 2>/dev/null || printf 'uefi')"
 	filesystem="$(normalize_filesystem "$(get_state "FILESYSTEM" 2>/dev/null || printf 'ext4')")"
 
-	for cmd in dialog lsblk wipefs parted partprobe mkfs.ext4 mount umount pacstrap genfstab ping reflector blkid arch-chroot; do
+	for cmd in dialog lsblk wipefs parted partprobe mkfs.ext4 mount umount pacman pacstrap genfstab ping blkid arch-chroot tee tail; do
 		command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
 	done
 
@@ -167,7 +167,7 @@ print_install_error() {
 
 run_logged_command() {
 	if install_ui_uses_dialog; then
-		"$@" 2>&1 | sanitize_stream >> "$ARCHINSTALL_LOG"
+		"$@" 2>&1 | sanitize_stream | tee -a "$ARCHINSTALL_LOG" >/dev/null
 		return $?
 	fi
 
@@ -178,11 +178,18 @@ run_logged_shell_command() {
 	local command_string=${1:?command string is required}
 
 	if install_ui_uses_dialog; then
-		bash -lc "$command_string" 2>&1 | sanitize_stream >> "$ARCHINSTALL_LOG"
+		bash -lc "$command_string" 2>&1 | sanitize_stream | tee -a "$ARCHINSTALL_LOG" >/dev/null
 		return $?
 	fi
 
 	bash -lc "$command_string" 2>&1 | sanitize_stream | tee -a "$ARCHINSTALL_LOG"
+}
+
+initialize_pacman_environment() {
+	run_step "Refreshing archlinux-keyring" pacman -Sy --noconfirm archlinux-keyring || return 1
+	run_step "Installing reflector on the live environment" pacman -S --needed --noconfirm reflector || return 1
+	run_step "Refreshing pacman mirrors" reflector --latest 10 --sort rate --save /etc/pacman.d/mirrorlist || return 1
+	run_step "Refreshing pacman package databases" pacman -Syy --noconfirm || return 1
 }
 
 cleanup_mounts() {
@@ -274,7 +281,13 @@ run_step_with_retry() {
 run_pacstrap_install() {
 	local -a packages=("$@")
 
-	run_step_with_retry "Installing the base Arch Linux packages" 3 pacstrap -K /mnt --noconfirm --needed "${packages[@]}"
+	run_step_with_retry "Installing the base Arch Linux packages" 3 pacstrap -K /mnt --noconfirm --needed --overwrite='*' "${packages[@]}"
+}
+
+run_pacstrap_install() {
+	local -a packages=("$@")
+
+	run_step_with_retry "Installing the base Arch Linux packages" 3 pacstrap -K /mnt --noconfirm --needed --overwrite='*' "${packages[@]}"
 }
 
 
@@ -670,7 +683,7 @@ run_install() {
 
 		run_step "Unmounting any previous install target" cleanup_mounts || exit 1
 		run_step "Checking internet connectivity" ping -c 1 archlinux.org || exit 1
-		run_step "Refreshing pacman mirrors" reflector --latest 10 --sort rate --save /etc/pacman.d/mirrorlist || exit 1
+		initialize_pacman_environment || exit 1
 
 		if flag_enabled "$SKIP_PARTITION"; then
 			log_line "Skipping partitioning and formatting because SKIP_PARTITION=$SKIP_PARTITION"
