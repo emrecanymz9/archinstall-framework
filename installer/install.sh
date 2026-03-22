@@ -29,6 +29,14 @@ INSTALL_ROOT_PASSWORD=${INSTALL_ROOT_PASSWORD:-""}
 ZRAM=${ZRAM:-false}
 LIVE_CONSOLE_FONT=${LIVE_CONSOLE_FONT:-ter-v16n}
 
+sync_install_ui_mode() {
+	if [[ ${UI_MODE:-dialog} == "tty" ]] || flag_enabled "$DEV_MODE"; then
+		INSTALL_UI_MODE=plain
+	else
+		INSTALL_UI_MODE=dialog
+	fi
+}
+
 estimate_install_step_count() {
 	local boot_mode=${1:-uefi}
 	local desktop_profile=${2:-none}
@@ -242,18 +250,19 @@ state_or_default() {
 }
 
 apply_runtime_mode() {
-	if flag_enabled "$DEV_MODE"; then
-		INSTALL_UI_MODE=plain
-	else
-		INSTALL_UI_MODE=dialog
-	fi
+	sync_install_ui_mode
 
 	set_state "DEV_MODE" "$DEV_MODE" || return 1
+	set_state "UI_MODE" "${UI_MODE:-dialog}" || return 1
 	set_state "INSTALL_UI_MODE" "$INSTALL_UI_MODE" || return 1
 }
 
 load_runtime_preferences() {
 	DEV_MODE="$(state_or_default "DEV_MODE" "$DEV_MODE")"
+	if [[ ${UI_MODE:-dialog} != "tty" ]]; then
+		UI_MODE="$(state_or_default "UI_MODE" "${UI_MODE:-dialog}")"
+	fi
+	debug_ui_mode
 	apply_runtime_mode
 }
 
@@ -338,9 +347,10 @@ run_install_with_dialog() {
 	install_pid=$!
 
 	while kill -0 "$install_pid" 2>/dev/null; do
+		sync_install_ui_mode
 		percent="$(install_progress_percent "$log_file" "$expected_steps")"
 		current_step="$(grep '^\[[0-9-]\{10\} [0-9:]\{8\}\] \[STEP\]' "$log_file" 2>/dev/null | tail -n 1 | sed 's/^.*\[STEP\] //' || printf 'Preparing install')"
-		if [[ $tty_fallback_active == true || ${ARCHINSTALL_UI_FORCE_TTY:-false} == true ]]; then
+		if [[ $tty_fallback_active == true || ${UI_MODE:-dialog} == "tty" ]]; then
 			show_install_progress_tty "$log_file" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode"
 		else
 			if show_install_progress_dialog "$log_file" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode" >/dev/null; then
@@ -350,8 +360,9 @@ run_install_with_dialog() {
 					RETRY_COUNT=$((RETRY_COUNT + 1))
 					if (( RETRY_COUNT >= MAX_RETRY )); then
 						log_ui_error "[UI ERROR] install progress dialog failed repeatedly; switching to TTY progress"
-						ARCHINSTALL_UI_FORCE_TTY=true
+						set_ui_mode tty
 						tty_fallback_active=true
+						apply_runtime_mode || true
 						show_install_progress_tty "$log_file" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode"
 					fi
 				fi
@@ -825,12 +836,17 @@ main() {
 	local RETRY_COUNT=0
 
 	if ! require_dialog >/dev/null 2>&1; then
-		ARCHINSTALL_UI_FORCE_TTY=true
+		set_ui_mode tty
 		log_ui_error "[UI ERROR] dialog is unavailable at startup; using TTY fallback"
 	fi
 	ensure_executor_loaded || exit 1
 	ensure_state_file || exit 1
 	load_runtime_preferences || exit 1
+	if ! require_dialog >/dev/null 2>&1; then
+		set_ui_mode tty
+		apply_runtime_mode || true
+		log_ui_error "[UI ERROR] dialog is unavailable after loading preferences; using TTY fallback"
+	fi
 	prepare_live_console || true
 	warn_if_low_live_iso_space || true
 

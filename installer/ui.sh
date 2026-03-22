@@ -2,9 +2,11 @@
 
 ARCHINSTALL_BACKTITLE=${ARCHINSTALL_BACKTITLE:-"ArchInstall Framework"}
 ARCHINSTALL_FOOTER_HINTS=${ARCHINSTALL_FOOTER_HINTS:-"Use arrow keys to navigate. ENTER=Select. ESC=Back."}
+UI_MODE=${UI_MODE:-dialog}
+DIALOG_STATUS=${DIALOG_STATUS:-0}
+DIALOG_RESULT=${DIALOG_RESULT:-""}
 ARCHINSTALL_UI_MAX_RETRY=${ARCHINSTALL_UI_MAX_RETRY:-3}
 ARCHINSTALL_UI_RETRY_COUNT=${ARCHINSTALL_UI_RETRY_COUNT:-0}
-ARCHINSTALL_UI_FORCE_TTY=${ARCHINSTALL_UI_FORCE_TTY:-false}
 ARCHINSTALL_LAST_UI_FAILURE=${ARCHINSTALL_LAST_UI_FAILURE:-false}
 ARCHINSTALL_LAST_DIALOG_STATUS=${ARCHINSTALL_LAST_DIALOG_STATUS:-0}
 ARCHINSTALL_DIALOG_OUTPUT=${ARCHINSTALL_DIALOG_OUTPUT:-""}
@@ -40,7 +42,31 @@ require_dialog() {
 }
 
 ui_force_tty() {
-	[[ ${ARCHINSTALL_UI_FORCE_TTY:-false} == true ]]
+	[[ ${UI_MODE:-dialog} == "tty" ]]
+}
+
+debug_ui_mode() {
+	local message="[DEBUG] UI mode: ${UI_MODE:-dialog}"
+
+	printf '%s\n' "$message" >&2
+	if [[ -n ${ARCHINSTALL_LOG:-} ]]; then
+		printf '%s\n' "$message" >> "$ARCHINSTALL_LOG" 2>/dev/null || true
+	fi
+}
+
+set_ui_mode() {
+	local new_mode=${1:-dialog}
+
+	if [[ $new_mode != "dialog" && $new_mode != "tty" ]]; then
+		new_mode=tty
+	fi
+
+	if [[ ${UI_MODE:-dialog} == "$new_mode" ]]; then
+		return 0
+	fi
+
+	UI_MODE=$new_mode
+	debug_ui_mode
 }
 
 log_ui_error() {
@@ -59,7 +85,7 @@ mark_ui_failure() {
 	ARCHINSTALL_UI_RETRY_COUNT=$((ARCHINSTALL_UI_RETRY_COUNT + 1))
 
 	if (( ARCHINSTALL_UI_RETRY_COUNT >= ARCHINSTALL_UI_MAX_RETRY )); then
-		ARCHINSTALL_UI_FORCE_TTY=true
+		set_ui_mode tty
 	fi
 }
 
@@ -67,7 +93,6 @@ reset_ui_failure() {
 	ARCHINSTALL_LAST_UI_FAILURE=false
 	ARCHINSTALL_UI_RETRY_COUNT=0
 	ARCHINSTALL_LAST_DIALOG_STATUS=0
-	ARCHINSTALL_DIALOG_OUTPUT=""
 }
 
 notify_tty_fallback() {
@@ -94,39 +119,59 @@ dialog_runtime_error() {
 }
 
 safe_dialog() {
-	local output=""
-	local status=0
+	local tmpfile=""
 
 	ARCHINSTALL_LAST_UI_FAILURE=false
+	DIALOG_STATUS=0
+	DIALOG_RESULT=""
 	ARCHINSTALL_LAST_DIALOG_STATUS=0
 	ARCHINSTALL_DIALOG_OUTPUT=""
 
 	if ui_force_tty; then
 		ARCHINSTALL_LAST_UI_FAILURE=true
+		DIALOG_STATUS=1
+		ARCHINSTALL_LAST_DIALOG_STATUS=1
 		return 1
 	fi
 
 	if ! require_dialog >/dev/null 2>&1; then
 		log_ui_error "[UI ERROR] dialog is unavailable; switching to TTY fallback"
 		mark_ui_failure
+		set_ui_mode tty
+		DIALOG_STATUS=127
+		ARCHINSTALL_LAST_DIALOG_STATUS=127
 		return 1
 	fi
 
-	output="$(dialog "$@" 2>&1)"
-	status=$?
-	ARCHINSTALL_DIALOG_OUTPUT=$output
-	ARCHINSTALL_LAST_DIALOG_STATUS=$status
+	tmpfile="$(mktemp 2>/dev/null)"
+	if [[ -z $tmpfile ]]; then
+		log_ui_error "[UI ERROR] mktemp failed for dialog capture; switching to TTY fallback"
+		mark_ui_failure
+		set_ui_mode tty
+		DIALOG_STATUS=1
+		ARCHINSTALL_LAST_DIALOG_STATUS=1
+		return 1
+	fi
 
-	if [[ $status -eq 0 ]]; then
+	dialog "$@" 2> "$tmpfile"
+	DIALOG_STATUS=$?
+	DIALOG_RESULT="$(cat "$tmpfile" 2>/dev/null || true)"
+	rm -f "$tmpfile"
+
+	ARCHINSTALL_DIALOG_OUTPUT=$DIALOG_RESULT
+	ARCHINSTALL_LAST_DIALOG_STATUS=$DIALOG_STATUS
+
+	if [[ $DIALOG_STATUS -eq 0 ]]; then
 		reset_ui_failure
-		ARCHINSTALL_DIALOG_OUTPUT=$output
+		ARCHINSTALL_DIALOG_OUTPUT=$DIALOG_RESULT
 		ARCHINSTALL_LAST_DIALOG_STATUS=0
 		return 0
 	fi
 
-	if dialog_runtime_error "$output"; then
-		log_ui_error "[UI ERROR] dialog failed (status: $status): $output"
+	if [[ $DIALOG_STATUS -ne 1 && $DIALOG_STATUS -ne 255 ]]; then
+		log_ui_error "[UI ERROR] dialog failed (status: $DIALOG_STATUS): $DIALOG_RESULT"
 		mark_ui_failure
+		set_ui_mode tty
 		return 1
 	fi
 
