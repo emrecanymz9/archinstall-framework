@@ -23,7 +23,7 @@ display_mode_label() {
 			printf 'Wayland\n'
 			;;
 		x11)
-			printf 'X11\n'
+			printf 'X11 (SDDM or manual fallback)\n'
 			;;
 		*)
 			printf '%s\n' "$1"
@@ -106,10 +106,10 @@ select_display_mode() {
 		return 0
 	fi
 
-	menu "Display Mode" "Choose the preferred KDE session mode.\n\nCurrent: $(display_mode_label "$current_mode")" 15 78 4 \
+	menu "Display Mode" "Choose the preferred KDE session mode.\n\nSDDM follows this setting directly. greetd always starts Wayland and leaves X11 available only as a manual fallback.\n\nCurrent: $(display_mode_label "$current_mode")" 16 78 4 \
 		"auto" "Prefer Wayland, fall back to X11 for VMs or weak graphics" \
 		"wayland" "Force startplasma-wayland" \
-		"x11" "Force startplasma-x11"
+		"x11" "Use X11 with SDDM or the manual fallback helper"
 	selected="$DIALOG_RESULT"
 	case $DIALOG_STATUS in
 		0)
@@ -141,6 +141,7 @@ desktop_profile_packages() {
 			package_ref=(
 				git
 				dialog
+				xorg-xinit
 				plasma-x11-session
 				plasma-desktop
 				plasma-workspace

@@ -39,6 +39,13 @@ log_debug() {
 	printf '[%s] %s\n' "$(date '+%F %T')" "$message" >> "$ARCHINSTALL_DEBUG_LOG" 2>/dev/null || true
 }
 
+log_info() {
+	local message=${1:-}
+
+	printf '[%s] %s\n' "$(date '+%F %T')" "$message" >> "${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}" 2>/dev/null || true
+	printf '[%s] %s\n' "$(date '+%F %T')" "$message" >> "$ARCHINSTALL_DEBUG_LOG" 2>/dev/null || true
+}
+
 sync_install_ui_mode() {
 	if [[ ${UI_MODE:-dialog} == "tty" ]] || flag_enabled "$DEV_MODE"; then
 		INSTALL_UI_MODE=plain
@@ -137,17 +144,21 @@ start_install_progress_dialog() {
 	local progress_error_log=${2:?progress error log is required}
 
 	log_debug "progress relay starting for fifo=$progress_fifo"
-	(
+	bash -c '
+		set +e
+		fifo=$1
+		error_log=$2
+		backtitle=$3
 		while IFS= read -r line; do
-			printf '%s\n' "$line"
-		done < "$progress_fifo"
-	) | dialog \
-		--clear \
-		--backtitle "$ARCHINSTALL_BACKTITLE" \
-		--title "Installing Arch Linux" \
-		--gauge "Preparing installer..." \
-		22 100 0 \
-		2> "$progress_error_log" &
+			printf "%s\n" "$line"
+		done < "$fifo" | dialog \
+			--clear \
+			--backtitle "$backtitle" \
+			--title "Installing Arch Linux" \
+			--gauge "Preparing installer..." \
+			22 100 0 \
+			2> "$error_log"
+	' _ "$progress_fifo" "$progress_error_log" "$ARCHINSTALL_BACKTITLE" &
 	ARCHINSTALL_PROGRESS_DIALOG_PID=$!
 	log_debug "progress dialog started pid=$ARCHINSTALL_PROGRESS_DIALOG_PID"
 	return 0
@@ -197,6 +208,20 @@ write_install_progress_dialog() {
 		printf '%s\n' "$message"
 		printf 'XXX\n'
 	} >&${ARCHINSTALL_PROGRESS_WRITER_FD}
+}
+
+finalize_install_progress_dialog() {
+	local progress_fifo=${1:?progress fifo is required}
+	local progress_log=${2:?progress log is required}
+	local boot_mode=${3:-auto}
+	local filesystem=${4:-ext4}
+	local desktop_profile=${5:-none}
+	local display_mode=${6:-auto}
+
+	if [[ -n ${ARCHINSTALL_PROGRESS_WRITER_FD:-} ]]; then
+		write_install_progress_dialog "$progress_fifo" 100 "Installation complete" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode" "$progress_log" || true
+		sleep 1
+	fi
 }
 
 show_install_progress_tty() {
@@ -365,7 +390,7 @@ load_runtime_preferences() {
 	apply_runtime_mode
 }
 
-show_install_result_dialog() {
+show_install_summary_dialog() {
 	local install_status=${1:-1}
 	local disk=""
 	local filesystem=""
@@ -393,6 +418,18 @@ show_install_result_dialog() {
 	fi
 
 	prompt="Disk: $disk\nDisk type: $disk_type\nFilesystem: $filesystem\nBoot mode: $boot_mode\nKeyboard: $keymap\nDesktop: $desktop_profile\nDisplay mode: $display_mode\nResolved mode: $resolved_display_mode\nZRAM: $enable_zram\nStatus: $status_label\n\nInstall log: ${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}"
+	log_info "Installer finished, launching summary dialog"
+
+	if [[ ${UI_MODE:-dialog} == "tty" ]]; then
+		printf 'Installation complete\n'
+		printf 'Disk: %s\n' "$disk"
+		printf 'Filesystem: %s\n' "$filesystem"
+		printf 'Boot mode: %s\n' "$boot_mode"
+		printf 'Desktop: %s\n' "$desktop_profile"
+		printf 'Status: %s\n' "$status_label"
+		printf 'Run: reboot\n'
+		return 0
+	fi
 
 	menu "Installation Complete" "$prompt" 18 72 4 \
 		"reboot" "Reboot system" \
@@ -417,9 +454,14 @@ show_install_result_dialog() {
 			return 0
 			;;
 		*)
+			printf 'Installation complete\nRun: reboot\n' >&2
 			return 0
 			;;
 	esac
+}
+
+show_install_result_dialog() {
+	show_install_summary_dialog "$@"
 }
 
 run_install_with_dialog() {
@@ -445,9 +487,17 @@ run_install_with_dialog() {
 		close_install_progress_writer
 		if (( progress_dialog_pid > 0 )); then
 			kill "$progress_dialog_pid" >/dev/null 2>&1 || true
+			sleep 1
+			kill -9 "$progress_dialog_pid" >/dev/null 2>&1 || true
 			wait "$progress_dialog_pid" 2>/dev/null || true
 			progress_dialog_pid=0
 		fi
+	}
+
+	cleanup_progress_dialog() {
+		stop_progress_dialog
+		[[ -n $progress_fifo ]] && rm -f "$progress_fifo" 2>/dev/null || true
+		[[ -n $progress_error_log ]] && rm -f "$progress_error_log" 2>/dev/null || true
 	}
 
 	: > "$log_file" || return 1
@@ -542,9 +592,10 @@ run_install_with_dialog() {
 	done
 
 	log_debug "run_install process exited"
-	stop_progress_dialog
-	[[ -n $progress_fifo ]] && rm -f "$progress_fifo"
-	[[ -n $progress_error_log ]] && rm -f "$progress_error_log"
+	if [[ ${UI_MODE:-dialog} == "dialog" && $tty_fallback_active == false ]]; then
+		finalize_install_progress_dialog "$progress_fifo" "$progress_log" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode"
+	fi
+	cleanup_progress_dialog
 	wait "$install_pid"
 	install_status=$?
 	log_debug "run_install exit status=$install_status"
@@ -882,7 +933,7 @@ run_install_flow() {
 		show_install_failure_dialog "${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}" || true
 	fi
 
-	show_install_result_dialog "$status" || true
+	show_install_summary_dialog "$status" || true
 
 	case $status in
 		0|1|255|130)

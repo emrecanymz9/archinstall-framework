@@ -798,6 +798,17 @@ fi
 EOT
 }
 
+write_x11_fallback_helper() {
+	install -d -m 0755 /usr/local/bin
+	cat > /usr/local/bin/archinstall-startplasma-x11 <<'EOT'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'exec startplasma-x11\n' > "$HOME/.xinitrc"
+exec startx
+EOT
+	chmod 0755 /usr/local/bin/archinstall-startplasma-x11
+}
+
 plasma_session_command() {
 	case \${1:-wayland} in
 		x11)
@@ -822,6 +833,9 @@ plasma_sddm_session() {
 
 PLASMA_SESSION_COMMAND="\$(plasma_session_command "\$TARGET_RESOLVED_DISPLAY_MODE")"
 PLASMA_SDDM_SESSION="\$(plasma_sddm_session "\$TARGET_RESOLVED_DISPLAY_MODE")"
+PLASMA_GREETD_COMMAND="startplasma-wayland"
+
+write_x11_fallback_helper
 
 log_chroot_step "Rebuilding initramfs"
 mkinitcpio -P
@@ -867,18 +881,18 @@ EOT
 vt = 1
 
 [default_session]
-command = "tuigreet --cmd \$PLASMA_SESSION_COMMAND"
+command = "tuigreet --remember --remember-session --sessions /usr/share/wayland-sessions --cmd \$PLASMA_GREETD_COMMAND"
 user = "greeter"
 EOT
 				systemctl enable greetd.service
-				rm -f /etc/profile.d/archinstall-desktop-fallback.sh
+				write_display_manager_fallback_notice "archinstall-startplasma-x11"
 			else
 				echo "[WARN] greetd-tuigreet is not installed in the target system. Leaving the system on TTY."
-				write_display_manager_fallback_notice "\$PLASMA_SESSION_COMMAND"
+				write_display_manager_fallback_notice "archinstall-startplasma-x11"
 			fi
 			;;
 		*)
-			write_display_manager_fallback_notice "\$PLASMA_SESSION_COMMAND"
+			write_display_manager_fallback_notice "archinstall-startplasma-x11"
 			;;
 	esac
 fi
