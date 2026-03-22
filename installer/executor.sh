@@ -197,7 +197,7 @@ run_install_gauge() {
 	local gauge_status=0
 	local -a gauge_pipe_status=()
 
-	if (
+	(
 		echo 10
 		echo "# Preparing install..."
 
