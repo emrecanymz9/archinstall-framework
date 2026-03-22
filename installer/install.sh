@@ -84,7 +84,7 @@ show_install_result_dialog() {
 		status_label="SUCCESS"
 	fi
 
-	prompt="Disk: $disk\nFilesystem: $filesystem\nBoot mode: $boot_mode\nDesktop: $desktop_profile\nZRAM: $enable_zram\nStatus: $status_label\n\nThis will erase the selected disk during installation. Review the log if needed."
+	prompt="Disk: $disk\nFilesystem: $filesystem\nBoot mode: $boot_mode\nDesktop: $desktop_profile\nZRAM: $enable_zram\nStatus: $status_label\n\nInstall log: ${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}"
 
 	choice="$(menu "Installation Complete" "$prompt" 18 72 4 \
 		"reboot" "Reboot system" \
@@ -113,88 +113,45 @@ show_install_result_dialog() {
 	esac
 }
 
-install_progress_snapshot() {
-	local tick=${1:-0}
-	local excerpt=""
-	local progress=5
-	local label="Preparing installation..."
-
-	excerpt="$(tail -n 50 "${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}" 2>/dev/null || true)"
-	case "$excerpt" in
-		*"Refreshing archlinux-keyring"*)
-			progress=10
-			label="Refreshing keyring..."
-			;;
-		*"Installing reflector on the live environment"*|*"Refreshing pacman mirrors"*|*"Refreshing pacman package databases"*)
-			progress=15
-			label="Preparing pacman and mirrors..."
-			;;
-		*"Creating a GPT partition table"*|*"Creating an MBR partition table"*|*"Creating the EFI system partition"*|*"Creating the root partition"*)
-			progress=25
-			label="Partitioning target disk..."
-			;;
-		*"Formatting the EFI partition as FAT32"*|*"Formatting the root partition"*)
-			progress=35
-			label="Formatting filesystems..."
-			;;
-		*"Mounting the root filesystem"*|*"Mounting the btrfs root subvolume"*|*"Mounting the EFI partition"*)
-			progress=45
-			label="Mounting target filesystem..."
-			;;
-		*"Installing the base Arch Linux packages"*)
-			progress=$((55 + (tick % 20)))
-			label="Installing packages..."
-			;;
-		*"Generating fstab"*)
-			progress=82
-			label="Generating fstab..."
-			;;
-		*"Configuring the target system inside chroot"*|*"Configuring the new system"*)
-			progress=92
-			label="Configuring installed system..."
-			;;
-		*"Installation completed successfully"*)
-			progress=100
-			label="Installation completed successfully."
-			;;
-	esac
-
-	printf '%s|%s\n' "$progress" "$label"
-}
-
 run_install_with_dialog() {
 	local install_pid=0
 	local install_status=1
-	local gauge_status=0
-	local tick=0
-	local progress_info=""
-	local progress_value=0
-	local progress_label=""
+	local action=""
+	local log_file="${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}"
 
-	: > "${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}" || return 1
-	INSTALL_UI_MODE=plain run_install true >> "${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}" 2>&1 &
+	: > "$log_file" || return 1
+	INSTALL_UI_MODE=dialog run_install >> "$log_file" 2>&1 &
 	install_pid=$!
 
-	dialog --title "Install Log" --tailboxbg "${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}" 20 100
-	{
-		while kill -0 "$install_pid" 2>/dev/null; do
-			progress_info="$(install_progress_snapshot "$tick")"
-			progress_value=${progress_info%%|*}
-			progress_label=${progress_info#*|}
-			printf '%s\n' "$progress_value"
-			printf '# %s\n' "$progress_label"
-			tick=$((tick + 1))
-			sleep 1
-		done
+	while true; do
+		dialog --title "Install Log" --tailbox "$log_file" 22 100
 
-		printf '100\n'
-		printf '# Finishing installation...\n'
-	} | dialog --title "ArchInstall Progress" --gauge "Installing system..." 10 70 0
-	gauge_status=${PIPESTATUS[1]:-0}
+		if kill -0 "$install_pid" 2>/dev/null; then
+			action="$(menu "Install Running" "The install is still running in the background.\n\nResume the live log view or abort the install." 14 72 3 \
+				"resume" "Return to the live install log" \
+				"abort" "Stop the current installation")"
+			case $? in
+				0)
+					case "$action" in
+						resume)
+							continue
+							;;
+						abort)
+							kill -INT "$install_pid" 2>/dev/null || true
+							wait "$install_pid" || true
+							clear_screen
+							return 130
+							;;
+					esac
+					;;
+				1|255)
+					continue
+					;;
+			esac
+		fi
 
-	if [[ $gauge_status -ne 0 && -n $install_pid ]]; then
-		kill -INT "$install_pid" 2>/dev/null || true
-	fi
+		break
+	done
 
 	wait "$install_pid"
 	install_status=$?
@@ -396,7 +353,7 @@ toggle_dev_mode() {
 	fi
 
 	apply_runtime_mode || return 1
-	msg "Developer Mode" "DEV_MODE is now set to: $DEV_MODE\n\nInstall UI mode: $INSTALL_UI_MODE\n\nDEV_MODE=true shows live terminal logs. DEV_MODE=false uses the dialog progress gauge."
+	msg "Developer Mode" "DEV_MODE is now set to: $DEV_MODE\n\nInstall UI mode: $INSTALL_UI_MODE\n\nDEV_MODE=true shows live terminal logs. DEV_MODE=false uses the dialog live log window."
 }
 
 show_state_summary() {
@@ -471,11 +428,11 @@ run_install_flow() {
 
 	apply_runtime_mode || return 1
 	if install_ui_uses_dialog; then
-		step_box "Starting Installer" "Launching unattended install core. Real-time logs will stay visible in the dialog log view."
+		step_box "Starting Installer" "Launching the install core in the background. The dialog log view stays open until the install finishes."
 		run_install_with_dialog
 		status=$?
 	else
-		run_install true
+		run_install
 		status=$?
 	fi
 

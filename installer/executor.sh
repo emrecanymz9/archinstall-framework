@@ -38,6 +38,13 @@ install_ui_uses_dialog() {
 	[[ ${INSTALL_UI_MODE:-plain} == "dialog" ]]
 }
 
+render_command() {
+	local rendered_command=""
+
+	printf -v rendered_command '%q ' "$@"
+	printf '%s\n' "${rendered_command% }"
+}
+
 build_pacstrap_package_list() {
 	local boot_mode=${1:?boot mode is required}
 	local filesystem=${2:?filesystem is required}
@@ -95,7 +102,7 @@ require_commands() {
 	boot_mode="$(get_state "BOOT_MODE" 2>/dev/null || detect_boot_mode 2>/dev/null || printf 'uefi')"
 	filesystem="$(normalize_filesystem "$(get_state "FILESYSTEM" 2>/dev/null || printf 'ext4')")"
 
-	for cmd in dialog lsblk wipefs parted partprobe mkfs.ext4 mount umount pacman pacstrap genfstab ping blkid arch-chroot tee tail; do
+	for cmd in dialog lsblk wipefs parted partprobe mkfs.ext4 mount umount pacman pacstrap ping blkid arch-chroot tee tail findmnt; do
 		command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
 	done
 
@@ -161,6 +168,8 @@ print_install_error() {
 }
 
 run_logged_command() {
+	log_line "Command: $(render_command "$@")"
+
 	if install_ui_uses_dialog; then
 		"$@" 2>&1 | sanitize_stream | tee -a "$ARCHINSTALL_LOG" >/dev/null
 		return $?
@@ -171,6 +180,8 @@ run_logged_command() {
 
 run_logged_shell_command() {
 	local command_string=${1:?command string is required}
+
+	log_line "Command: bash -lc $command_string"
 
 	if install_ui_uses_dialog; then
 		bash -lc "$command_string" 2>&1 | sanitize_stream | tee -a "$ARCHINSTALL_LOG" >/dev/null
@@ -217,12 +228,14 @@ run_step() {
 
 	shift
 	install_ui_uses_dialog || print_install_info "$step"
-	log_line "$step"
+	log_line "[STEP] $step"
 
 	if run_logged_command "$@"; then
+		log_line "[ OK ] $step"
 		return 0
 	fi
 
+	log_line "[FAIL] $step"
 	show_install_error "$step"
 	return 1
 }
@@ -232,12 +245,14 @@ run_shell_step() {
 	local command_string=${2:?command string is required}
 
 	install_ui_uses_dialog || print_install_info "$step"
-	log_line "$step"
+	log_line "[STEP] $step"
 
 	if run_logged_shell_command "$command_string"; then
+		log_line "[ OK ] $step"
 		return 0
 	fi
 
+	log_line "[FAIL] $step"
 	show_install_error "$step"
 	return 1
 }
@@ -251,17 +266,20 @@ run_step_with_retry() {
 
 	while (( attempt <= max_attempts )); do
 		install_ui_uses_dialog || print_install_info "$step (attempt $attempt/$max_attempts)"
-		log_line "$step (attempt $attempt/$max_attempts)"
+		log_line "[STEP] $step (attempt $attempt/$max_attempts)"
 
 		if run_logged_command "$@"; then
+			log_line "[ OK ] $step"
 			return 0
 		fi
 
 		if (( attempt == max_attempts )); then
+			log_line "[FAIL] $step"
 			show_install_error "$step"
 			return 1
 		fi
 
+		log_line "[WARN] Retrying: $step"
 		attempt=$((attempt + 1))
 	done
 }
@@ -272,76 +290,81 @@ run_pacstrap_install() {
 	run_step_with_retry "Installing the base Arch Linux packages" 3 pacstrap -K /mnt --noconfirm --needed --overwrite='*' "${packages[@]}"
 }
 
-run_pacstrap_install() {
-	local -a packages=("$@")
+get_partition_uuid() {
+	local partition=${1:?partition is required}
+	local uuid=""
 
-	run_step_with_retry "Installing the base Arch Linux packages" 3 pacstrap -K /mnt --noconfirm --needed --overwrite='*' "${packages[@]}"
-}
-
-
-run_install_gauge() {
-	local root_partition=${1:?root partition is required}
-	local boot_mode=${2:?boot mode is required}
-	local disk=${3:?disk is required}
-	local filesystem=${4:?filesystem is required}
-	local enable_zram=${5:?zram flag is required}
-	local desktop_profile=${6:-none}
-	local display_manager=${7:-none}
-	local root_partuuid=""
-	local gauge_status=0
-	local -a gauge_pipe_status=()
-	local -a pacstrap_packages=()
-
-	build_pacstrap_package_list "$boot_mode" "$filesystem" "$enable_zram" pacstrap_packages "$desktop_profile" "$display_manager"
-
-	(
-		echo 10
-		echo "# Preparing install..."
-
-		if flag_enabled "$SKIP_PACSTRAP"; then
-			log_line "Skipping pacstrap because SKIP_PACSTRAP=$SKIP_PACSTRAP"
-			if [[ ! -d /mnt/etc ]]; then
-				print_install_error "SKIP_PACSTRAP=true requires an existing system mounted at /mnt."
-				exit 1
-			fi
-		else
-			echo 30
-			echo "# Installing base system..."
-			run_pacstrap_install "${pacstrap_packages[@]}" || exit 1
-		fi
-
-		echo 80
-		echo "# Generating fstab..."
-		run_shell_step "Generating fstab" 'mkdir -p /mnt/etc && : > /mnt/etc/fstab && genfstab -U /mnt >> /mnt/etc/fstab' || exit 1
-
-		if flag_enabled "$SKIP_CHROOT"; then
-			log_line "Skipping chroot configuration because SKIP_CHROOT=$SKIP_CHROOT"
-		else
-			if [[ $boot_mode == "uefi" ]]; then
-				root_partuuid="$(blkid -s PARTUUID -o value "$root_partition" 2>> "$ARCHINSTALL_LOG" || true)"
-				if [[ -z $root_partuuid ]]; then
-					print_install_error "Could not determine the root PARTUUID for: $root_partition"
-					exit 1
-				fi
-			fi
-
-			echo 90
-			echo "# Configuring system..."
-			run_chroot_configuration "$boot_mode" "$disk" "$root_partuuid" "$filesystem" "$enable_zram" "$desktop_profile" "$display_manager" || exit 1
-		fi
-
-		echo 100
-		echo "# Done"
-	) | sanitize_stream | dialog --title "ArchInstall Framework" --gauge "Installing system..." 10 70 0
-	gauge_pipe_status=("${PIPESTATUS[@]}")
-	gauge_status=${gauge_pipe_status[0]:-1}
-
-	if [[ $gauge_status -eq 0 ]]; then
-		return 0
+	uuid="$(blkid -s UUID -o value "$partition" 2>> "$ARCHINSTALL_LOG" || true)"
+	if [[ -z $uuid ]]; then
+		print_install_error "Could not determine the UUID for: $partition"
+		return 1
 	fi
 
-	show_install_error "Bootable system installation"
-	return "$gauge_status"
+	printf '%s\n' "$uuid"
+}
+
+log_partition_metadata() {
+	local root_partition=${1:?root partition is required}
+	local efi_partition=${2-}
+
+	if [[ -n $efi_partition ]]; then
+		run_step "Capturing block metadata" blkid "$efi_partition" "$root_partition"
+		return $?
+	fi
+
+	run_step "Capturing block metadata" blkid "$root_partition"
+}
+
+write_target_fstab() {
+	local filesystem=${1:?filesystem is required}
+	local root_partition=${2:?root partition is required}
+	local efi_partition=${3-}
+	local root_uuid=""
+	local efi_uuid=""
+	local fstab_path=/mnt/etc/fstab
+	local root_line=""
+	local home_line=""
+	local efi_line=""
+
+	root_uuid="$(get_partition_uuid "$root_partition")" || return 1
+	if [[ -n $efi_partition ]]; then
+		efi_uuid="$(get_partition_uuid "$efi_partition")" || return 1
+	fi
+
+	case $filesystem in
+		ext4)
+			root_line="UUID=$root_uuid / ext4 defaults,noatime 0 1"
+			;;
+		btrfs)
+			root_line="UUID=$root_uuid / btrfs subvol=@,compress=zstd 0 0"
+			home_line="UUID=$root_uuid /home btrfs subvol=@home,compress=zstd 0 0"
+			;;
+		*)
+			print_install_error "Unsupported filesystem for fstab generation: $filesystem"
+			return 1
+			;;
+	esac
+
+	if [[ -n $efi_uuid ]]; then
+		efi_line="UUID=$efi_uuid /boot vfat umask=0077 0 2"
+	fi
+
+	run_shell_step "Generating fstab" "mkdir -p /mnt/etc && cat > '$fstab_path' <<'EOT'
+$root_line
+$home_line
+$efi_line
+EOT"
+	local fstab_status=$?
+	if [[ $fstab_status -ne 0 ]]; then
+		return "$fstab_status"
+	fi
+
+	log_line "[DEBUG] Generated fstab:"
+	if [[ -f $fstab_path ]]; then
+		sanitize_stream < "$fstab_path" >> "$ARCHINSTALL_LOG"
+	fi
+
+	return 0
 }
 
 format_root_filesystem() {
@@ -373,15 +396,20 @@ mount_root_filesystem() {
 		btrfs)
 			run_step "Mounting btrfs volume for subvolume creation" mount "$root_partition" /mnt || return 1
 			if [[ ! -d /mnt/@ ]]; then
-				run_step "Creating btrfs subvolumes" btrfs subvolume create /mnt/@ || return 1
+				run_step "Creating btrfs root subvolume" btrfs subvolume create /mnt/@ || return 1
+			else
+				log_line "[ OK ] Reusing existing btrfs root subvolume @"
 			fi
 			if [[ ! -d /mnt/@home ]]; then
 				run_step "Creating btrfs home subvolume" btrfs subvolume create /mnt/@home || return 1
+			else
+				log_line "[ OK ] Reusing existing btrfs home subvolume @home"
 			fi
 			run_step "Unmounting temporary btrfs mount" umount /mnt || return 1
 			run_step "Mounting the btrfs root subvolume" mount -o compress=zstd,subvol=@ "$root_partition" /mnt || return 1
 			run_step "Creating the home mount point" mkdir -p /mnt/home || return 1
-			run_step "Mounting the btrfs home subvolume" mount -o compress=zstd,subvol=@home "$root_partition" /mnt/home
+			run_step "Mounting the btrfs home subvolume" mount -o compress=zstd,subvol=@home "$root_partition" /mnt/home || return 1
+			run_step "Recording mounted btrfs subvolumes" findmnt -no TARGET,SOURCE,OPTIONS /mnt /mnt/home
 			;;
 		*)
 			print_install_error "Unsupported filesystem: $filesystem"
@@ -423,7 +451,7 @@ resolve_target_partitions() {
 build_chroot_script() {
 	local boot_mode=${1:?boot mode is required}
 	local disk=${2:?disk is required}
-	local root_partuuid=${3-}
+	local root_uuid=${3:?root UUID is required}
 	local filesystem=${4:?filesystem is required}
 	local enable_zram=${5:?zram flag is required}
 	local desktop_profile=${6:-none}
@@ -435,7 +463,7 @@ build_chroot_script() {
 	local user_password=${INSTALL_USER_PASSWORD:-}
 	local quoted_boot_mode=""
 	local quoted_disk=""
-	local quoted_root_partuuid=""
+	local quoted_root_uuid=""
 	local quoted_hostname=""
 	local quoted_timezone=""
 	local quoted_locale=""
@@ -458,7 +486,7 @@ build_chroot_script() {
 
 	printf -v quoted_boot_mode '%q' "$boot_mode"
 	printf -v quoted_disk '%q' "$disk"
-	printf -v quoted_root_partuuid '%q' "$root_partuuid"
+	printf -v quoted_root_uuid '%q' "$root_uuid"
 	printf -v quoted_hostname '%q' "$hostname"
 	printf -v quoted_timezone '%q' "$timezone"
 	printf -v quoted_locale '%q' "$locale"
@@ -474,7 +502,7 @@ set -euo pipefail
 
 BOOT_MODE=$quoted_boot_mode
 TARGET_DISK=$quoted_disk
-ROOT_PARTUUID=$quoted_root_partuuid
+ROOT_UUID=$quoted_root_uuid
 TARGET_HOSTNAME=$quoted_hostname
 TARGET_TIMEZONE=$quoted_timezone
 TARGET_LOCALE=$quoted_locale
@@ -484,6 +512,9 @@ TARGET_FILESYSTEM=$quoted_filesystem
 TARGET_ENABLE_ZRAM=$quoted_enable_zram
 TARGET_DESKTOP_PROFILE=$quoted_desktop_profile
 TARGET_DISPLAY_MANAGER=$quoted_display_manager
+
+echo "[DEBUG] Applying mkinitcpio hooks"
+sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect modconf block filesystems keyboard fsck)/' /etc/mkinitcpio.conf
 
 ln -sf "/usr/share/zoneinfo/\$TARGET_TIMEZONE" /etc/localtime
 hwclock --systohc
@@ -522,6 +553,8 @@ zram-size = ram / 2
 compression-algorithm = zstd
 EOT
 fi
+
+mkinitcpio -P
 
 if [[ \$TARGET_DESKTOP_PROFILE == "kde" ]]; then
 	systemctl enable bluetooth
@@ -562,11 +595,34 @@ EOT
 title Arch Linux
 linux /vmlinuz-linux
 initrd /initramfs-linux.img
-options root=PARTUUID=\$ROOT_PARTUUID rw
+options root=UUID=\$ROOT_UUID rw$( [[ $filesystem == "btrfs" ]] && printf ' rootfstype=btrfs rootflags=subvol=@,compress=zstd' )
 EOT
+
+	echo "[DEBUG] systemd-boot entry"
+	cat /boot/loader/entries/arch.conf
 else
+	grub_cmdline="root=UUID=\$ROOT_UUID"
+	if [[ \$TARGET_FILESYSTEM == "btrfs" ]]; then
+		grub_cmdline="\$grub_cmdline rootflags=subvol=@,compress=zstd"
+	fi
+	if grep -q '^GRUB_CMDLINE_LINUX=' /etc/default/grub; then
+		sed -i "s#^GRUB_CMDLINE_LINUX=.*#GRUB_CMDLINE_LINUX=\"\$grub_cmdline\"#" /etc/default/grub
+	else
+		printf '%s\n' "GRUB_CMDLINE_LINUX=\"\$grub_cmdline\"" >> /etc/default/grub
+	fi
+	if grep -q '^GRUB_DISABLE_LINUX_UUID=' /etc/default/grub; then
+		sed -i 's/^GRUB_DISABLE_LINUX_UUID=.*/GRUB_DISABLE_LINUX_UUID=true/' /etc/default/grub
+	else
+		echo 'GRUB_DISABLE_LINUX_UUID=true' >> /etc/default/grub
+	fi
+
 	grub-install --target=i386-pc "\$TARGET_DISK"
 	grub-mkconfig -o /boot/grub/grub.cfg
+
+	echo "[DEBUG] /etc/default/grub"
+	cat /etc/default/grub
+	echo "[DEBUG] Generated grub.cfg linux lines"
+	grep -n 'linux.*/vmlinuz-linux' /boot/grub/grub.cfg || true
 fi
 EOF
 }
@@ -574,27 +630,30 @@ EOF
 run_chroot_configuration() {
 	local boot_mode=${1:?boot mode is required}
 	local disk=${2:?disk is required}
-	local root_partuuid=${3-}
+	local root_uuid=${3:?root UUID is required}
 	local filesystem=${4:?filesystem is required}
 	local enable_zram=${5:?zram flag is required}
 	local desktop_profile=${6:-none}
 	local display_manager=${7:-none}
 
 	install_ui_uses_dialog || print_install_info "Configuring the new system and installing the bootloader"
-	log_line "Configuring the target system inside chroot"
+	log_line "[STEP] Configuring the target system inside chroot"
 
 	if install_ui_uses_dialog; then
-		if build_chroot_script "$boot_mode" "$disk" "$root_partuuid" "$filesystem" "$enable_zram" "$desktop_profile" "$display_manager" | arch-chroot /mnt /bin/bash >> "$ARCHINSTALL_LOG" 2>&1
+		if build_chroot_script "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$enable_zram" "$desktop_profile" "$display_manager" | arch-chroot /mnt /bin/bash >> "$ARCHINSTALL_LOG" 2>&1
 		then
+			log_line "[ OK ] Configuring the target system inside chroot"
 			return 0
 		fi
 	else
-		if build_chroot_script "$boot_mode" "$disk" "$root_partuuid" "$filesystem" "$enable_zram" "$desktop_profile" "$display_manager" | arch-chroot /mnt /bin/bash 2>&1 | tee -a "$ARCHINSTALL_LOG"
+		if build_chroot_script "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$enable_zram" "$desktop_profile" "$display_manager" | arch-chroot /mnt /bin/bash 2>&1 | tee -a "$ARCHINSTALL_LOG"
 		then
+			log_line "[ OK ] Configuring the target system inside chroot"
 			return 0
 		fi
 	fi
 
+	log_line "[FAIL] Configuring the target system inside chroot"
 	show_install_error "Configuring the new system"
 	return 1
 }
@@ -603,7 +662,7 @@ run_install() {
 	local disk=""
 	local efi_partition=""
 	local root_partition=""
-	local root_partuuid=""
+	local root_uuid=""
 	local boot_mode=""
 	local filesystem=""
 	local enable_zram=""
@@ -731,6 +790,7 @@ run_install() {
 			run_step "Creating the EFI mount point" mkdir -p /mnt/boot || exit 1
 			run_step "Mounting the EFI partition" mount "$efi_partition" /mnt/boot || exit 1
 		fi
+		log_partition_metadata "$root_partition" "$efi_partition" || exit 1
 
 		if flag_enabled "$SKIP_PACSTRAP"; then
 			log_line "Skipping pacstrap because SKIP_PACSTRAP=$SKIP_PACSTRAP"
@@ -742,25 +802,19 @@ run_install() {
 			run_pacstrap_install "${pacstrap_packages[@]}" || exit 1
 		fi
 
-		run_shell_step "Generating fstab" 'mkdir -p /mnt/etc && : > /mnt/etc/fstab && genfstab -U /mnt >> /mnt/etc/fstab' || exit 1
+		write_target_fstab "$filesystem" "$root_partition" "$efi_partition" || exit 1
 
 		if flag_enabled "$SKIP_CHROOT"; then
 			log_line "Skipping chroot configuration because SKIP_CHROOT=$SKIP_CHROOT"
 		else
-			if [[ $boot_mode == "uefi" ]]; then
-				root_partuuid="$(blkid -s PARTUUID -o value "$root_partition" 2>> "$ARCHINSTALL_LOG" || true)"
-				if [[ -z $root_partuuid ]]; then
-					print_install_error "Could not determine the root PARTUUID for: $root_partition"
-					exit 1
-				fi
-			fi
-
-			run_chroot_configuration "$boot_mode" "$disk" "$root_partuuid" "$filesystem" "$enable_zram" "$desktop_profile" "$display_manager" || exit 1
+			root_uuid="$(get_partition_uuid "$root_partition")" || exit 1
+			run_chroot_configuration "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$enable_zram" "$desktop_profile" "$display_manager" || exit 1
 		fi
 
 		ARCHINSTALL_INSTALL_SUCCESS=true
 		ARCHINSTALL_CLEANUP_ACTIVE=false
-		log_line "Installation completed successfully"
+		log_line "[ OK ] Installation completed successfully"
+		log_line "Close the log view to continue to the final menu."
 		exit 0
 	); then
 		return 0
