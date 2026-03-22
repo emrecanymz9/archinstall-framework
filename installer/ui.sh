@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 
 ARCHINSTALL_BACKTITLE=${ARCHINSTALL_BACKTITLE:-"ArchInstall Framework"}
-ARCHINSTALL_TMPDIR=${ARCHINSTALL_TMPDIR:-/tmp}
 
 require_dialog() {
 	if command -v dialog >/dev/null 2>&1; then
@@ -18,29 +17,26 @@ menu() {
 	local height=${3:-18}
 	local width=${4:-70}
 	local menu_height=${5:-8}
+	local selection
+	local status
 
 	shift 5
 	require_dialog || return $?
 
-	local output_file
-	local status
-
-	output_file="$(mktemp "${ARCHINSTALL_TMPDIR%/}/archinstall.menu.XXXXXX")" || return 1
-
-	dialog \
+	selection="$(dialog \
 		--clear \
 		--backtitle "$ARCHINSTALL_BACKTITLE" \
 		--title "$title" \
 		--menu "$prompt" \
 		"$height" "$width" "$menu_height" \
-		"$@" 2>"$output_file"
+		"$@" \
+		3>&1 1>&2 2>&3)"
 	status=$?
 
 	if [[ $status -eq 0 ]]; then
-		cat "$output_file"
+		printf '%s\n' "$selection"
 	fi
 
-	rm -f "$output_file"
 	return "$status"
 }
 
