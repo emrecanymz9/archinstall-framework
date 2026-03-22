@@ -703,6 +703,15 @@ compression-algorithm = zstd
 EOT
 fi
 
+write_display_manager_fallback_notice() {
+	install -d -m 0755 /etc/profile.d
+	cat > /etc/profile.d/archinstall-desktop-fallback.sh <<'EOT'
+if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" && "$(tty 2>/dev/null || true)" == /dev/tty* ]]; then
+	echo "Display manager failed, start KDE manually with: startplasma-wayland"
+fi
+EOT
+}
+
 mkinitcpio -P
 
 if [[ \$TARGET_DESKTOP_PROFILE == "kde" ]]; then
@@ -714,27 +723,34 @@ if [[ \$TARGET_DESKTOP_PROFILE == "kde" ]]; then
 
 	case \$TARGET_DISPLAY_MANAGER in
 		sddm)
-			systemctl enable sddm
+			if command -v sddm >/dev/null 2>&1; then
+				systemctl enable sddm.service
+				rm -f /etc/profile.d/archinstall-desktop-fallback.sh
+			else
+				echo "[WARN] sddm is not installed in the target system. Leaving the system on TTY."
+				write_display_manager_fallback_notice
+			fi
 			;;
 		greetd)
-			install -d -m 0755 /etc/greetd
-			install -d -m 0755 /etc/qtgreet
-			cat > /etc/qtgreet/sway-config <<'EOT'
-exec "qtgreet; swaymsg exit"
-include /etc/sway/config.d/*
-EOT
-			cat > /etc/greetd/config.toml <<'EOT'
+			if command -v tuigreet >/dev/null 2>&1; then
+				install -d -m 0755 /etc/greetd
+				cat > /etc/greetd/config.toml <<'EOT'
 [terminal]
 vt = 1
 
 [default_session]
-command = "sway --config /etc/qtgreet/sway-config"
+command = "tuigreet --cmd startplasma-wayland"
 user = "greeter"
 EOT
-			if [[ ! -x /usr/bin/qtgreet ]]; then
-				echo "[WARN] qtgreet was not found in the target system. Install the AUR package greetd-qtgreet to activate this greetd path."
+				systemctl enable greetd.service
+				rm -f /etc/profile.d/archinstall-desktop-fallback.sh
+			else
+				echo "[WARN] greetd-tuigreet is not installed in the target system. Leaving the system on TTY."
+				write_display_manager_fallback_notice
 			fi
-			systemctl enable greetd
+			;;
+		*)
+			write_display_manager_fallback_notice
 			;;
 	esac
 fi
