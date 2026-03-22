@@ -2,6 +2,14 @@
 
 ARCHINSTALL_BACKTITLE=${ARCHINSTALL_BACKTITLE:-"ArchInstall Framework"}
 
+sanitize_dialog_text() {
+	printf '%s' "${1-}" | LC_ALL=C tr -cd '\11\12\15\40-\176'
+}
+
+sanitize_dialog_choice() {
+	printf '%s' "${1-}" | LC_ALL=C tr -cd '[:alnum:]_.:/-'
+}
+
 require_dialog() {
 	if command -v dialog >/dev/null 2>&1; then
 		return 0
@@ -17,24 +25,28 @@ menu() {
 	local height=${3:-18}
 	local width=${4:-70}
 	local menu_height=${5:-8}
+	local sanitized_title=""
+	local sanitized_prompt=""
 	local selection
 	local status
 
 	shift 5
 	require_dialog || return $?
+	sanitized_title="$(sanitize_dialog_text "$title")"
+	sanitized_prompt="$(sanitize_dialog_text "$prompt")"
 
 	selection="$(dialog \
 		--clear \
 		--backtitle "$ARCHINSTALL_BACKTITLE" \
-		--title "$title" \
-		--menu "$prompt" \
+		--title "$sanitized_title" \
+		--menu "$sanitized_prompt" \
 		"$height" "$width" "$menu_height" \
 		"$@" \
 		3>&1 1>&2 2>&3)"
 	status=$?
 
 	if [[ $status -eq 0 ]]; then
-		printf '%s\n' "$selection"
+		printf '%s\n' "$(sanitize_dialog_choice "$selection")"
 	fi
 
 	return "$status"
@@ -47,7 +59,7 @@ msg() {
 	local width=${4:-70}
 
 	require_dialog || return $?
-	dialog --clear --backtitle "$ARCHINSTALL_BACKTITLE" --title "$title" --msgbox "$body" "$height" "$width"
+	dialog --clear --backtitle "$ARCHINSTALL_BACKTITLE" --title "$(sanitize_dialog_text "$title")" --msgbox "$(sanitize_dialog_text "$body")" "$height" "$width"
 }
 
 confirm() {
@@ -57,7 +69,7 @@ confirm() {
 	local width=${4:-70}
 
 	require_dialog || return $?
-	dialog --clear --backtitle "$ARCHINSTALL_BACKTITLE" --title "$title" --yesno "$body" "$height" "$width"
+	dialog --clear --backtitle "$ARCHINSTALL_BACKTITLE" --title "$(sanitize_dialog_text "$title")" --yesno "$(sanitize_dialog_text "$body")" "$height" "$width"
 }
 
 input_box() {
@@ -66,22 +78,28 @@ input_box() {
 	local initial_value=${3:-""}
 	local height=${4:-10}
 	local width=${5:-70}
+	local sanitized_title=""
+	local sanitized_body=""
+	local sanitized_initial_value=""
 	local input_value
 	local status
 
 	require_dialog || return $?
+	sanitized_title="$(sanitize_dialog_text "$title")"
+	sanitized_body="$(sanitize_dialog_text "$body")"
+	sanitized_initial_value="$(sanitize_dialog_text "$initial_value")"
 
 	input_value="$(dialog \
 		--clear \
 		--backtitle "$ARCHINSTALL_BACKTITLE" \
-		--title "$title" \
-		--inputbox "$body" \
-		"$height" "$width" "$initial_value" \
+		--title "$sanitized_title" \
+		--inputbox "$sanitized_body" \
+		"$height" "$width" "$sanitized_initial_value" \
 		3>&1 1>&2 2>&3)"
 	status=$?
 
 	if [[ $status -eq 0 ]]; then
-		printf '%s\n' "$input_value"
+		printf '%s\n' "$(sanitize_dialog_text "$input_value")"
 	fi
 
 	return "$status"
@@ -92,23 +110,27 @@ password_box() {
 	local body=${2:-"Enter a password:"}
 	local height=${3:-10}
 	local width=${4:-70}
+	local sanitized_title=""
+	local sanitized_body=""
 	local input_value
 	local status
 
 	require_dialog || return $?
+	sanitized_title="$(sanitize_dialog_text "$title")"
+	sanitized_body="$(sanitize_dialog_text "$body")"
 
 	input_value="$(dialog \
 		--clear \
 		--backtitle "$ARCHINSTALL_BACKTITLE" \
-		--title "$title" \
+		--title "$sanitized_title" \
 		--insecure \
-		--passwordbox "$body" \
+		--passwordbox "$sanitized_body" \
 		"$height" "$width" \
 		3>&1 1>&2 2>&3)"
 	status=$?
 
 	if [[ $status -eq 0 ]]; then
-		printf '%s\n' "$input_value"
+		printf '%s\n' "$(sanitize_dialog_text "$input_value")"
 	fi
 
 	return "$status"
@@ -121,7 +143,7 @@ progress() {
 	local width=${4:-70}
 
 	require_dialog || return $?
-	dialog --clear --backtitle "$ARCHINSTALL_BACKTITLE" --title "$title" --infobox "$body" "$height" "$width"
+	dialog --clear --backtitle "$ARCHINSTALL_BACKTITLE" --title "$(sanitize_dialog_text "$title")" --infobox "$(sanitize_dialog_text "$body")" "$height" "$width"
 }
 
 error_box() {

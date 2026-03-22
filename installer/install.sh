@@ -19,6 +19,7 @@ source "$SCRIPT_DIR/executor.sh" || {
 }
 
 INSTALL_USER_PASSWORD=${INSTALL_USER_PASSWORD:-""}
+ZRAM=${ZRAM:-false}
 
 ensure_executor_loaded() {
 	if declare -F run_install >/dev/null 2>&1; then
@@ -81,22 +82,42 @@ select_filesystem() {
 }
 
 select_zram_preference() {
-	local current_value=${1:-false}
+	local current_value=${1:-$ZRAM}
+	local choice=""
 
 	if flag_enabled "$current_value"; then
-		if confirm "Zram Swap" "Zram swap is currently enabled.\n\nKeep zram swap enabled?" 12 70; then
-			printf 'true\n'
-		else
-			printf 'false\n'
-		fi
-		return 0
+		current_value=true
+	else
+		current_value=false
 	fi
 
-	if confirm "Zram Swap" "Enable zram swap for the installed system?\n\nThis creates compressed RAM-backed swap using zram-generator." 12 70; then
-		printf 'true\n'
-	else
-		printf 'false\n'
-	fi
+	choice="$(menu "Zram" "Choose whether to enable zram swap." 12 50 2 \
+		"yes" "Enable zram" \
+		"no" "Disable zram")"
+	case $? in
+		0)
+			case "$choice" in
+				yes)
+					printf 'true\n'
+					return 0
+					;;
+				no)
+					printf 'false\n'
+					return 0
+					;;
+			esac
+			printf 'false\n'
+			return 0
+			;;
+		1|255)
+			printf 'false\n'
+			return 0
+			;;
+		*)
+			printf 'false\n'
+			return 0
+			;;
+	esac
 }
 
 prompt_required_input() {
@@ -188,7 +209,7 @@ configure_install_profile() {
 	locale="$(prompt_required_input "Locale" "Set the locale, for example en_US.UTF-8." "$(state_or_default "LOCALE" "en_US.UTF-8")")" || return 1
 	username="$(prompt_required_input "Username" "Create the primary user account." "$(state_or_default "USERNAME" "archuser")")" || return 1
 	filesystem="$(select_filesystem "$(state_or_default "FILESYSTEM" "ext4")")" || return 1
-	enable_zram="$(select_zram_preference "$(state_or_default "ENABLE_ZRAM" "false")")" || return 1
+	enable_zram="$(select_zram_preference "$(state_or_default "ENABLE_ZRAM" "$ZRAM")")" || return 1
 	desktop_profile="$(select_desktop_profile)" || return 1
 	display_manager="$(select_display_manager "$desktop_profile")" || return 1
 	password="$(prompt_password "User Password")" || return 1
