@@ -93,17 +93,46 @@ show_install_progress_dialog() {
 	local excerpt=""
 
 	excerpt="$(last_install_log_excerpt "$log_file")"
-	dialog \
+	safe_dialog \
 		--clear \
 		--backtitle "$ARCHINSTALL_BACKTITLE" \
 		--title "Installing Arch Linux" \
-		--no-buttons \
+		--timeout 1 \
 		--mixedgauge "Progress: ${percent}%\n\nCurrent step: $current_step\nBoot mode: $boot_mode\nFilesystem: $filesystem\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay mode: $(display_mode_label "$display_mode")\n\nRecent log output:\n$excerpt" \
 		22 100 "$percent" 4 \
 		"Boot" "$boot_mode" 0 \
 		"Filesystem" "$filesystem" 0 \
 		"Desktop" "$(desktop_profile_label "$desktop_profile")" 0 \
 		"Session" "$(display_mode_label "$display_mode")" 0
+}
+
+show_install_progress_tty() {
+	local log_file=${1:?log file is required}
+	local percent=${2:?percent is required}
+	local current_step=${3:-Preparing install}
+	local boot_mode=${4:-auto}
+	local filesystem=${5:-ext4}
+	local desktop_profile=${6:-none}
+	local display_mode=${7:-auto}
+	local progress_key=""
+	local excerpt=""
+
+	progress_key="${percent}:${current_step}:${display_mode}"
+	if [[ ${ARCHINSTALL_LAST_TTY_PROGRESS_KEY:-} == "$progress_key" ]]; then
+		return 0
+	fi
+
+	ARCHINSTALL_LAST_TTY_PROGRESS_KEY=$progress_key
+	excerpt="$(last_install_log_excerpt "$log_file")"
+	clear_screen
+	printf 'Installing Arch Linux\n\n'
+	printf 'Progress: %s%%\n' "$percent"
+	printf 'Current step: %s\n' "$current_step"
+	printf 'Boot mode: %s\n' "$boot_mode"
+	printf 'Filesystem: %s\n' "$filesystem"
+	printf 'Desktop: %s\n' "$(desktop_profile_label "$desktop_profile")"
+	printf 'Display mode: %s\n\n' "$(display_mode_label "$display_mode")"
+	printf 'Recent log output:\n%s\n' "$excerpt"
 }
 
 apply_live_console_keymap() {
@@ -295,6 +324,9 @@ run_install_with_dialog() {
 	local filesystem=""
 	local desktop_profile=""
 	local display_mode=""
+	local MAX_RETRY=3
+	local RETRY_COUNT=0
+	local tty_fallback_active=false
 
 	: > "$log_file" || return 1
 	boot_mode="$(state_or_default "BOOT_MODE" "auto")"
@@ -308,7 +340,23 @@ run_install_with_dialog() {
 	while kill -0 "$install_pid" 2>/dev/null; do
 		percent="$(install_progress_percent "$log_file" "$expected_steps")"
 		current_step="$(grep '^\[[0-9-]\{10\} [0-9:]\{8\}\] \[STEP\]' "$log_file" 2>/dev/null | tail -n 1 | sed 's/^.*\[STEP\] //' || printf 'Preparing install')"
-		show_install_progress_dialog "$log_file" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode"
+		if [[ $tty_fallback_active == true || ${ARCHINSTALL_UI_FORCE_TTY:-false} == true ]]; then
+			show_install_progress_tty "$log_file" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode"
+		else
+			if show_install_progress_dialog "$log_file" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode" >/dev/null; then
+				RETRY_COUNT=0
+			else
+				if [[ ${ARCHINSTALL_LAST_UI_FAILURE:-false} == true ]]; then
+					RETRY_COUNT=$((RETRY_COUNT + 1))
+					if (( RETRY_COUNT >= MAX_RETRY )); then
+						log_ui_error "[UI ERROR] install progress dialog failed repeatedly; switching to TTY progress"
+						ARCHINSTALL_UI_FORCE_TTY=true
+						tty_fallback_active=true
+						show_install_progress_tty "$log_file" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode"
+					fi
+				fi
+			fi
+		fi
 		sleep 1
 	done
 
@@ -383,36 +431,52 @@ prompt_required_input() {
 	local prompt=${2:?prompt is required}
 	local initial_value=${3-}
 	local value=""
+	local status=0
+	local MAX_RETRY=3
+	local RETRY_COUNT=0
 
-	while true; do
+	while (( RETRY_COUNT < MAX_RETRY )); do
 		value="$(input_box "$title" "$prompt" "$initial_value" 12 76)"
-		case $? in
+		status=$?
+		case $status in
 			0)
 				if [[ -n $value ]]; then
 					printf '%s\n' "$value"
 					return 0
 				fi
+				RETRY_COUNT=$((RETRY_COUNT + 1))
 				msg "$title" "A value is required."
 				;;
 			1|255)
 				return 1
 				;;
 			*)
-				return 1
+				RETRY_COUNT=$((RETRY_COUNT + 1))
+				if (( RETRY_COUNT >= MAX_RETRY )); then
+					error_box "$title" "Input failed repeatedly. Returning to the previous menu."
+					return 1
+				fi
 				;;
 		esac
 		initial_value="$value"
 	done
+
+	error_box "$title" "Input retry limit reached. Returning to the previous menu."
+	return 1
 }
 
 prompt_password() {
 	local title=${1:?title is required}
 	local first=""
 	local second=""
+	local status=0
+	local MAX_RETRY=3
+	local RETRY_COUNT=0
 
-	while true; do
+	while (( RETRY_COUNT < MAX_RETRY )); do
 		first="$(password_box "$title" "Enter the password." 12 76)"
-		case $? in
+		status=$?
+		case $status in
 			0)
 				;;
 			1|255)
@@ -424,12 +488,14 @@ prompt_password() {
 		esac
 
 		if [[ -z $first ]]; then
+			RETRY_COUNT=$((RETRY_COUNT + 1))
 			msg "$title" "The password cannot be empty."
 			continue
 		fi
 
 		second="$(password_box "$title" "Re-enter the password." 12 76)"
-		case $? in
+		status=$?
+		case $status in
 			0)
 				;;
 			1|255)
@@ -441,6 +507,7 @@ prompt_password() {
 		esac
 
 		if [[ $first != "$second" ]]; then
+			RETRY_COUNT=$((RETRY_COUNT + 1))
 			msg "$title" "Passwords did not match."
 			continue
 		fi
@@ -448,6 +515,9 @@ prompt_password() {
 		printf '%s\n' "$first"
 		return 0
 	done
+
+	error_box "$title" "Password retry limit reached. Returning to the previous menu."
+	return 1
 }
 
 configure_install_profile() {
@@ -633,8 +703,10 @@ run_install_flow() {
 show_disk_menu() {
 	local choice=""
 	local status=0
+	local MAX_RETRY=3
+	local RETRY_COUNT=0
 
-	while true; do
+	while (( RETRY_COUNT < MAX_RETRY )); do
 		choice="$(menu "Disk Setup" "Current disk: $(current_disk_label)" 16 76 6 \
 			"select" "Discover disks and choose an install target" \
 			"clear" "Clear the saved disk selection" \
@@ -643,13 +715,19 @@ show_disk_menu() {
 
 		case $status in
 			0)
+				RETRY_COUNT=0
 				;;
 			1|255)
 				return 0
 				;;
 			*)
+				RETRY_COUNT=$((RETRY_COUNT + 1))
+				if (( RETRY_COUNT >= MAX_RETRY )); then
+					error_box "Navigation Error" "The disk menu failed repeatedly. Switching back to the main menu."
+					return 1
+				fi
 				error_box "Navigation Error" "The disk menu returned an unexpected dialog status: $status"
-				return "$status"
+				continue
 				;;
 		esac
 
@@ -668,13 +746,18 @@ show_disk_menu() {
 				;;
 		esac
 	done
+
+	error_box "Navigation Error" "Disk menu retry limit reached. Returning to the main menu."
+	return 1
 }
 
 show_install_menu() {
 	local choice=""
 	local status=0
+	local MAX_RETRY=3
+	local RETRY_COUNT=0
 
-	while true; do
+	while (( RETRY_COUNT < MAX_RETRY )); do
 		choice="$(menu "Install System" "Selected disk: $(current_disk_label)" 16 76 6 \
 			"start" "Partition disk and install the base Arch Linux system" \
 			"config" "Configure hostname, timezone, locale, keyboard, and passwords" \
@@ -685,13 +768,19 @@ show_install_menu() {
 
 		case $status in
 			0)
+				RETRY_COUNT=0
 				;;
 			1|255)
 				return 0
 				;;
 			*)
+				RETRY_COUNT=$((RETRY_COUNT + 1))
+				if (( RETRY_COUNT >= MAX_RETRY )); then
+					error_box "Navigation Error" "The install menu failed repeatedly. Returning to the main menu."
+					return 1
+				fi
 				error_box "Navigation Error" "The install menu returned an unexpected dialog status: $status"
-				return "$status"
+				continue
 				;;
 		esac
 
@@ -724,20 +813,28 @@ show_install_menu() {
 				;;
 		esac
 	done
+
+	error_box "Navigation Error" "Install menu retry limit reached. Returning to the main menu."
+	return 1
 }
 
 main() {
 	local choice=""
 	local status=0
+	local MAX_RETRY=3
+	local RETRY_COUNT=0
 
-	require_dialog || exit $?
+	if ! require_dialog >/dev/null 2>&1; then
+		ARCHINSTALL_UI_FORCE_TTY=true
+		log_ui_error "[UI ERROR] dialog is unavailable at startup; using TTY fallback"
+	fi
 	ensure_executor_loaded || exit 1
 	ensure_state_file || exit 1
 	load_runtime_preferences || exit 1
 	prepare_live_console || true
 	warn_if_low_live_iso_space || true
 
-	while true; do
+	while (( RETRY_COUNT < MAX_RETRY )); do
 		choice="$(menu "Main Menu" "Choose an installer action." 16 76 7 \
 			"disk" "Disk setup and target selection" \
 			"install" "Base system installation" \
@@ -747,13 +844,19 @@ main() {
 
 		case $status in
 			0)
+				RETRY_COUNT=0
 				;;
 			1|255)
 				break
 				;;
 			*)
+				RETRY_COUNT=$((RETRY_COUNT + 1))
+				if (( RETRY_COUNT >= MAX_RETRY )); then
+					error_box "Navigation Error" "The main menu failed repeatedly. Exiting the installer."
+					exit 1
+				fi
 				error_box "Navigation Error" "The main menu returned an unexpected dialog status: $status"
-				exit "$status"
+				continue
 				;;
 		esac
 

@@ -18,6 +18,8 @@ estimate_target_required_space_mib() {
 		required_mib=$((required_mib + 1024))
 	fi
 
+	required_mib=$((required_mib + 1024))
+
 	printf '%s\n' "$required_mib"
 }
 

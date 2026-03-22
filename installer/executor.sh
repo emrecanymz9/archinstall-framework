@@ -339,6 +339,32 @@ run_optional_step() {
 	return 0
 }
 
+run_optional_step_with_retry() {
+	local step=${1:?step description is required}
+	local max_attempts=${2:?max attempts is required}
+	local attempt=1
+
+	shift 2
+
+	while (( attempt <= max_attempts )); do
+		install_ui_uses_dialog || print_install_info "$step (attempt $attempt/$max_attempts)"
+		log_line "[STEP] $step (attempt $attempt/$max_attempts)"
+
+		if run_logged_command "$@"; then
+			log_line "[ OK ] $step"
+			return 0
+		fi
+
+		if (( attempt == max_attempts )); then
+			log_line "[WARN] Non-critical step failed after retries: $step"
+			return 0
+		fi
+
+		log_line "[WARN] Retrying non-critical step: $step"
+		attempt=$((attempt + 1))
+	done
+}
+
 run_optional_shell_step() {
 	local step=${1:?step description is required}
 	local command_string=${2:?command string is required}
