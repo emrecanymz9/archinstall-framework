@@ -22,6 +22,10 @@ source "$SCRIPT_DIR/modules/bootloader.sh"
 source "$SCRIPT_DIR/modules/network.sh"
 # shellcheck source=installer/modules/desktop.sh
 source "$SCRIPT_DIR/modules/desktop.sh"
+# shellcheck source=installer/modules/disk/layout.sh
+source "$SCRIPT_DIR/modules/disk/layout.sh"
+# shellcheck source=installer/modules/disk/space.sh
+source "$SCRIPT_DIR/modules/disk/space.sh"
 
 flag_enabled() {
 	case ${1:-false} in
@@ -127,9 +131,10 @@ build_pacstrap_package_list() {
 	local -n package_ref=${4:?package reference is required}
 	local desktop_profile=${5:-none}
 	local display_manager=${6:-none}
+	local display_mode=${7:-auto}
 	local -a desktop_packages=()
 
-	package_ref=(base linux linux-firmware sudo networkmanager iptables-nft mkinitcpio)
+	package_ref=(base base-devel linux linux-firmware sudo networkmanager iptables-nft mkinitcpio make git dialog)
 	if [[ $filesystem == "btrfs" ]]; then
 		package_ref+=(btrfs-progs)
 	fi
@@ -139,7 +144,7 @@ build_pacstrap_package_list() {
 	if [[ $boot_mode == "bios" ]]; then
 		package_ref+=(grub)
 	fi
-	if desktop_profile_packages "$desktop_profile" "$display_manager" desktop_packages; then
+	if desktop_profile_packages "$desktop_profile" "$display_manager" "$display_mode" desktop_packages; then
 		if [[ ${#desktop_packages[@]} -gt 0 ]]; then
 			package_ref+=("${desktop_packages[@]}")
 		fi
@@ -203,20 +208,6 @@ require_commands() {
 
 	error_box "Missing Commands" "Install the required tools before continuing:\n\n${missing[*]}"
 	return 1
-}
-
-partition_path() {
-	local disk=${1:?disk is required}
-	local number=${2:?partition number is required}
-
-	case "$disk" in
-		*nvme*|*mmcblk*)
-			printf '%sp%s\n' "$disk" "$number"
-			;;
-		*)
-			printf '%s%s\n' "$disk" "$number"
-			;;
-	esac
 }
 
 log_line() {
@@ -558,11 +549,11 @@ resolve_target_partitions() {
 	root_partition="$(get_state "ROOT_PART" 2>/dev/null || true)"
 
 	if [[ $boot_mode == "uefi" ]]; then
-		[[ -n $efi_partition ]] || efi_partition="$(partition_path "$disk" 1)"
-		[[ -n $root_partition ]] || root_partition="$(partition_path "$disk" 2)"
+		[[ -n $efi_partition ]] || efi_partition="$(disk_partition_path "$disk" 1)"
+		[[ -n $root_partition ]] || root_partition="$(disk_partition_path "$disk" 2)"
 	else
 		efi_partition="-"
-		[[ -n $root_partition ]] || root_partition="$(partition_path "$disk" 1)"
+		[[ -n $root_partition ]] || root_partition="$(disk_partition_path "$disk" 1)"
 	fi
 
 	if [[ $boot_mode == "uefi" && ! -b $efi_partition ]]; then
@@ -587,6 +578,8 @@ build_chroot_script() {
 	local enable_zram=${6:?zram flag is required}
 	local desktop_profile=${7:-none}
 	local display_manager=${8:-none}
+	local display_mode=${9:-auto}
+	local resolved_display_mode=${10:-wayland}
 	local hostname=""
 	local timezone=""
 	local locale=""
@@ -609,6 +602,8 @@ build_chroot_script() {
 	local quoted_enable_zram=""
 	local quoted_desktop_profile=""
 	local quoted_display_manager=""
+	local quoted_display_mode=""
+	local quoted_resolved_display_mode=""
 
 	hostname="$(get_state "HOSTNAME" 2>/dev/null || printf 'archlinux')"
 	timezone="$(get_state "TIMEZONE" 2>/dev/null || printf 'Europe/Istanbul')"
@@ -640,6 +635,8 @@ build_chroot_script() {
 	printf -v quoted_enable_zram '%q' "$enable_zram"
 	printf -v quoted_desktop_profile '%q' "$desktop_profile"
 	printf -v quoted_display_manager '%q' "$display_manager"
+	printf -v quoted_display_mode '%q' "$display_mode"
+	printf -v quoted_resolved_display_mode '%q' "$resolved_display_mode"
 
 	cat <<EOF
 set -euo pipefail
@@ -659,6 +656,8 @@ TARGET_ROOT_MOUNT_OPTIONS=$quoted_root_mount_options
 TARGET_ENABLE_ZRAM=$quoted_enable_zram
 TARGET_DESKTOP_PROFILE=$quoted_desktop_profile
 TARGET_DISPLAY_MANAGER=$quoted_display_manager
+TARGET_DISPLAY_MODE=$quoted_display_mode
+TARGET_RESOLVED_DISPLAY_MODE=$quoted_resolved_display_mode
 
 echo "[DEBUG] Applying mkinitcpio hooks"
 sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect modconf block filesystems keyboard fsck)/' /etc/mkinitcpio.conf
@@ -674,11 +673,12 @@ printf '%s\n' "LANG=\$TARGET_LOCALE" > /etc/locale.conf
 printf '%s\n' "KEYMAP=\$TARGET_KEYMAP" > /etc/vconsole.conf
 
 printf '%s\n' "\$TARGET_HOSTNAME" > /etc/hostname
-cat > /etc/hosts <<EOT
+cat > /etc/hosts <<'EOT'
 127.0.0.1 localhost
 ::1       localhost
-127.0.1.1 \$TARGET_HOSTNAME.localdomain \$TARGET_HOSTNAME
+127.0.1.1 TARGET_HOSTNAME.localdomain TARGET_HOSTNAME
 EOT
+sed -i "s/TARGET_HOSTNAME/\$TARGET_HOSTNAME/g" /etc/hosts
 
 if ! id -u "\$TARGET_USERNAME" >/dev/null 2>&1; then
 	useradd -m -G wheel -s /bin/bash "\$TARGET_USERNAME"
@@ -704,13 +704,39 @@ EOT
 fi
 
 write_display_manager_fallback_notice() {
+	local fallback_command=\${1:-startplasma-wayland}
 	install -d -m 0755 /etc/profile.d
-	cat > /etc/profile.d/archinstall-desktop-fallback.sh <<'EOT'
-if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" && "$(tty 2>/dev/null || true)" == /dev/tty* ]]; then
-	echo "Display manager failed, start KDE manually with: startplasma-wayland"
+	cat > /etc/profile.d/archinstall-desktop-fallback.sh <<EOT
+if [[ -z "\${DISPLAY:-}" && -z "\${WAYLAND_DISPLAY:-}" && "\$(tty 2>/dev/null || true)" == /dev/tty* ]]; then
+	echo "Display manager failed, start KDE manually with: \$fallback_command"
 fi
 EOT
 }
+
+plasma_session_command() {
+	case \${1:-wayland} in
+		x11)
+			printf 'startplasma-x11\n'
+			;;
+		*)
+			printf 'startplasma-wayland\n'
+			;;
+	esac
+}
+
+plasma_sddm_session() {
+	case \${1:-wayland} in
+		x11)
+			printf 'plasmax11.desktop\n'
+			;;
+		*)
+			printf 'plasma.desktop\n'
+			;;
+	esac
+}
+
+PLASMA_SESSION_COMMAND="\$(plasma_session_command "\$TARGET_RESOLVED_DISPLAY_MODE")"
+PLASMA_SDDM_SESSION="\$(plasma_sddm_session "\$TARGET_RESOLVED_DISPLAY_MODE")"
 
 mkinitcpio -P
 
@@ -724,33 +750,46 @@ if [[ \$TARGET_DESKTOP_PROFILE == "kde" ]]; then
 	case \$TARGET_DISPLAY_MANAGER in
 		sddm)
 			if command -v sddm >/dev/null 2>&1; then
+				install -d -m 0755 /etc/sddm.conf.d /var/lib/sddm
+				cat > /etc/sddm.conf.d/archinstall.conf <<'EOT'
+[General]
+DisplayServer=wayland
+GreeterEnvironment=QT_WAYLAND_SHELL_INTEGRATION=layer-shell
+EOT
+				cat > /var/lib/sddm/state.conf <<EOT
+[Last]
+Session=\$PLASMA_SDDM_SESSION
+EOT
+				if [[ \$TARGET_RESOLVED_DISPLAY_MODE == "x11" ]]; then
+					sed -i 's/^DisplayServer=.*/DisplayServer=x11/' /etc/sddm.conf.d/archinstall.conf
+				fi
 				systemctl enable sddm.service
 				rm -f /etc/profile.d/archinstall-desktop-fallback.sh
 			else
 				echo "[WARN] sddm is not installed in the target system. Leaving the system on TTY."
-				write_display_manager_fallback_notice
+				write_display_manager_fallback_notice "\$PLASMA_SESSION_COMMAND"
 			fi
 			;;
 		greetd)
 			if command -v tuigreet >/dev/null 2>&1; then
 				install -d -m 0755 /etc/greetd
-				cat > /etc/greetd/config.toml <<'EOT'
+				cat > /etc/greetd/config.toml <<EOT
 [terminal]
 vt = 1
 
 [default_session]
-command = "tuigreet --cmd startplasma-wayland"
+command = "tuigreet --cmd \$PLASMA_SESSION_COMMAND"
 user = "greeter"
 EOT
 				systemctl enable greetd.service
 				rm -f /etc/profile.d/archinstall-desktop-fallback.sh
 			else
 				echo "[WARN] greetd-tuigreet is not installed in the target system. Leaving the system on TTY."
-				write_display_manager_fallback_notice
+				write_display_manager_fallback_notice "\$PLASMA_SESSION_COMMAND"
 			fi
 			;;
 		*)
-			write_display_manager_fallback_notice
+			write_display_manager_fallback_notice "\$PLASMA_SESSION_COMMAND"
 			;;
 	esac
 fi
@@ -809,18 +848,20 @@ run_chroot_configuration() {
 	local enable_zram=${6:?zram flag is required}
 	local desktop_profile=${7:-none}
 	local display_manager=${8:-none}
+	local display_mode=${9:-auto}
+	local resolved_display_mode=${10:-wayland}
 
 	install_ui_uses_dialog || print_install_info "Configuring the new system and installing the bootloader"
 	log_line "[STEP] Configuring the target system inside chroot"
 
 	if install_ui_uses_dialog; then
-		if build_chroot_script "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" | arch-chroot /mnt /bin/bash >> "$ARCHINSTALL_LOG" 2>&1
+		if build_chroot_script "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_mode" "$resolved_display_mode" | arch-chroot /mnt /bin/bash >> "$ARCHINSTALL_LOG" 2>&1
 		then
 			log_line "[ OK ] Configuring the target system inside chroot"
 			return 0
 		fi
 	else
-		if build_chroot_script "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" | arch-chroot /mnt /bin/bash 2>&1 | tee -a "$ARCHINSTALL_LOG"
+		if build_chroot_script "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_mode" "$resolved_display_mode" | arch-chroot /mnt /bin/bash 2>&1 | tee -a "$ARCHINSTALL_LOG"
 		then
 			log_line "[ OK ] Configuring the target system inside chroot"
 			return 0
@@ -843,6 +884,9 @@ run_install() {
 	local enable_zram=""
 	local desktop_profile=""
 	local display_manager=""
+	local display_mode=""
+	local resolved_display_mode=""
+	local required_space_mib=""
 	local root_mount_options=""
 	local install_status=0
 	local -a resolved_partitions=()
@@ -861,6 +905,7 @@ run_install() {
 	enable_zram="$(get_state "ENABLE_ZRAM" 2>/dev/null || printf 'false')"
 	desktop_profile="$(get_state "DESKTOP_PROFILE" 2>/dev/null || printf 'none')"
 	display_manager="$(get_state "DISPLAY_MANAGER" 2>/dev/null || printf 'none')"
+	display_mode="$(get_state "DISPLAY_MODE" 2>/dev/null || printf 'auto')"
 	[[ -n $boot_mode ]] || boot_mode="$(detect_boot_mode)"
 	case $boot_mode in
 		uefi|bios)
@@ -881,7 +926,7 @@ run_install() {
 		return 1
 	fi
 
-	build_pacstrap_package_list "$boot_mode" "$filesystem" "$enable_zram" pacstrap_packages "$desktop_profile" "$display_manager"
+	build_pacstrap_package_list "$boot_mode" "$filesystem" "$enable_zram" pacstrap_packages "$desktop_profile" "$display_manager" "$display_mode"
 
 	: > "$ARCHINSTALL_LOG" || {
 		print_install_error "Could not write the install log: $ARCHINSTALL_LOG"
@@ -902,7 +947,53 @@ run_install() {
 		log_line "Filesystem: $filesystem"
 		log_line "Zram: $enable_zram"
 		log_line "Desktop profile: $desktop_profile"
+		log_line "Display mode: $display_mode"
 		log_line "Display manager: $display_manager"
+
+		resolve_display_mode() {
+			local requested_mode=${1:-auto}
+			local detected_virtualization="false"
+			local has_drm_device="false"
+			local has_gpu="false"
+
+			case $requested_mode in
+				wayland|x11)
+					printf '%s\n' "$requested_mode"
+					return 0
+					;;
+				auto)
+					;;
+				*)
+					printf 'wayland\n'
+					return 0
+					;;
+			esac
+
+			if command -v systemd-detect-virt >/dev/null 2>&1 && systemd-detect-virt --quiet; then
+				detected_virtualization="true"
+			fi
+			if compgen -G '/dev/dri/card*' >/dev/null 2>&1; then
+				has_drm_device="true"
+			fi
+			if command -v lspci >/dev/null 2>&1 && lspci | grep -Eiq 'vga|3d|display'; then
+				has_gpu="true"
+			fi
+
+			if [[ $detected_virtualization == "true" ]]; then
+				printf 'x11\n'
+				return 0
+			fi
+			if [[ $has_drm_device == "true" || $has_gpu == "true" ]]; then
+				printf 'wayland\n'
+				return 0
+			fi
+
+			printf 'x11\n'
+		}
+
+		resolved_display_mode="$(resolve_display_mode "$display_mode")"
+		set_state "RESOLVED_DISPLAY_MODE" "$resolved_display_mode" || exit 1
+		log_line "Resolved display mode: $resolved_display_mode"
 		if flag_enabled "$DEV_MODE"; then
 			log_line "DEV_MODE enabled: SKIP_PARTITION=$SKIP_PARTITION SKIP_PACSTRAP=$SKIP_PACSTRAP SKIP_CHROOT=$SKIP_CHROOT"
 		fi
@@ -971,6 +1062,8 @@ run_install() {
 		fi
 		log_partition_metadata "$root_partition" "$efi_partition"
 		log_mounted_filesystems "$filesystem"
+		required_space_mib="$(estimate_target_required_space_mib "$desktop_profile" "$filesystem")"
+		run_step "Checking target free space" ensure_target_has_space /mnt "$required_space_mib" || exit 1
 
 		if flag_enabled "$SKIP_PACSTRAP"; then
 			log_line "Skipping pacstrap because SKIP_PACSTRAP=$SKIP_PACSTRAP"
@@ -993,7 +1086,7 @@ run_install() {
 			else
 				root_mount_options=""
 			fi
-			run_chroot_configuration "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" || exit 1
+			run_chroot_configuration "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_mode" "$resolved_display_mode" || exit 1
 		fi
 
 		ARCHINSTALL_INSTALL_SUCCESS=true

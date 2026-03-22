@@ -6,7 +6,24 @@ desktop_profile_label() {
 			printf 'None\n'
 			;;
 		kde)
-			printf 'KDE Plasma (Wayland)\n'
+			printf 'KDE Plasma\n'
+			;;
+		*)
+			printf '%s\n' "$1"
+			;;
+	esac
+}
+
+display_mode_label() {
+	case ${1:-auto} in
+		auto)
+			printf 'Auto (prefer Wayland, fallback X11)\n'
+			;;
+		wayland)
+			printf 'Wayland\n'
+			;;
+		x11)
+			printf 'X11\n'
 			;;
 		*)
 			printf '%s\n' "$1"
@@ -36,7 +53,7 @@ select_desktop_profile() {
 
 	selected="$(menu "Desktop Profile" "Choose an optional desktop profile." 14 76 4 \
 		"none" "No desktop environment" \
-		"kde" "KDE Plasma (Wayland) with desktop packages")"
+		"kde" "KDE Plasma with Wayland and X11 session support")"
 	case $? in
 		0)
 			printf '%s\n' "$selected"
@@ -77,10 +94,39 @@ select_display_manager() {
 	esac
 }
 
+select_display_mode() {
+	local desktop_profile=${1:-none}
+	local current_mode=${2:-auto}
+	local selected="auto"
+
+	if [[ $desktop_profile != "kde" ]]; then
+		printf 'auto\n'
+		return 0
+	fi
+
+	selected="$(menu "Display Mode" "Choose the preferred KDE session mode.\n\nCurrent: $(display_mode_label "$current_mode")" 15 78 4 \
+		"auto" "Prefer Wayland, fall back to X11 for VMs or weak graphics" \
+		"wayland" "Force startplasma-wayland" \
+		"x11" "Force startplasma-x11")"
+	case $? in
+		0)
+			printf '%s\n' "$selected"
+			return 0
+			;;
+		1|255)
+			return 1
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
 desktop_profile_packages() {
 	local desktop_profile=${1:-none}
 	local display_manager=${2:-none}
-	local -n package_ref=${3:?package reference is required}
+	local display_mode=${3:-auto}
+	local -n package_ref=${4:?package reference is required}
 
 	package_ref=()
 
@@ -90,6 +136,9 @@ desktop_profile_packages() {
 			;;
 		kde)
 			package_ref=(
+				git
+				dialog
+				plasma-x11-session
 				plasma-desktop
 				plasma-workspace
 				plasma-nm
@@ -110,7 +159,15 @@ desktop_profile_packages() {
 				wireplumber
 				bluez
 				bluez-utils
+				xorg-server
 			)
+			case $display_mode in
+				auto|wayland|x11)
+					;;
+				*)
+					return 1
+					;;
+			esac
 			case $display_manager in
 				sddm)
 					package_ref+=(sddm)

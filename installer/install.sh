@@ -29,6 +29,83 @@ INSTALL_ROOT_PASSWORD=${INSTALL_ROOT_PASSWORD:-""}
 ZRAM=${ZRAM:-false}
 LIVE_CONSOLE_FONT=${LIVE_CONSOLE_FONT:-ter-v16n}
 
+estimate_install_step_count() {
+	local boot_mode=${1:-uefi}
+	local desktop_profile=${2:-none}
+	local total_steps=14
+
+	if [[ $boot_mode == "uefi" ]]; then
+		total_steps=$((total_steps + 1))
+	fi
+	if [[ $desktop_profile == "kde" ]]; then
+		total_steps=$((total_steps + 2))
+	fi
+
+	printf '%s\n' "$total_steps"
+}
+
+last_install_log_excerpt() {
+	local log_file=${1:?log file is required}
+
+	if [[ ! -f $log_file ]]; then
+		printf 'Waiting for installer log output...\n'
+		return 0
+	fi
+
+	tail -n 6 "$log_file" 2>/dev/null | sed 's/"/'"'"'/g' | tr -cd '\11\12\15\40-\176'
+}
+
+install_progress_percent() {
+	local log_file=${1:?log file is required}
+	local expected_steps=${2:?expected steps is required}
+	local started_steps=0
+	local percent=0
+
+	if [[ -f $log_file ]]; then
+		started_steps="$(grep -c '^\[[0-9-]\{10\} [0-9:]\{8\}\] \[STEP\]' "$log_file" 2>/dev/null || printf '0')"
+	fi
+
+	if [[ ! ${started_steps:-0} =~ ^[0-9]+$ ]]; then
+		started_steps=0
+	fi
+
+	if (( expected_steps <= 0 )); then
+		printf '0\n'
+		return 0
+	fi
+
+	percent=$(( started_steps * 100 / expected_steps ))
+	if (( percent > 95 )); then
+		percent=95
+	fi
+
+	printf '%s\n' "$percent"
+}
+
+show_install_progress_dialog() {
+	local log_file=${1:?log file is required}
+	local percent=${2:?percent is required}
+	local current_step=${3:-Preparing install}
+	local boot_mode=${4:-auto}
+	local filesystem=${5:-ext4}
+	local desktop_profile=${6:-none}
+	local display_mode=${7:-auto}
+	local excerpt=""
+
+	excerpt="$(last_install_log_excerpt "$log_file")"
+	dialog \
+		--clear \
+		--backtitle "$ARCHINSTALL_BACKTITLE" \
+		--title "Installing Arch Linux" \
+		--no-buttons \
+		--mixedgauge "Progress: ${percent}%\n\nCurrent step: $current_step\nBoot mode: $boot_mode\nFilesystem: $filesystem\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay mode: $(display_mode_label "$display_mode")\n\nRecent log output:\n$excerpt" \
+		22 100 "$percent" 4 \
+		"Boot" "$boot_mode" 0 \
+		"Filesystem" "$filesystem" 0 \
+		"Desktop" "$(desktop_profile_label "$desktop_profile")" 0 \
+		"Session" "$(display_mode_label "$display_mode")" 0
+}
+
 apply_live_console_keymap() {
 	local keymap=${1:-us}
 
@@ -157,6 +234,8 @@ show_install_result_dialog() {
 	local filesystem=""
 	local boot_mode=""
 	local desktop_profile=""
+	local display_mode=""
+	local resolved_display_mode=""
 	local enable_zram=""
 	local disk_type=""
 	local status_label="FAILED"
@@ -168,13 +247,15 @@ show_install_result_dialog() {
 	boot_mode="$(state_or_default "BOOT_MODE" "auto")"
 	disk_type="$(state_or_default "DISK_TYPE" "auto")"
 	desktop_profile="$(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")"
+	display_mode="$(display_mode_label "$(state_or_default "DISPLAY_MODE" "auto")")"
+	resolved_display_mode="$(display_mode_label "$(state_or_default "RESOLVED_DISPLAY_MODE" "auto")")"
 	enable_zram="$(state_or_default "ENABLE_ZRAM" "false")"
 	local keymap="$(state_or_default "KEYMAP" "us")"
 	if [[ $install_status -eq 0 ]]; then
 		status_label="SUCCESS"
 	fi
 
-	prompt="Disk: $disk\nDisk type: $disk_type\nFilesystem: $filesystem\nBoot mode: $boot_mode\nKeyboard: $keymap\nDesktop: $desktop_profile\nZRAM: $enable_zram\nStatus: $status_label\n\nInstall log: ${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}"
+	prompt="Disk: $disk\nDisk type: $disk_type\nFilesystem: $filesystem\nBoot mode: $boot_mode\nKeyboard: $keymap\nDesktop: $desktop_profile\nDisplay mode: $display_mode\nResolved mode: $resolved_display_mode\nZRAM: $enable_zram\nStatus: $status_label\n\nInstall log: ${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}"
 
 	choice="$(menu "Installation Complete" "$prompt" 18 72 4 \
 		"reboot" "Reboot system" \
@@ -206,41 +287,29 @@ show_install_result_dialog() {
 run_install_with_dialog() {
 	local install_pid=0
 	local install_status=1
-	local action=""
 	local log_file="${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}"
+	local expected_steps=0
+	local percent=0
+	local current_step="Preparing install"
+	local boot_mode=""
+	local filesystem=""
+	local desktop_profile=""
+	local display_mode=""
 
 	: > "$log_file" || return 1
+	boot_mode="$(state_or_default "BOOT_MODE" "auto")"
+	filesystem="$(state_or_default "FILESYSTEM" "ext4")"
+	desktop_profile="$(state_or_default "DESKTOP_PROFILE" "none")"
+	display_mode="$(state_or_default "DISPLAY_MODE" "auto")"
+	expected_steps="$(estimate_install_step_count "$boot_mode" "$desktop_profile")"
 	INSTALL_UI_MODE=dialog run_install >> "$log_file" 2>&1 &
 	install_pid=$!
 
-	while true; do
-		dialog --title "Install Log" --tailbox "$log_file" 22 100
-
-		if kill -0 "$install_pid" 2>/dev/null; then
-			action="$(menu "Install Running" "The install is still running in the background.\n\nResume the live log view or abort the install." 14 72 3 \
-				"resume" "Return to the live install log" \
-				"abort" "Stop the current installation")"
-			case $? in
-				0)
-					case "$action" in
-						resume)
-							continue
-							;;
-						abort)
-							kill -INT "$install_pid" 2>/dev/null || true
-							wait "$install_pid" || true
-							clear_screen
-							return 130
-							;;
-					esac
-					;;
-				1|255)
-					continue
-					;;
-			esac
-		fi
-
-		break
+	while kill -0 "$install_pid" 2>/dev/null; do
+		percent="$(install_progress_percent "$log_file" "$expected_steps")"
+		current_step="$(grep '^\[[0-9-]\{10\} [0-9:]\{8\}\] \[STEP\]' "$log_file" 2>/dev/null | tail -n 1 | sed 's/^.*\[STEP\] //' || printf 'Preparing install')"
+		show_install_progress_dialog "$log_file" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode"
+		sleep 1
 	done
 
 	wait "$install_pid"
@@ -394,6 +463,7 @@ configure_install_profile() {
 	local enable_zram=""
 	local desktop_profile=""
 	local display_manager=""
+	local display_mode=""
 
 	hostname="$(prompt_required_input "Hostname" "Set the system hostname." "$(state_or_default "HOSTNAME" "archlinux")")" || return 1
 	timezone="$(select_timezone_value "$(state_or_default "TIMEZONE" "Europe/Istanbul")")" || return 1
@@ -403,6 +473,7 @@ configure_install_profile() {
 	filesystem="$(select_filesystem "$(state_or_default "FILESYSTEM" "ext4")")" || return 1
 	enable_zram="$(select_zram_preference "$(state_or_default "ENABLE_ZRAM" "$ZRAM")")" || return 1
 	desktop_profile="$(select_desktop_profile)" || return 1
+	display_mode="$(select_display_mode "$desktop_profile" "$(state_or_default "DISPLAY_MODE" "auto")")" || return 1
 	display_manager="$(select_display_manager "$desktop_profile")" || return 1
 	user_password="$(prompt_password "User Password")" || return 1
 	root_password="$(prompt_password "Root Password")" || return 1
@@ -416,12 +487,13 @@ configure_install_profile() {
 	set_state "FILESYSTEM" "$filesystem" || return 1
 	set_state "ENABLE_ZRAM" "$enable_zram" || return 1
 	set_state "DESKTOP_PROFILE" "$desktop_profile" || return 1
+	set_state "DISPLAY_MODE" "$display_mode" || return 1
 	set_state "DISPLAY_MANAGER" "$display_manager" || return 1
 	set_state "BOOT_MODE" "$boot_mode" || return 1
 	INSTALL_USER_PASSWORD="$user_password"
 	INSTALL_ROOT_PASSWORD="$root_password"
 
-	msg "Profile Saved" "Installation profile updated.\n\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nFilesystem: $filesystem\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay manager: $(display_manager_label "$display_manager")\nBoot mode: $boot_mode\nUser password: set\nRoot password: set"
+	msg "Profile Saved" "Installation profile updated.\n\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nFilesystem: $filesystem\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay mode: $(display_mode_label "$display_mode")\nDisplay manager: $(display_manager_label "$display_manager")\nBoot mode: $boot_mode\nUser password: set\nRoot password: set"
 }
 
 validate_install_profile() {
@@ -467,6 +539,8 @@ show_state_summary() {
 	local filesystem
 	local enable_zram
 	local desktop_profile
+	local display_mode
+	local resolved_display_mode
 	local display_manager
 	local disk_type
 	local user_password_state
@@ -485,13 +559,15 @@ show_state_summary() {
 	disk_type="$(state_or_default "DISK_TYPE" "Unknown")"
 	enable_zram="$(state_or_default "ENABLE_ZRAM" "false")"
 	desktop_profile="$(state_or_default "DESKTOP_PROFILE" "none")"
+	display_mode="$(state_or_default "DISPLAY_MODE" "auto")"
+	resolved_display_mode="$(state_or_default "RESOLVED_DISPLAY_MODE" "auto")"
 	display_manager="$(state_or_default "DISPLAY_MANAGER" "none")"
 	user_password_state="not set"
 	root_password_state="not set"
 	[[ -n $INSTALL_USER_PASSWORD ]] && user_password_state="set"
 	[[ -n $INSTALL_ROOT_PASSWORD ]] && root_password_state="set"
 
-	msg "Installer State" "Saved state:\n\nDisk: $disk\nDisk type: $disk_type\nBoot mode: $boot_mode\nEFI: $efi_partition\nRoot: $root_partition\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nFilesystem: $filesystem\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay manager: $(display_manager_label "$display_manager")\nUser password: $user_password_state\nRoot password: $root_password_state\nDEV_MODE: $DEV_MODE\nUI mode: $INSTALL_UI_MODE" 24 76
+	msg "Installer State" "Saved state:\n\nDisk: $disk\nDisk type: $disk_type\nBoot mode: $boot_mode\nEFI: $efi_partition\nRoot: $root_partition\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nFilesystem: $filesystem\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay mode: $(display_mode_label "$display_mode")\nResolved mode: $(display_mode_label "$resolved_display_mode")\nDisplay manager: $(display_manager_label "$display_manager")\nUser password: $user_password_state\nRoot password: $root_password_state\nDEV_MODE: $DEV_MODE\nUI mode: $INSTALL_UI_MODE" 24 76
 }
 
 confirm_installation() {
@@ -513,7 +589,7 @@ confirm_installation() {
 
 	validate_install_profile || return 1
 
-	message="This will prepare a bootable Arch Linux system on:\n\n$disk\n\nDisk type: $(state_or_default "DISK_TYPE" "auto")\nBoot mode: $(state_or_default "BOOT_MODE" "auto")\nHostname: $(state_or_default "HOSTNAME" "archlinux")\nTimezone: $(state_or_default "TIMEZONE" "Europe/Istanbul")\nLocale: $(state_or_default "LOCALE" "en_US.UTF-8")\nKeyboard: $(state_or_default "KEYMAP" "us")\nUser: $(state_or_default "USERNAME" "archuser")\nFilesystem: $(state_or_default "FILESYSTEM" "ext4")\nZram: $(state_or_default "ENABLE_ZRAM" "false")\nDesktop: $(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")\nDisplay manager: $(display_manager_label "$(state_or_default "DISPLAY_MANAGER" "none")")\n\nDestructive steps may erase existing data."
+	message="This will prepare a bootable Arch Linux system on:\n\n$disk\n\nDisk type: $(state_or_default "DISK_TYPE" "auto")\nBoot mode: $(state_or_default "BOOT_MODE" "auto")\nHostname: $(state_or_default "HOSTNAME" "archlinux")\nTimezone: $(state_or_default "TIMEZONE" "Europe/Istanbul")\nLocale: $(state_or_default "LOCALE" "en_US.UTF-8")\nKeyboard: $(state_or_default "KEYMAP" "us")\nUser: $(state_or_default "USERNAME" "archuser")\nFilesystem: $(state_or_default "FILESYSTEM" "ext4")\nZram: $(state_or_default "ENABLE_ZRAM" "false")\nDesktop: $(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")\nDisplay mode: $(display_mode_label "$(state_or_default "DISPLAY_MODE" "auto")")\nDisplay manager: $(display_manager_label "$(state_or_default "DISPLAY_MANAGER" "none")")\n\nDestructive steps may erase existing data."
 	if flag_enabled "$DEV_MODE"; then
 		message+="\n\nDev mode flags:\nSKIP_PARTITION=$SKIP_PARTITION\nSKIP_PACSTRAP=$SKIP_PACSTRAP\nSKIP_CHROOT=$SKIP_CHROOT\nINSTALL_UI_MODE=$INSTALL_UI_MODE"
 	fi

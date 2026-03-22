@@ -2,25 +2,7 @@
 
 Modular Arch Linux installer written in Bash for the Arch Linux live ISO.
 
-The installer targets a small, explicit workflow:
-# ArchInstall Framework
-
-Modular Arch Linux installer written in Bash for the Arch Linux live ISO.
-
-The installer targets a small, explicit workflow:
-
-- dialog-based navigation
-- ext4 or btrfs root installation
-- optional zram
-- UEFI with systemd-boot or BIOS with GRUB
-- live install logs in dialog without gauge mode
-- explicit fstab generation and bootloader configuration
-- automatic live console setup with `loadkeys` and `setfont`
-- SSD/NVMe versus HDD mount-option detection
-
-Warning: the installer wipes the selected disk.
-
-VM testing is strongly recommended before using it on real hardware.
+Warning: this installer wipes the selected disk. Test in a VM before using real hardware.
 
 ## Quick Start
 
@@ -29,17 +11,34 @@ Run these commands from the Arch ISO as root:
 ```bash
 loadkeys us
 setfont ter-v16n
+pacman-key --init
+pacman-key --populate archlinux
 pacman -Sy archlinux-keyring --noconfirm
 pacman -S --needed --noconfirm git dialog reflector
-reflector --latest 10 --sort rate --save /etc/pacman.d/mirrorlist
+reflector --latest 10 --protocol https --sort rate --save /etc/pacman.d/mirrorlist
 git clone https://github.com/emrecanymz9/archinstall-framework.git
 cd archinstall-framework
 bash installer/install.sh
 ```
 
-The installer intentionally avoids large live-ISO package installs. Do not install `base-devel` into the RAM-backed Arch ISO root unless you are building a separate development environment outside the normal ISO workflow.
+The installer intentionally keeps the live ISO minimal. Heavy packages belong in the target system through `pacstrap`, not in the RAM-backed ISO environment.
 
-## Running From Arch ISO
+## Features
+
+- dialog-based install flow
+- ext4 and btrfs root installs
+- SSD, HDD, and NVMe mount-option detection
+- disk-space validation on `/mnt` before `pacstrap`
+- UEFI with systemd-boot or BIOS with GRUB
+- optional zram via `zram-generator`
+- KDE Plasma profile with both Wayland and X11 session support
+- display mode selection: `Auto`, `Wayland`, `X11`
+- `sddm` or `greetd + tuigreet`
+- pacman-key and mirror bootstrap hardening
+- install log at `/tmp/archinstall_install.log`
+- mixed-gauge dialog progress view with recent log lines
+
+## Live ISO Rules
 
 Safe console defaults:
 
@@ -48,66 +47,33 @@ loadkeys us
 setfont ter-v16n
 ```
 
-Why the installer avoids `base-devel` on the live ISO:
+Why the installer avoids large ISO-side package installs:
 
-- the Arch ISO root filesystem is RAM-backed and limited
+- the Arch ISO root filesystem is RAM-backed
 - large toolchains can exhaust `/` and destabilize the session
-- heavy packages belong in the target system through `pacstrap`, not in the live environment
-- `make full-deps` is only for non-ISO development workflows
-
-## Features
-
-- dialog-based multi-menu navigation
-- disk discovery with destructive action confirmation
-- explicit ext4 and btrfs installation paths
-- btrfs `@` and `@home` subvolumes with `compress=zstd`
-- UUID-based fstab generation
-- separate user password and root password prompts
-- timezone, locale, and keyboard-layout selection with custom input
-- optional KDE Plasma profile
-- SDDM support
-- greetd configuration path for qtgreet
-- zram support through `zram-generator`
-- live install log view through `dialog --tailbox`
-- install logging in `/tmp/archinstall_install.log`
-
-## Layout
-
-```text
-installer/
-  disk.sh        Disk discovery and selection
-  executor.sh    Install core and chroot configuration
-  install.sh     Main dialog UI entry point
-  modules/
-    bootloader.sh  Boot mode helpers
-    desktop.sh     Desktop profile helpers
-    network.sh     Live ISO pacman bootstrap helpers
-    profile.sh     Timezone, locale, and keymap selection helpers
-  postinstall.sh Placeholder for future post-install hooks
-  state.sh       Shared installer state helpers
-  ui.sh          Reusable dialog wrappers
-```
+- `base-devel` should be installed into the target system, not the live ISO
+- `make full-deps` is for development machines, not the normal ISO workflow
 
 ## Requirements
 
-Run from an Arch Linux live ISO as root with these tools available:
+Minimal live ISO packages:
 
 ```bash
 pacman -Sy archlinux-keyring --noconfirm
 pacman -S --needed --noconfirm git dialog reflector
 ```
 
-The installer expects the standard Arch ISO storage tooling already present in the live environment, such as `lsblk`, `wipefs`, `mount`, `umount`, `parted`, `pacstrap`, `blkid`, and `arch-chroot`.
+The installer expects the normal Arch ISO tooling already present, including `lsblk`, `wipefs`, `mount`, `umount`, `parted`, `pacstrap`, `blkid`, and `arch-chroot`.
 
 ## Usage
 
-Run the installer directly:
+Run directly:
 
 ```bash
 bash installer/install.sh
 ```
 
-Or use the Makefile helpers:
+Or use the helpers:
 
 ```bash
 make deps
@@ -115,13 +81,13 @@ make mirror
 make run
 ```
 
-For a non-ISO development machine where you do want extra packages:
+For non-ISO development machines:
 
 ```bash
 make full-deps
 ```
 
-Developer mode keeps the plain shell output visible:
+Developer mode keeps terminal output visible:
 
 ```bash
 DEV_MODE=true bash installer/install.sh
@@ -129,8 +95,8 @@ DEV_MODE=true bash installer/install.sh
 
 ## Install Flow
 
-1. Open Disk Setup and select the target disk.
-2. Open Install System.
+1. Open `Disk Setup` and choose the install target.
+2. Open `Install System`.
 3. Configure:
    - hostname
    - timezone
@@ -142,48 +108,49 @@ DEV_MODE=true bash installer/install.sh
    - filesystem
    - zram preference
    - desktop profile
+   - display mode
    - display manager
-4. Confirm the destructive install summary.
-5. Watch the live install log window.
-6. After completion, choose `Reboot`, `Shutdown`, or `Back`.
+4. Confirm the destructive summary.
+5. Watch the live mixed-gauge progress window.
+6. Choose `Reboot`, `Shutdown`, or `Back` after completion.
 
-At installer start the live console is prepared with:
+At startup the installer applies:
 
 - `loadkeys us`
-- optional live keymap selection: `us`, `trq`, `de`, or custom input
+- optional live keymap override
 - `setfont ter-v16n`
 
-## Configuration Examples
+## KDE Session Modes
 
-Timezone examples:
+The KDE profile installs `plasma-workspace` and `plasma-x11-session`.
 
-```text
-Europe/Istanbul
-UTC
-Europe/Berlin
-Europe/London
-America/New_York
-```
+Display mode choices:
 
-Locale examples:
+- `Auto`: prefer Wayland, fall back to X11 on VMs or when graphics detection is weak
+- `Wayland`: force `startplasma-wayland`
+- `X11`: force `startplasma-x11`
 
-```text
-en_US.UTF-8
-tr_TR.UTF-8
-en_GB.UTF-8
-de_DE.UTF-8
-```
+Current display-manager behavior:
 
-Keyboard layout examples:
+- `sddm`: enabled only if the binary exists in the target system, with the default Plasma session set from the resolved mode
+- `greetd`: uses `tuigreet --cmd startplasma-wayland` or `startplasma-x11` based on the resolved mode
+- invalid or missing display-manager binaries leave the system on TTY with a manual start hint
 
-```text
-us
-trq
-de
-uk
-de-latin1
-fr-latin9
-```
+## Package Set
+
+The target install always includes the base packages requested in this hardening pass:
+
+- `base`
+- `base-devel`
+- `linux`
+- `linux-firmware`
+- `make`
+- `networkmanager`
+- `sudo`
+- `git`
+- `dialog`
+
+The KDE profile additionally installs Plasma, PipeWire, Bluetooth, and the selected display manager.
 
 ## Filesystem Notes
 
@@ -191,18 +158,16 @@ fr-latin9
 
 - root is formatted as ext4
 - root is mounted with disk-aware options
-- SSD/NVMe adds `noatime,discard=async`
+- SSD and NVMe paths add `noatime,discard=async`
 - HDD avoids `discard=async`
-- fstab is written with a UUID root entry
 
 ### btrfs
 
-- root is formatted with `mkfs.btrfs`
-- installer mounts the top-level volume first
-- installer creates `@` and `@home`
-- installer remounts `/` with `subvol=@,compress=zstd` plus disk-aware options
-- installer mounts `/home` with `subvol=@home,compress=zstd` plus disk-aware options
-- fstab is written explicitly with UUID entries for `/` and `/home`
+- creates `@` and `@home`
+- mounts `/` with `subvol=@,compress=zstd`
+- mounts `/home` with `subvol=@home,compress=zstd`
+- writes explicit UUID-based `fstab` entries
+- uses matching `rootflags=` in the bootloader entry
 
 ## Bootloader Notes
 
@@ -210,47 +175,29 @@ fr-latin9
 
 - installs `systemd-boot`
 - writes `/boot/loader/entries/arch.conf`
-- uses `root=UUID=...`
-- adds disk-aware `rootflags=` for btrfs
+- uses UUID-based root parameters
 
 ### BIOS
 
 - installs GRUB
-- writes `GRUB_CMDLINE_LINUX` with `root=UUID=...`
-- adds disk-aware `rootflags=` for btrfs
-
-## Desktop Notes
-
-### SDDM
-
-Recommended for the default zero-touch KDE path.
-
-### greetd + qtgreet
-
-The installer now wires greetd configuration for qtgreet, but `qtgreet` is not shipped in the official Arch repositories.
-
-Important:
-
-- the Arch-compatible package path is the AUR package `greetd-qtgreet`
-- the installer does not build the full AUR dependency chain automatically
-- if you want the most reliable fully non-interactive desktop install, choose `sddm`
-- if you choose `greetd`, the installer configures greetd for qtgreet and logs a warning if `/usr/bin/qtgreet` is missing
+- writes `GRUB_CMDLINE_LINUX` with UUID-based root parameters
 
 ## Robustness Rules
 
-The install core treats these as hard failures:
+Hard failures:
 
 - partitioning errors
 - mount errors
-- pacstrap errors
+- pacman bootstrap failures
+- insufficient target free space
+- `pacstrap` failures
 - essential chroot configuration failures
 
-The install core treats these as warnings and continues:
+Best-effort logging steps:
 
-- `findmnt` debug logging
-- `blkid` debug logging
-- mirror refresh and other best-effort live ISO preparation steps
-- optional UI/logging behavior
+- `blkid` debug output
+- `findmnt` debug output
+- supplemental metadata capture
 
 ## Logs And Debugging
 
@@ -260,82 +207,60 @@ Primary log file:
 /tmp/archinstall_install.log
 ```
 
-Open the log during or after install:
+Useful checks:
 
 ```bash
 less /tmp/archinstall_install.log
-```
-
-Useful log searches:
-
-```bash
 grep -n "\[FAIL\]\|\[WARN\]\|\[DEBUG\]" /tmp/archinstall_install.log
-grep -n "fstab\|loader\|grub\|blkid\|findmnt" /tmp/archinstall_install.log
-```
-
-Check live ISO root space before starting extra work:
-
-```bash
 df -h /
-```
-
-If the available space is low, keep to minimal ISO mode and avoid extra package installation.
-
-## Rerunning An Install
-
-If a test install fails and you want to rerun it from the live ISO:
-
-```bash
-umount -R /mnt || true
-rm -f /tmp/archinstall_state
-rm -f /tmp/archinstall_install.log
-bash installer/install.sh
-```
-
-For faster menu testing without a full reinstall:
-
-```bash
-DEV_MODE=true SKIP_PARTITION=true SKIP_PACSTRAP=true SKIP_CHROOT=true bash installer/install.sh
+df -h /mnt
 ```
 
 ## Troubleshooting
 
-### Installer stops during partitioning or mounting
-
-- verify the selected disk is correct
-- confirm the disk is not the live ISO boot device
-- check `lsblk` before rerunning
-
 ### Pacstrap fails
 
-- confirm network access from the live ISO
-- refresh mirrors again with `reflector`
+- confirm the live ISO has network access
 - inspect `/tmp/archinstall_install.log`
+- rerun the mirror refresh with `reflector`
 
-### Live ISO root filesystem is running low on space
+### Installer reports low target space
 
-- run `df -h /`
-- avoid `base-devel` and other large packages in the ISO session
-- use only the minimal `git`, `dialog`, and optional `reflector` setup
-- keep heavy installation work inside the target `pacstrap` stage
+- inspect `df -h /mnt`
+- reduce the target profile or resize the target partition
+- do not continue into `pacstrap` with an undersized root filesystem
 
-### System boots but drops into emergency mode
+### KDE boots to TTY
 
-- inspect the installed `/etc/fstab`
-- confirm the bootloader entry uses the correct `UUID`
-- for btrfs, confirm `rootflags=` matches the generated root mount options
+- inspect `/tmp/archinstall_install.log`
+- verify the selected display manager exists in the target system
+- start Plasma manually with the command shown on login
 
-### Root account is locked message appears
+### SDDM or greetd works but the wrong session starts
 
-- verify the root password was entered during profile setup
-- inspect the chroot section in `/tmp/archinstall_install.log`
-- rerun after confirming the password prompts completed successfully
+- check the saved `Display mode` value in the installer state
+- for VMs, `Auto` may intentionally resolve to X11
+- choose `Wayland` or `X11` explicitly if you need deterministic behavior
 
-### greetd starts but no graphical greeter appears
+## Layout
 
-- check whether `/usr/bin/qtgreet` exists in the target system
-- if it does not, install the AUR package `greetd-qtgreet`
-- if you want the simpler path, use `sddm`
+```text
+installer/
+  disk.sh        Disk discovery and selection
+  executor.sh    Install core and chroot configuration
+  install.sh     Main dialog UI entry point
+  modules/
+    bootloader.sh   Boot mode helpers
+    desktop.sh      Desktop profile helpers
+    network.sh      Live ISO pacman bootstrap helpers
+    profile.sh      Timezone, locale, and keymap selection helpers
+    disk/
+      layout.sh     Partition-path helpers for future disk layout expansion
+      space.sh      Target free-space estimation and checks
+  postinstall.sh Placeholder for future post-install hooks
+  state.sh       Shared installer state helpers
+  ui.sh          Reusable dialog wrappers
+```
 
 ## Makefile
 
@@ -349,20 +274,10 @@ make log
 make clean
 ```
 
-`make deps` installs:
+`make deps` installs the minimal ISO-side tools:
 
 - `git`
 - `dialog`
 - `reflector`
 
-`make full-deps` installs:
-
-- `base-devel`
-- `git`
-- `dialog`
-- `reflector`
-- `parted`
-- `dosfstools`
-- `e2fsprogs`
-- `btrfs-progs`
-- `arch-install-scripts`
+`make full-deps` adds development tooling such as `base-devel`, `parted`, `dosfstools`, `e2fsprogs`, `btrfs-progs`, and `arch-install-scripts`.
