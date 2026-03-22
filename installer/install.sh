@@ -33,7 +33,7 @@ run_install() {
 
 	case $status in
 		0|1|255|130)
-			return 0
+			return "$status"
 			;;
 		*)
 			error_box "Installation Error" "The installer returned an unexpected status: $status"
@@ -109,9 +109,16 @@ show_install_menu() {
 			start)
 				run_install
 				status=$?
-				if [[ $status -ne 0 ]]; then
-					return "$status"
-				fi
+				case $status in
+					0)
+						;;
+					1|255|130)
+						continue
+						;;
+					*)
+						return "$status"
+						;;
+				esac
 				;;
 			state)
 				show_state_summary

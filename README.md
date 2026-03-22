@@ -87,3 +87,40 @@ make run
 ```
 
 This runs the installer from the repository root.
+
+## 🚀 Full Installation (Bootable System)
+
+The installer now builds a bootable Arch Linux system from the live ISO workflow.
+
+It includes:
+
+- disk partitioning
+- base system installation
+- chroot configuration
+- UEFI bootloader installation with systemd-boot
+
+During the install flow the project will:
+
+- wipe and partition the selected disk unless partitioning is skipped explicitly
+- install the base Arch packages
+- generate `/etc/fstab`
+- configure timezone, locale, hostname, hosts, and the root password
+- install and enable NetworkManager
+- install `systemd-boot` and create a boot entry that uses the root `PARTUUID`
+
+### ⚡ Dev Mode (Fast Testing)
+
+The installer supports fast testing through environment flags in `installer/executor.sh`:
+
+```bash
+SKIP_PARTITION=true SKIP_PACSTRAP=true bash installer/install.sh
+```
+
+Available flags:
+
+- `DEV_MODE=true`
+- `SKIP_PARTITION=true`
+- `SKIP_PACSTRAP=true`
+- `SKIP_CHROOT=true`
+
+These flags skip destructive or time-consuming phases and make it easier to test the menu flow and installer logic without rerunning the full Arch installation every time.

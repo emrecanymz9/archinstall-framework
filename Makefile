@@ -1,4 +1,4 @@
-.PHONY: deps mirror clone run
+.PHONY: deps mirror clone run dev
 
 deps:
 	pacman -Sy archlinux-keyring --noconfirm
@@ -12,3 +12,6 @@ clone:
 
 run:
 	bash installer/install.sh
+
+dev:
+	SKIP_PARTITION=true SKIP_PACSTRAP=true bash installer/install.sh
