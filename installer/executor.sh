@@ -45,6 +45,81 @@ render_command() {
 	printf '%s\n' "${rendered_command% }"
 }
 
+join_by_comma() {
+	local joined=""
+	local item=""
+
+	for item in "$@"; do
+		if [[ -z $joined ]]; then
+			joined=$item
+		else
+			joined+=",$item"
+		fi
+	done
+
+	printf '%s\n' "$joined"
+}
+
+detect_disk_type() {
+	local disk=${1:?disk is required}
+	local disk_name=""
+	local rotational_path=""
+	local rotational_value=""
+
+	disk_name="$(basename "$disk")"
+	if [[ $disk_name == nvme* ]]; then
+		printf 'ssd\n'
+		return 0
+	fi
+
+	rotational_path="/sys/block/$disk_name/queue/rotational"
+	if [[ -r $rotational_path ]]; then
+		read -r rotational_value < "$rotational_path"
+		if [[ $rotational_value == "0" ]]; then
+			printf 'ssd\n'
+		else
+			printf 'hdd\n'
+		fi
+		return 0
+	fi
+
+	if rotational_value="$(lsblk -dn -o ROTA "$disk" 2>> "$ARCHINSTALL_LOG" || true)"; then
+		if [[ $rotational_value == "0" ]]; then
+			printf 'ssd\n'
+			return 0
+		fi
+		if [[ $rotational_value == "1" ]]; then
+			printf 'hdd\n'
+			return 0
+		fi
+	fi
+
+	printf 'unknown\n'
+}
+
+ext4_mount_options() {
+	local disk_type=${1:-unknown}
+	local -a options=(defaults noatime)
+
+	if [[ $disk_type == "ssd" ]]; then
+		options+=(discard=async)
+	fi
+
+	join_by_comma "${options[@]}"
+}
+
+btrfs_mount_options() {
+	local subvolume=${1:?subvolume is required}
+	local disk_type=${2:-unknown}
+	local -a options=("subvol=$subvolume" compress=zstd noatime)
+
+	if [[ $disk_type == "ssd" ]]; then
+		options+=(discard=async)
+	fi
+
+	join_by_comma "${options[@]}"
+}
+
 build_pacstrap_package_list() {
 	local boot_mode=${1:?boot mode is required}
 	local filesystem=${2:?filesystem is required}
@@ -359,14 +434,17 @@ log_mounted_filesystems() {
 
 write_target_fstab() {
 	local filesystem=${1:?filesystem is required}
-	local root_partition=${2:?root partition is required}
-	local efi_partition=${3-}
+	local disk_type=${2:?disk type is required}
+	local root_partition=${3:?root partition is required}
+	local efi_partition=${4-}
 	local root_uuid=""
 	local efi_uuid=""
 	local fstab_path=/mnt/etc/fstab
 	local root_line=""
 	local home_line=""
 	local efi_line=""
+	local root_mount_options=""
+	local home_mount_options=""
 
 	root_uuid="$(get_partition_uuid "$root_partition")" || return 1
 	if [[ -n $efi_partition ]]; then
@@ -375,11 +453,14 @@ write_target_fstab() {
 
 	case $filesystem in
 		ext4)
-			root_line="UUID=$root_uuid / ext4 defaults,noatime 0 1"
+			root_mount_options="$(ext4_mount_options "$disk_type")"
+			root_line="UUID=$root_uuid / ext4 $root_mount_options 0 1"
 			;;
 		btrfs)
-			root_line="UUID=$root_uuid / btrfs subvol=@,compress=zstd 0 0"
-			home_line="UUID=$root_uuid /home btrfs subvol=@home,compress=zstd 0 0"
+			root_mount_options="$(btrfs_mount_options '@' "$disk_type")"
+			home_mount_options="$(btrfs_mount_options '@home' "$disk_type")"
+			root_line="UUID=$root_uuid / btrfs $root_mount_options 0 0"
+			home_line="UUID=$root_uuid /home btrfs $home_mount_options 0 0"
 			;;
 		*)
 			print_install_error "Unsupported filesystem for fstab generation: $filesystem"
@@ -429,11 +510,15 @@ format_root_filesystem() {
 
 mount_root_filesystem() {
 	local filesystem=${1:?filesystem is required}
-	local root_partition=${2:?root partition is required}
+	local disk_type=${2:?disk type is required}
+	local root_partition=${3:?root partition is required}
+	local root_mount_options=""
+	local home_mount_options=""
 
 	case $filesystem in
 		ext4)
-			run_step "Mounting the root filesystem" mount "$root_partition" /mnt
+			root_mount_options="$(ext4_mount_options "$disk_type")"
+			run_step "Mounting the root filesystem" mount -o "$root_mount_options" "$root_partition" /mnt
 			;;
 		btrfs)
 			run_step "Mounting btrfs volume for subvolume creation" mount "$root_partition" /mnt || return 1
@@ -448,10 +533,13 @@ mount_root_filesystem() {
 				log_line "[ OK ] Reusing existing btrfs home subvolume @home"
 			fi
 			run_step "Unmounting temporary btrfs mount" umount /mnt || return 1
-			run_step "Mounting the btrfs root subvolume" mount -o compress=zstd,subvol=@ "$root_partition" /mnt || return 1
+			root_mount_options="$(btrfs_mount_options '@' "$disk_type")"
+			home_mount_options="$(btrfs_mount_options '@home' "$disk_type")"
+			run_step "Mounting the btrfs root subvolume" mount -o "$root_mount_options" "$root_partition" /mnt || return 1
 			run_step "Creating the home mount point" mkdir -p /mnt/home || return 1
-			run_step "Mounting the btrfs home subvolume" mount -o compress=zstd,subvol=@home "$root_partition" /mnt/home || return 1
-			run_step "Recording mounted btrfs subvolumes" findmnt -no TARGET,SOURCE,OPTIONS /mnt /mnt/home
+			run_step "Mounting the btrfs home subvolume" mount -o "$home_mount_options" "$root_partition" /mnt/home || return 1
+			run_optional_step "Recording mounted btrfs root subvolume" findmnt -no TARGET,SOURCE,OPTIONS /mnt
+			run_optional_step "Recording mounted btrfs home subvolume" findmnt -no TARGET,SOURCE,OPTIONS /mnt/home
 			;;
 		*)
 			print_install_error "Unsupported filesystem: $filesystem"
@@ -495,9 +583,10 @@ build_chroot_script() {
 	local disk=${2:?disk is required}
 	local root_uuid=${3:?root UUID is required}
 	local filesystem=${4:?filesystem is required}
-	local enable_zram=${5:?zram flag is required}
-	local desktop_profile=${6:-none}
-	local display_manager=${7:-none}
+	local root_mount_options=${5:-}
+	local enable_zram=${6:?zram flag is required}
+	local desktop_profile=${7:-none}
+	local display_manager=${8:-none}
 	local hostname=""
 	local timezone=""
 	local locale=""
@@ -516,6 +605,7 @@ build_chroot_script() {
 	local quoted_user_password=""
 	local quoted_root_password=""
 	local quoted_filesystem=""
+	local quoted_root_mount_options=""
 	local quoted_enable_zram=""
 	local quoted_desktop_profile=""
 	local quoted_display_manager=""
@@ -546,6 +636,7 @@ build_chroot_script() {
 	printf -v quoted_user_password '%q' "$user_password"
 	printf -v quoted_root_password '%q' "$root_password"
 	printf -v quoted_filesystem '%q' "$filesystem"
+	printf -v quoted_root_mount_options '%q' "$root_mount_options"
 	printf -v quoted_enable_zram '%q' "$enable_zram"
 	printf -v quoted_desktop_profile '%q' "$desktop_profile"
 	printf -v quoted_display_manager '%q' "$display_manager"
@@ -564,6 +655,7 @@ TARGET_USERNAME=$quoted_username
 TARGET_USER_PASSWORD=$quoted_user_password
 TARGET_ROOT_PASSWORD=$quoted_root_password
 TARGET_FILESYSTEM=$quoted_filesystem
+TARGET_ROOT_MOUNT_OPTIONS=$quoted_root_mount_options
 TARGET_ENABLE_ZRAM=$quoted_enable_zram
 TARGET_DESKTOP_PROFILE=$quoted_desktop_profile
 TARGET_DISPLAY_MANAGER=$quoted_display_manager
@@ -660,7 +752,7 @@ EOT
 title Arch Linux
 linux /vmlinuz-linux
 initrd /initramfs-linux.img
-options root=UUID=\$ROOT_UUID rw$( [[ $filesystem == "btrfs" ]] && printf ' rootfstype=btrfs rootflags=subvol=@,compress=zstd' )
+options root=UUID=\$ROOT_UUID rw$( [[ $filesystem == "btrfs" ]] && printf ' rootfstype=btrfs rootflags=%s' "\$TARGET_ROOT_MOUNT_OPTIONS" )
 EOT
 
 	echo "[DEBUG] systemd-boot entry"
@@ -668,7 +760,7 @@ EOT
 else
 	grub_cmdline="root=UUID=\$ROOT_UUID"
 	if [[ \$TARGET_FILESYSTEM == "btrfs" ]]; then
-		grub_cmdline="\$grub_cmdline rootflags=subvol=@,compress=zstd"
+		grub_cmdline="\$grub_cmdline rootfstype=btrfs rootflags=\$TARGET_ROOT_MOUNT_OPTIONS"
 	fi
 	if grep -q '^GRUB_CMDLINE_LINUX=' /etc/default/grub; then
 		sed -i "s#^GRUB_CMDLINE_LINUX=.*#GRUB_CMDLINE_LINUX=\"\$grub_cmdline\"#" /etc/default/grub
@@ -697,21 +789,22 @@ run_chroot_configuration() {
 	local disk=${2:?disk is required}
 	local root_uuid=${3:?root UUID is required}
 	local filesystem=${4:?filesystem is required}
-	local enable_zram=${5:?zram flag is required}
-	local desktop_profile=${6:-none}
-	local display_manager=${7:-none}
+	local root_mount_options=${5:-}
+	local enable_zram=${6:?zram flag is required}
+	local desktop_profile=${7:-none}
+	local display_manager=${8:-none}
 
 	install_ui_uses_dialog || print_install_info "Configuring the new system and installing the bootloader"
 	log_line "[STEP] Configuring the target system inside chroot"
 
 	if install_ui_uses_dialog; then
-		if build_chroot_script "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$enable_zram" "$desktop_profile" "$display_manager" | arch-chroot /mnt /bin/bash >> "$ARCHINSTALL_LOG" 2>&1
+		if build_chroot_script "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" | arch-chroot /mnt /bin/bash >> "$ARCHINSTALL_LOG" 2>&1
 		then
 			log_line "[ OK ] Configuring the target system inside chroot"
 			return 0
 		fi
 	else
-		if build_chroot_script "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$enable_zram" "$desktop_profile" "$display_manager" | arch-chroot /mnt /bin/bash 2>&1 | tee -a "$ARCHINSTALL_LOG"
+		if build_chroot_script "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" | arch-chroot /mnt /bin/bash 2>&1 | tee -a "$ARCHINSTALL_LOG"
 		then
 			log_line "[ OK ] Configuring the target system inside chroot"
 			return 0
@@ -729,10 +822,12 @@ run_install() {
 	local root_partition=""
 	local root_uuid=""
 	local boot_mode=""
+	local disk_type=""
 	local filesystem=""
 	local enable_zram=""
 	local desktop_profile=""
 	local display_manager=""
+	local root_mount_options=""
 	local install_status=0
 	local -a resolved_partitions=()
 	local -a pacstrap_packages=()
@@ -785,6 +880,9 @@ run_install() {
 
 		log_line "Starting installation on $disk"
 		log_line "Boot mode: $boot_mode"
+		disk_type="$(detect_disk_type "$disk")"
+		log_line "Disk type: $disk_type"
+		set_state "DISK_TYPE" "$disk_type" || exit 1
 		log_line "Filesystem: $filesystem"
 		log_line "Zram: $enable_zram"
 		log_line "Desktop profile: $desktop_profile"
@@ -850,7 +948,7 @@ run_install() {
 			format_root_filesystem "$filesystem" "$root_partition" || exit 1
 		fi
 
-		mount_root_filesystem "$filesystem" "$root_partition" || exit 1
+		mount_root_filesystem "$filesystem" "$disk_type" "$root_partition" || exit 1
 		if [[ $boot_mode == "uefi" ]]; then
 			run_step "Creating the EFI mount point" mkdir -p /mnt/boot || exit 1
 			run_step "Mounting the EFI partition" mount "$efi_partition" /mnt/boot || exit 1
@@ -868,13 +966,18 @@ run_install() {
 			run_pacstrap_install "${pacstrap_packages[@]}" || exit 1
 		fi
 
-		write_target_fstab "$filesystem" "$root_partition" "$efi_partition" || exit 1
+		write_target_fstab "$filesystem" "$disk_type" "$root_partition" "$efi_partition" || exit 1
 
 		if flag_enabled "$SKIP_CHROOT"; then
 			log_line "Skipping chroot configuration because SKIP_CHROOT=$SKIP_CHROOT"
 		else
 			root_uuid="$(get_partition_uuid "$root_partition")" || exit 1
-			run_chroot_configuration "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$enable_zram" "$desktop_profile" "$display_manager" || exit 1
+			if [[ $filesystem == "btrfs" ]]; then
+				root_mount_options="$(btrfs_mount_options '@' "$disk_type")"
+			else
+				root_mount_options=""
+			fi
+			run_chroot_configuration "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" || exit 1
 		fi
 
 		ARCHINSTALL_INSTALL_SUCCESS=true

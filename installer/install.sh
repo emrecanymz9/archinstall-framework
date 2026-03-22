@@ -27,6 +27,90 @@ source "$SCRIPT_DIR/executor.sh" || {
 INSTALL_USER_PASSWORD=${INSTALL_USER_PASSWORD:-""}
 INSTALL_ROOT_PASSWORD=${INSTALL_ROOT_PASSWORD:-""}
 ZRAM=${ZRAM:-false}
+LIVE_CONSOLE_FONT=${LIVE_CONSOLE_FONT:-ter-v16n}
+
+apply_live_console_keymap() {
+	local keymap=${1:-us}
+
+	if command -v loadkeys >/dev/null 2>&1; then
+		loadkeys "$keymap" >/dev/null 2>&1 || true
+	fi
+
+	set_state "KEYMAP" "$keymap" >/dev/null 2>&1 || true
+}
+
+apply_live_console_font() {
+	if command -v setfont >/dev/null 2>&1; then
+		setfont "$LIVE_CONSOLE_FONT" >/dev/null 2>&1 || true
+	fi
+}
+
+select_startup_keymap() {
+	local current_keymap=${1:-us}
+	local choice=""
+	local custom_keymap=""
+
+	choice="$(menu "Console Keyboard" "Choose the live ISO console keymap.\n\nCurrent: $current_keymap" 14 70 5 \
+		"us" "US English" \
+		"trq" "Turkish Q" \
+		"de" "German" \
+		"custom" "Enter a custom keymap")"
+	case $? in
+		0)
+			if [[ $choice == "custom" ]]; then
+				custom_keymap="$(input_box "Console Keyboard" "Enter a live ISO keymap such as us, trq, or de." "$current_keymap" 12 70)"
+				case $? in
+					0)
+						[[ -n $custom_keymap ]] || return 1
+						printf '%s\n' "$custom_keymap"
+						return 0
+						;;
+					*)
+						return 1
+						;;
+				esac
+			fi
+
+			printf '%s\n' "$choice"
+			return 0
+			;;
+		1|255)
+			return 1
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+prepare_live_console() {
+	local selected_keymap=""
+	local current_keymap=""
+
+	apply_live_console_keymap "us"
+	apply_live_console_font
+
+	current_keymap="$(state_or_default "KEYMAP" "us")"
+	selected_keymap="$(select_startup_keymap "$current_keymap")" || {
+		apply_live_console_keymap "$current_keymap"
+		return 0
+	}
+
+	apply_live_console_keymap "$selected_keymap"
+}
+
+warn_if_low_live_iso_space() {
+	local df_line=""
+	local available_kb=0
+	local threshold_kb=1048576
+
+	df_line="$(df -h / 2>/dev/null | tail -n 1 || true)"
+	available_kb="$(df -Pk / 2>/dev/null | awk 'NR==2 {print $4}' || printf '0')"
+
+	if [[ ${available_kb:-0} =~ ^[0-9]+$ ]] && (( available_kb < threshold_kb )); then
+		warning_box "Low ISO Space" "The live ISO root filesystem appears low on available space.\n\n$df_line\n\nAvoid installing extra packages into the live environment. Continue in minimal ISO mode and keep heavy installs inside pacstrap."
+	fi
+}
 
 ensure_executor_loaded() {
 	if declare -F run_install >/dev/null 2>&1; then
@@ -74,6 +158,7 @@ show_install_result_dialog() {
 	local boot_mode=""
 	local desktop_profile=""
 	local enable_zram=""
+	local disk_type=""
 	local status_label="FAILED"
 	local prompt=""
 	local choice=""
@@ -81,6 +166,7 @@ show_install_result_dialog() {
 	disk="$(state_or_default "DISK" "Not selected")"
 	filesystem="$(state_or_default "FILESYSTEM" "ext4")"
 	boot_mode="$(state_or_default "BOOT_MODE" "auto")"
+	disk_type="$(state_or_default "DISK_TYPE" "auto")"
 	desktop_profile="$(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")"
 	enable_zram="$(state_or_default "ENABLE_ZRAM" "false")"
 	local keymap="$(state_or_default "KEYMAP" "us")"
@@ -88,7 +174,7 @@ show_install_result_dialog() {
 		status_label="SUCCESS"
 	fi
 
-	prompt="Disk: $disk\nFilesystem: $filesystem\nBoot mode: $boot_mode\nKeyboard: $keymap\nDesktop: $desktop_profile\nZRAM: $enable_zram\nStatus: $status_label\n\nInstall log: ${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}"
+	prompt="Disk: $disk\nDisk type: $disk_type\nFilesystem: $filesystem\nBoot mode: $boot_mode\nKeyboard: $keymap\nDesktop: $desktop_profile\nZRAM: $enable_zram\nStatus: $status_label\n\nInstall log: ${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}"
 
 	choice="$(menu "Installation Complete" "$prompt" 18 72 4 \
 		"reboot" "Reboot system" \
@@ -382,6 +468,7 @@ show_state_summary() {
 	local enable_zram
 	local desktop_profile
 	local display_manager
+	local disk_type
 	local user_password_state
 	local root_password_state
 
@@ -395,6 +482,7 @@ show_state_summary() {
 	keymap="$(state_or_default "KEYMAP" "us")"
 	username="$(state_or_default "USERNAME" "Not configured")"
 	filesystem="$(state_or_default "FILESYSTEM" "ext4")"
+	disk_type="$(state_or_default "DISK_TYPE" "Unknown")"
 	enable_zram="$(state_or_default "ENABLE_ZRAM" "false")"
 	desktop_profile="$(state_or_default "DESKTOP_PROFILE" "none")"
 	display_manager="$(state_or_default "DISPLAY_MANAGER" "none")"
@@ -403,7 +491,7 @@ show_state_summary() {
 	[[ -n $INSTALL_USER_PASSWORD ]] && user_password_state="set"
 	[[ -n $INSTALL_ROOT_PASSWORD ]] && root_password_state="set"
 
-	msg "Installer State" "Saved state:\n\nDisk: $disk\nBoot mode: $boot_mode\nEFI: $efi_partition\nRoot: $root_partition\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nFilesystem: $filesystem\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay manager: $(display_manager_label "$display_manager")\nUser password: $user_password_state\nRoot password: $root_password_state\nDEV_MODE: $DEV_MODE\nUI mode: $INSTALL_UI_MODE" 24 76
+	msg "Installer State" "Saved state:\n\nDisk: $disk\nDisk type: $disk_type\nBoot mode: $boot_mode\nEFI: $efi_partition\nRoot: $root_partition\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nFilesystem: $filesystem\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay manager: $(display_manager_label "$display_manager")\nUser password: $user_password_state\nRoot password: $root_password_state\nDEV_MODE: $DEV_MODE\nUI mode: $INSTALL_UI_MODE" 24 76
 }
 
 confirm_installation() {
@@ -425,7 +513,7 @@ confirm_installation() {
 
 	validate_install_profile || return 1
 
-	message="This will prepare a bootable Arch Linux system on:\n\n$disk\n\nBoot mode: $(state_or_default "BOOT_MODE" "auto")\nHostname: $(state_or_default "HOSTNAME" "archlinux")\nTimezone: $(state_or_default "TIMEZONE" "Europe/Istanbul")\nLocale: $(state_or_default "LOCALE" "en_US.UTF-8")\nKeyboard: $(state_or_default "KEYMAP" "us")\nUser: $(state_or_default "USERNAME" "archuser")\nFilesystem: $(state_or_default "FILESYSTEM" "ext4")\nZram: $(state_or_default "ENABLE_ZRAM" "false")\nDesktop: $(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")\nDisplay manager: $(display_manager_label "$(state_or_default "DISPLAY_MANAGER" "none")")\n\nDestructive steps may erase existing data."
+	message="This will prepare a bootable Arch Linux system on:\n\n$disk\n\nDisk type: $(state_or_default "DISK_TYPE" "auto")\nBoot mode: $(state_or_default "BOOT_MODE" "auto")\nHostname: $(state_or_default "HOSTNAME" "archlinux")\nTimezone: $(state_or_default "TIMEZONE" "Europe/Istanbul")\nLocale: $(state_or_default "LOCALE" "en_US.UTF-8")\nKeyboard: $(state_or_default "KEYMAP" "us")\nUser: $(state_or_default "USERNAME" "archuser")\nFilesystem: $(state_or_default "FILESYSTEM" "ext4")\nZram: $(state_or_default "ENABLE_ZRAM" "false")\nDesktop: $(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")\nDisplay manager: $(display_manager_label "$(state_or_default "DISPLAY_MANAGER" "none")")\n\nDestructive steps may erase existing data."
 	if flag_enabled "$DEV_MODE"; then
 		message+="\n\nDev mode flags:\nSKIP_PARTITION=$SKIP_PARTITION\nSKIP_PACSTRAP=$SKIP_PACSTRAP\nSKIP_CHROOT=$SKIP_CHROOT\nINSTALL_UI_MODE=$INSTALL_UI_MODE"
 	fi
@@ -570,6 +658,8 @@ main() {
 	ensure_executor_loaded || exit 1
 	ensure_state_file || exit 1
 	load_runtime_preferences || exit 1
+	prepare_live_console || true
+	warn_if_low_live_iso_space || true
 
 	while true; do
 		choice="$(menu "Main Menu" "Choose an installer action." 16 76 7 \

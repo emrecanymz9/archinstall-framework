@@ -3,6 +3,11 @@
 Modular Arch Linux installer written in Bash for the Arch Linux live ISO.
 
 The installer targets a small, explicit workflow:
+# ArchInstall Framework
+
+Modular Arch Linux installer written in Bash for the Arch Linux live ISO.
+
+The installer targets a small, explicit workflow:
 
 - dialog-based navigation
 - ext4 or btrfs root installation
@@ -10,6 +15,8 @@ The installer targets a small, explicit workflow:
 - UEFI with systemd-boot or BIOS with GRUB
 - live install logs in dialog without gauge mode
 - explicit fstab generation and bootloader configuration
+- automatic live console setup with `loadkeys` and `setfont`
+- SSD/NVMe versus HDD mount-option detection
 
 Warning: the installer wipes the selected disk.
 
@@ -20,19 +27,33 @@ VM testing is strongly recommended before using it on real hardware.
 Run these commands from the Arch ISO as root:
 
 ```bash
+loadkeys us
+setfont ter-v16n
 pacman -Sy archlinux-keyring --noconfirm
-pacman -S --needed --noconfirm base-devel dialog git reflector parted dosfstools e2fsprogs btrfs-progs arch-install-scripts
+pacman -S --needed --noconfirm git dialog reflector
 reflector --latest 10 --sort rate --save /etc/pacman.d/mirrorlist
 git clone https://github.com/emrecanymz9/archinstall-framework.git
 cd archinstall-framework
 bash installer/install.sh
 ```
 
-If `make` is missing and you want to use the Makefile helpers first:
+The installer intentionally avoids large live-ISO package installs. Do not install `base-devel` into the RAM-backed Arch ISO root unless you are building a separate development environment outside the normal ISO workflow.
+
+## Running From Arch ISO
+
+Safe console defaults:
 
 ```bash
-pacman -S --needed --noconfirm base-devel
+loadkeys us
+setfont ter-v16n
 ```
+
+Why the installer avoids `base-devel` on the live ISO:
+
+- the Arch ISO root filesystem is RAM-backed and limited
+- large toolchains can exhaust `/` and destabilize the session
+- heavy packages belong in the target system through `pacstrap`, not in the live environment
+- `make full-deps` is only for non-ISO development workflows
 
 ## Features
 
@@ -73,10 +94,10 @@ Run from an Arch Linux live ISO as root with these tools available:
 
 ```bash
 pacman -Sy archlinux-keyring --noconfirm
-pacman -S --needed --noconfirm base-devel dialog git reflector parted dosfstools e2fsprogs btrfs-progs arch-install-scripts
+pacman -S --needed --noconfirm git dialog reflector
 ```
 
-The installer also expects standard live ISO utilities such as `lsblk`, `wipefs`, `mount`, `umount`, `ping`, `pacstrap`, `blkid`, and `arch-chroot`.
+The installer expects the standard Arch ISO storage tooling already present in the live environment, such as `lsblk`, `wipefs`, `mount`, `umount`, `parted`, `pacstrap`, `blkid`, and `arch-chroot`.
 
 ## Usage
 
@@ -94,6 +115,12 @@ make mirror
 make run
 ```
 
+For a non-ISO development machine where you do want extra packages:
+
+```bash
+make full-deps
+```
+
 Developer mode keeps the plain shell output visible:
 
 ```bash
@@ -105,20 +132,26 @@ DEV_MODE=true bash installer/install.sh
 1. Open Disk Setup and select the target disk.
 2. Open Install System.
 3. Configure:
-  - hostname
-  - timezone
-  - locale
-  - keyboard layout
-  - username
-  - user password
-  - root password
-  - filesystem
-  - zram preference
-  - desktop profile
-  - display manager
+   - hostname
+   - timezone
+   - locale
+   - keyboard layout
+   - username
+   - user password
+   - root password
+   - filesystem
+   - zram preference
+   - desktop profile
+   - display manager
 4. Confirm the destructive install summary.
 5. Watch the live install log window.
 6. After completion, choose `Reboot`, `Shutdown`, or `Back`.
+
+At installer start the live console is prepared with:
+
+- `loadkeys us`
+- optional live keymap selection: `us`, `trq`, `de`, or custom input
+- `setfont ter-v16n`
 
 ## Configuration Examples
 
@@ -146,7 +179,7 @@ Keyboard layout examples:
 ```text
 us
 trq
-trf
+de
 uk
 de-latin1
 fr-latin9
@@ -157,7 +190,9 @@ fr-latin9
 ### ext4
 
 - root is formatted as ext4
-- root is mounted directly at `/mnt`
+- root is mounted with disk-aware options
+- SSD/NVMe adds `noatime,discard=async`
+- HDD avoids `discard=async`
 - fstab is written with a UUID root entry
 
 ### btrfs
@@ -165,8 +200,8 @@ fr-latin9
 - root is formatted with `mkfs.btrfs`
 - installer mounts the top-level volume first
 - installer creates `@` and `@home`
-- installer remounts `/` with `subvol=@,compress=zstd`
-- installer mounts `/home` with `subvol=@home,compress=zstd`
+- installer remounts `/` with `subvol=@,compress=zstd` plus disk-aware options
+- installer mounts `/home` with `subvol=@home,compress=zstd` plus disk-aware options
 - fstab is written explicitly with UUID entries for `/` and `/home`
 
 ## Bootloader Notes
@@ -176,13 +211,13 @@ fr-latin9
 - installs `systemd-boot`
 - writes `/boot/loader/entries/arch.conf`
 - uses `root=UUID=...`
-- adds `rootflags=subvol=@,compress=zstd` for btrfs
+- adds disk-aware `rootflags=` for btrfs
 
 ### BIOS
 
 - installs GRUB
 - writes `GRUB_CMDLINE_LINUX` with `root=UUID=...`
-- adds `rootflags=subvol=@,compress=zstd` for btrfs
+- adds disk-aware `rootflags=` for btrfs
 
 ## Desktop Notes
 
@@ -238,6 +273,14 @@ grep -n "\[FAIL\]\|\[WARN\]\|\[DEBUG\]" /tmp/archinstall_install.log
 grep -n "fstab\|loader\|grub\|blkid\|findmnt" /tmp/archinstall_install.log
 ```
 
+Check live ISO root space before starting extra work:
+
+```bash
+df -h /
+```
+
+If the available space is low, keep to minimal ISO mode and avoid extra package installation.
+
 ## Rerunning An Install
 
 If a test install fails and you want to rerun it from the live ISO:
@@ -269,11 +312,18 @@ DEV_MODE=true SKIP_PARTITION=true SKIP_PACSTRAP=true SKIP_CHROOT=true bash insta
 - refresh mirrors again with `reflector`
 - inspect `/tmp/archinstall_install.log`
 
+### Live ISO root filesystem is running low on space
+
+- run `df -h /`
+- avoid `base-devel` and other large packages in the ISO session
+- use only the minimal `git`, `dialog`, and optional `reflector` setup
+- keep heavy installation work inside the target `pacstrap` stage
+
 ### System boots but drops into emergency mode
 
 - inspect the installed `/etc/fstab`
 - confirm the bootloader entry uses the correct `UUID`
-- for btrfs, confirm `rootflags=subvol=@,compress=zstd` is present
+- for btrfs, confirm `rootflags=` matches the generated root mount options
 
 ### Root account is locked message appears
 
@@ -291,6 +341,7 @@ DEV_MODE=true SKIP_PARTITION=true SKIP_PACSTRAP=true SKIP_CHROOT=true bash insta
 
 ```bash
 make deps
+make full-deps
 make mirror
 make run
 make dev
@@ -300,9 +351,15 @@ make clean
 
 `make deps` installs:
 
-- `base-devel`
-- `dialog`
 - `git`
+- `dialog`
+- `reflector`
+
+`make full-deps` installs:
+
+- `base-devel`
+- `git`
+- `dialog`
 - `reflector`
 - `parted`
 - `dosfstools`
