@@ -257,6 +257,38 @@ run_shell_step() {
 	return 1
 }
 
+run_optional_step() {
+	local step=${1:?step description is required}
+
+	shift
+	install_ui_uses_dialog || print_install_info "$step"
+	log_line "[STEP] $step"
+
+	if run_logged_command "$@"; then
+		log_line "[ OK ] $step"
+		return 0
+	fi
+
+	log_line "[WARN] Non-critical step failed: $step"
+	return 0
+}
+
+run_optional_shell_step() {
+	local step=${1:?step description is required}
+	local command_string=${2:?command string is required}
+
+	install_ui_uses_dialog || print_install_info "$step"
+	log_line "[STEP] $step"
+
+	if run_logged_shell_command "$command_string"; then
+		log_line "[ OK ] $step"
+		return 0
+	fi
+
+	log_line "[WARN] Non-critical shell step failed: $step"
+	return 0
+}
+
 run_step_with_retry() {
 	local step=${1:?step description is required}
 	local max_attempts=${2:?max attempts is required}
@@ -308,11 +340,21 @@ log_partition_metadata() {
 	local efi_partition=${2-}
 
 	if [[ -n $efi_partition ]]; then
-		run_step "Capturing block metadata" blkid "$efi_partition" "$root_partition"
-		return $?
+		run_optional_step "Capturing block metadata" blkid "$efi_partition" "$root_partition"
+		return 0
 	fi
 
-	run_step "Capturing block metadata" blkid "$root_partition"
+	run_optional_step "Capturing block metadata" blkid "$root_partition"
+	return 0
+}
+
+log_mounted_filesystems() {
+	local filesystem=${1:?filesystem is required}
+
+	run_optional_step "Recording root mount details" findmnt -no TARGET,SOURCE,OPTIONS /mnt
+	if [[ $filesystem == "btrfs" ]]; then
+		run_optional_step "Recording home mount details" findmnt -no TARGET,SOURCE,OPTIONS /mnt/home
+	fi
 }
 
 write_target_fstab() {
@@ -459,28 +501,37 @@ build_chroot_script() {
 	local hostname=""
 	local timezone=""
 	local locale=""
+	local keymap=""
 	local username=""
 	local user_password=${INSTALL_USER_PASSWORD:-}
+	local root_password=${INSTALL_ROOT_PASSWORD:-}
 	local quoted_boot_mode=""
 	local quoted_disk=""
 	local quoted_root_uuid=""
 	local quoted_hostname=""
 	local quoted_timezone=""
 	local quoted_locale=""
+	local quoted_keymap=""
 	local quoted_username=""
 	local quoted_user_password=""
+	local quoted_root_password=""
 	local quoted_filesystem=""
 	local quoted_enable_zram=""
 	local quoted_desktop_profile=""
 	local quoted_display_manager=""
 
 	hostname="$(get_state "HOSTNAME" 2>/dev/null || printf 'archlinux')"
-	timezone="$(get_state "TIMEZONE" 2>/dev/null || printf 'UTC')"
+	timezone="$(get_state "TIMEZONE" 2>/dev/null || printf 'Europe/Istanbul')"
 	locale="$(get_state "LOCALE" 2>/dev/null || printf 'en_US.UTF-8')"
+	keymap="$(get_state "KEYMAP" 2>/dev/null || printf 'us')"
 	username="$(get_state "USERNAME" 2>/dev/null || printf 'archuser')"
 
 	if [[ -z $user_password ]]; then
 		print_install_error "The installer user password is not set. Configure the install profile before starting."
+		return 1
+	fi
+	if [[ -z $root_password ]]; then
+		print_install_error "The root password is not set. Configure the install profile before starting."
 		return 1
 	fi
 
@@ -490,8 +541,10 @@ build_chroot_script() {
 	printf -v quoted_hostname '%q' "$hostname"
 	printf -v quoted_timezone '%q' "$timezone"
 	printf -v quoted_locale '%q' "$locale"
+	printf -v quoted_keymap '%q' "$keymap"
 	printf -v quoted_username '%q' "$username"
 	printf -v quoted_user_password '%q' "$user_password"
+	printf -v quoted_root_password '%q' "$root_password"
 	printf -v quoted_filesystem '%q' "$filesystem"
 	printf -v quoted_enable_zram '%q' "$enable_zram"
 	printf -v quoted_desktop_profile '%q' "$desktop_profile"
@@ -506,8 +559,10 @@ ROOT_UUID=$quoted_root_uuid
 TARGET_HOSTNAME=$quoted_hostname
 TARGET_TIMEZONE=$quoted_timezone
 TARGET_LOCALE=$quoted_locale
+TARGET_KEYMAP=$quoted_keymap
 TARGET_USERNAME=$quoted_username
 TARGET_USER_PASSWORD=$quoted_user_password
+TARGET_ROOT_PASSWORD=$quoted_root_password
 TARGET_FILESYSTEM=$quoted_filesystem
 TARGET_ENABLE_ZRAM=$quoted_enable_zram
 TARGET_DESKTOP_PROFILE=$quoted_desktop_profile
@@ -524,6 +579,7 @@ if ! grep -qx "\$TARGET_LOCALE UTF-8" /etc/locale.gen; then
 fi
 locale-gen
 printf '%s\n' "LANG=\$TARGET_LOCALE" > /etc/locale.conf
+printf '%s\n' "KEYMAP=\$TARGET_KEYMAP" > /etc/vconsole.conf
 
 printf '%s\n' "\$TARGET_HOSTNAME" > /etc/hostname
 cat > /etc/hosts <<EOT
@@ -536,6 +592,7 @@ if ! id -u "\$TARGET_USERNAME" >/dev/null 2>&1; then
 	useradd -m -G wheel -s /bin/bash "\$TARGET_USERNAME"
 fi
 echo "\$TARGET_USERNAME:\$TARGET_USER_PASSWORD" | chpasswd
+echo "root:\$TARGET_ROOT_PASSWORD" | chpasswd
 
 if grep -q '^# %wheel ALL=(ALL:ALL) ALL' /etc/sudoers; then
 	sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
@@ -569,14 +626,22 @@ if [[ \$TARGET_DESKTOP_PROFILE == "kde" ]]; then
 			;;
 		greetd)
 			install -d -m 0755 /etc/greetd
+			install -d -m 0755 /etc/qtgreet
+			cat > /etc/qtgreet/sway-config <<'EOT'
+exec "qtgreet; swaymsg exit"
+include /etc/sway/config.d/*
+EOT
 			cat > /etc/greetd/config.toml <<'EOT'
 [terminal]
 vt = 1
 
 [default_session]
-command = "tuigreet --cmd startplasma-wayland"
+command = "sway --config /etc/qtgreet/sway-config"
 user = "greeter"
 EOT
+			if [[ ! -x /usr/bin/qtgreet ]]; then
+				echo "[WARN] qtgreet was not found in the target system. Install the AUR package greetd-qtgreet to activate this greetd path."
+			fi
 			systemctl enable greetd
 			;;
 	esac
@@ -729,7 +794,7 @@ run_install() {
 		fi
 
 		run_step "Unmounting any previous install target" cleanup_mounts || exit 1
-		run_step "Checking internet connectivity" ping -c 1 archlinux.org || exit 1
+		run_optional_step "Checking internet connectivity" ping -c 1 archlinux.org
 		initialize_pacman_environment || exit 1
 
 		if flag_enabled "$SKIP_PARTITION"; then
@@ -790,7 +855,8 @@ run_install() {
 			run_step "Creating the EFI mount point" mkdir -p /mnt/boot || exit 1
 			run_step "Mounting the EFI partition" mount "$efi_partition" /mnt/boot || exit 1
 		fi
-		log_partition_metadata "$root_partition" "$efi_partition" || exit 1
+		log_partition_metadata "$root_partition" "$efi_partition"
+		log_mounted_filesystems "$filesystem"
 
 		if flag_enabled "$SKIP_PACSTRAP"; then
 			log_line "Skipping pacstrap because SKIP_PACSTRAP=$SKIP_PACSTRAP"

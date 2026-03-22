@@ -16,6 +16,8 @@ source "$SCRIPT_DIR/modules/bootloader.sh"
 source "$SCRIPT_DIR/modules/network.sh"
 # shellcheck source=installer/modules/desktop.sh
 source "$SCRIPT_DIR/modules/desktop.sh"
+# shellcheck source=installer/modules/profile.sh
+source "$SCRIPT_DIR/modules/profile.sh"
 # shellcheck source=installer/executor.sh
 source "$SCRIPT_DIR/executor.sh" || {
 	printf 'failed to source %s/executor.sh\n' "$SCRIPT_DIR" >&2
@@ -23,6 +25,7 @@ source "$SCRIPT_DIR/executor.sh" || {
 }
 
 INSTALL_USER_PASSWORD=${INSTALL_USER_PASSWORD:-""}
+INSTALL_ROOT_PASSWORD=${INSTALL_ROOT_PASSWORD:-""}
 ZRAM=${ZRAM:-false}
 
 ensure_executor_loaded() {
@@ -80,11 +83,12 @@ show_install_result_dialog() {
 	boot_mode="$(state_or_default "BOOT_MODE" "auto")"
 	desktop_profile="$(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")"
 	enable_zram="$(state_or_default "ENABLE_ZRAM" "false")"
+	local keymap="$(state_or_default "KEYMAP" "us")"
 	if [[ $install_status -eq 0 ]]; then
 		status_label="SUCCESS"
 	fi
 
-	prompt="Disk: $disk\nFilesystem: $filesystem\nBoot mode: $boot_mode\nDesktop: $desktop_profile\nZRAM: $enable_zram\nStatus: $status_label\n\nInstall log: ${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}"
+	prompt="Disk: $disk\nFilesystem: $filesystem\nBoot mode: $boot_mode\nKeyboard: $keymap\nDesktop: $desktop_profile\nZRAM: $enable_zram\nStatus: $status_label\n\nInstall log: ${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}"
 
 	choice="$(menu "Installation Complete" "$prompt" 18 72 4 \
 		"reboot" "Reboot system" \
@@ -295,8 +299,10 @@ configure_install_profile() {
 	local hostname=""
 	local timezone=""
 	local locale=""
+	local keymap=""
 	local username=""
-	local password=""
+	local user_password=""
+	local root_password=""
 	local boot_mode=""
 	local filesystem=""
 	local enable_zram=""
@@ -304,28 +310,32 @@ configure_install_profile() {
 	local display_manager=""
 
 	hostname="$(prompt_required_input "Hostname" "Set the system hostname." "$(state_or_default "HOSTNAME" "archlinux")")" || return 1
-	timezone="$(prompt_required_input "Timezone" "Set the timezone, for example Europe/Berlin or UTC." "$(state_or_default "TIMEZONE" "UTC")")" || return 1
-	locale="$(prompt_required_input "Locale" "Set the locale, for example en_US.UTF-8." "$(state_or_default "LOCALE" "en_US.UTF-8")")" || return 1
+	timezone="$(select_timezone_value "$(state_or_default "TIMEZONE" "Europe/Istanbul")")" || return 1
+	locale="$(select_locale_value "$(state_or_default "LOCALE" "en_US.UTF-8")")" || return 1
+	keymap="$(select_keyboard_layout_value "$(state_or_default "KEYMAP" "us")")" || return 1
 	username="$(prompt_required_input "Username" "Create the primary user account." "$(state_or_default "USERNAME" "archuser")")" || return 1
 	filesystem="$(select_filesystem "$(state_or_default "FILESYSTEM" "ext4")")" || return 1
 	enable_zram="$(select_zram_preference "$(state_or_default "ENABLE_ZRAM" "$ZRAM")")" || return 1
 	desktop_profile="$(select_desktop_profile)" || return 1
 	display_manager="$(select_display_manager "$desktop_profile")" || return 1
-	password="$(prompt_password "User Password")" || return 1
+	user_password="$(prompt_password "User Password")" || return 1
+	root_password="$(prompt_password "Root Password")" || return 1
 	boot_mode="$(detect_boot_mode 2>/dev/null || printf 'uefi')"
 
 	set_state "HOSTNAME" "$hostname" || return 1
 	set_state "TIMEZONE" "$timezone" || return 1
 	set_state "LOCALE" "$locale" || return 1
+	set_state "KEYMAP" "$keymap" || return 1
 	set_state "USERNAME" "$username" || return 1
 	set_state "FILESYSTEM" "$filesystem" || return 1
 	set_state "ENABLE_ZRAM" "$enable_zram" || return 1
 	set_state "DESKTOP_PROFILE" "$desktop_profile" || return 1
 	set_state "DISPLAY_MANAGER" "$display_manager" || return 1
 	set_state "BOOT_MODE" "$boot_mode" || return 1
-	INSTALL_USER_PASSWORD="$password"
+	INSTALL_USER_PASSWORD="$user_password"
+	INSTALL_ROOT_PASSWORD="$root_password"
 
-	msg "Profile Saved" "Installation profile updated.\n\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nUser: $username\nFilesystem: $filesystem\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay manager: $(display_manager_label "$display_manager")\nBoot mode: $boot_mode"
+	msg "Profile Saved" "Installation profile updated.\n\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nFilesystem: $filesystem\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay manager: $(display_manager_label "$display_manager")\nBoot mode: $boot_mode\nUser password: set\nRoot password: set"
 }
 
 validate_install_profile() {
@@ -334,8 +344,10 @@ validate_install_profile() {
 	has_state "HOSTNAME" || missing+=("hostname")
 	has_state "TIMEZONE" || missing+=("timezone")
 	has_state "LOCALE" || missing+=("locale")
+	has_state "KEYMAP" || missing+=("keyboard layout")
 	has_state "USERNAME" || missing+=("user")
 	[[ -n $INSTALL_USER_PASSWORD ]] || missing+=("user password")
+	[[ -n $INSTALL_ROOT_PASSWORD ]] || missing+=("root password")
 
 	if [[ ${#missing[@]} -eq 0 ]]; then
 		return 0
@@ -364,29 +376,34 @@ show_state_summary() {
 	local hostname
 	local timezone
 	local locale
+	local keymap
 	local username
 	local filesystem
 	local enable_zram
 	local desktop_profile
 	local display_manager
-	local password_state
+	local user_password_state
+	local root_password_state
 
 	disk="$(get_state "DISK" 2>/dev/null || printf 'Not selected')"
 	boot_mode="$(get_state "BOOT_MODE" 2>/dev/null || detect_boot_mode 2>/dev/null || printf 'Unknown')"
 	efi_partition="$(get_state "EFI_PART" 2>/dev/null || printf 'Not created')"
 	root_partition="$(get_state "ROOT_PART" 2>/dev/null || printf 'Not created')"
 	hostname="$(state_or_default "HOSTNAME" "archlinux")"
-	timezone="$(state_or_default "TIMEZONE" "UTC")"
+	timezone="$(state_or_default "TIMEZONE" "Europe/Istanbul")"
 	locale="$(state_or_default "LOCALE" "en_US.UTF-8")"
+	keymap="$(state_or_default "KEYMAP" "us")"
 	username="$(state_or_default "USERNAME" "Not configured")"
 	filesystem="$(state_or_default "FILESYSTEM" "ext4")"
 	enable_zram="$(state_or_default "ENABLE_ZRAM" "false")"
 	desktop_profile="$(state_or_default "DESKTOP_PROFILE" "none")"
 	display_manager="$(state_or_default "DISPLAY_MANAGER" "none")"
-	password_state="not set"
-	[[ -n $INSTALL_USER_PASSWORD ]] && password_state="set"
+	user_password_state="not set"
+	root_password_state="not set"
+	[[ -n $INSTALL_USER_PASSWORD ]] && user_password_state="set"
+	[[ -n $INSTALL_ROOT_PASSWORD ]] && root_password_state="set"
 
-	msg "Installer State" "Saved state:\n\nDisk: $disk\nBoot mode: $boot_mode\nEFI: $efi_partition\nRoot: $root_partition\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nUser: $username\nFilesystem: $filesystem\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay manager: $(display_manager_label "$display_manager")\nUser password: $password_state\nDEV_MODE: $DEV_MODE\nUI mode: $INSTALL_UI_MODE" 22 76
+	msg "Installer State" "Saved state:\n\nDisk: $disk\nBoot mode: $boot_mode\nEFI: $efi_partition\nRoot: $root_partition\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nFilesystem: $filesystem\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay manager: $(display_manager_label "$display_manager")\nUser password: $user_password_state\nRoot password: $root_password_state\nDEV_MODE: $DEV_MODE\nUI mode: $INSTALL_UI_MODE" 24 76
 }
 
 confirm_installation() {
@@ -408,7 +425,7 @@ confirm_installation() {
 
 	validate_install_profile || return 1
 
-	message="This will prepare a bootable Arch Linux system on:\n\n$disk\n\nBoot mode: $(state_or_default "BOOT_MODE" "auto")\nHostname: $(state_or_default "HOSTNAME" "archlinux")\nTimezone: $(state_or_default "TIMEZONE" "UTC")\nLocale: $(state_or_default "LOCALE" "en_US.UTF-8")\nUser: $(state_or_default "USERNAME" "archuser")\nFilesystem: $(state_or_default "FILESYSTEM" "ext4")\nZram: $(state_or_default "ENABLE_ZRAM" "false")\nDesktop: $(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")\nDisplay manager: $(display_manager_label "$(state_or_default "DISPLAY_MANAGER" "none")")\n\nDestructive steps may erase existing data."
+	message="This will prepare a bootable Arch Linux system on:\n\n$disk\n\nBoot mode: $(state_or_default "BOOT_MODE" "auto")\nHostname: $(state_or_default "HOSTNAME" "archlinux")\nTimezone: $(state_or_default "TIMEZONE" "Europe/Istanbul")\nLocale: $(state_or_default "LOCALE" "en_US.UTF-8")\nKeyboard: $(state_or_default "KEYMAP" "us")\nUser: $(state_or_default "USERNAME" "archuser")\nFilesystem: $(state_or_default "FILESYSTEM" "ext4")\nZram: $(state_or_default "ENABLE_ZRAM" "false")\nDesktop: $(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")\nDisplay manager: $(display_manager_label "$(state_or_default "DISPLAY_MANAGER" "none")")\n\nDestructive steps may erase existing data."
 	if flag_enabled "$DEV_MODE"; then
 		message+="\n\nDev mode flags:\nSKIP_PARTITION=$SKIP_PARTITION\nSKIP_PACSTRAP=$SKIP_PACSTRAP\nSKIP_CHROOT=$SKIP_CHROOT\nINSTALL_UI_MODE=$INSTALL_UI_MODE"
 	fi
@@ -496,7 +513,7 @@ show_install_menu() {
 	while true; do
 		choice="$(menu "Install System" "Selected disk: $(current_disk_label)" 16 76 6 \
 			"start" "Partition disk and install the base Arch Linux system" \
-			"config" "Configure hostname, timezone, locale, and user" \
+			"config" "Configure hostname, timezone, locale, keyboard, and passwords" \
 			"dev" "Toggle developer mode (current: $DEV_MODE / $INSTALL_UI_MODE)" \
 			"state" "Review the current installer state" \
 			"back" "Return to the main menu")"
