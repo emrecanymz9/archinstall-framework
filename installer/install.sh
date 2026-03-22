@@ -50,7 +50,7 @@ confirm_installation() {
 	confirm "Confirm Installation" "$message\n\nContinue?" 18 76
 }
 
-run_install() {
+run_install_flow() {
 	local status=0
 	local prompt_status=0
 	local skip_confirm=false
@@ -71,7 +71,7 @@ run_install() {
 	echo
 
 	skip_confirm=true
-	install_base_system "$skip_confirm"
+	run_install "$skip_confirm"
 	status=$?
 
 	echo
@@ -166,7 +166,7 @@ show_install_menu() {
 
 		case "$choice" in
 			start)
-				run_install
+				run_install_flow
 				status=$?
 				case $status in
 					0)

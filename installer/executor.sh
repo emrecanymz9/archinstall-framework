@@ -360,7 +360,7 @@ EOF
 	return 1
 }
 
-install_base_system() {
+run_install() {
 	local disk=""
 	local efi_partition=""
 	local root_partition=""
