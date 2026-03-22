@@ -10,6 +10,10 @@ source "$SCRIPT_DIR/ui.sh"
 source "$SCRIPT_DIR/state.sh"
 # shellcheck source=installer/disk.sh
 source "$SCRIPT_DIR/disk.sh"
+# shellcheck source=installer/modules/bootloader.sh
+source "$SCRIPT_DIR/modules/bootloader.sh"
+# shellcheck source=installer/modules/network.sh
+source "$SCRIPT_DIR/modules/network.sh"
 # shellcheck source=installer/modules/desktop.sh
 source "$SCRIPT_DIR/modules/desktop.sh"
 # shellcheck source=installer/executor.sh
@@ -58,6 +62,144 @@ apply_runtime_mode() {
 load_runtime_preferences() {
 	DEV_MODE="$(state_or_default "DEV_MODE" "$DEV_MODE")"
 	apply_runtime_mode
+}
+
+show_install_result_dialog() {
+	local install_status=${1:-1}
+	local disk=""
+	local filesystem=""
+	local boot_mode=""
+	local desktop_profile=""
+	local enable_zram=""
+	local status_label="FAILED"
+	local prompt=""
+	local choice=""
+
+	disk="$(state_or_default "DISK" "Not selected")"
+	filesystem="$(state_or_default "FILESYSTEM" "ext4")"
+	boot_mode="$(state_or_default "BOOT_MODE" "auto")"
+	desktop_profile="$(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")"
+	enable_zram="$(state_or_default "ENABLE_ZRAM" "false")"
+	if [[ $install_status -eq 0 ]]; then
+		status_label="SUCCESS"
+	fi
+
+	prompt="Disk: $disk\nFilesystem: $filesystem\nBoot mode: $boot_mode\nDesktop: $desktop_profile\nZRAM: $enable_zram\nStatus: $status_label\n\nThis will erase the selected disk during installation. Review the log if needed."
+
+	choice="$(menu "Installation Complete" "$prompt" 18 72 4 \
+		"reboot" "Reboot system" \
+		"shutdown" "Shutdown system" \
+		"back" "Return to main menu")"
+	case $? in
+		0)
+			case "$choice" in
+				reboot)
+					reboot
+					;;
+				shutdown)
+					poweroff
+					;;
+				back)
+					return 0
+					;;
+			esac
+			;;
+		1|255)
+			return 0
+			;;
+		*)
+			return 0
+			;;
+	esac
+}
+
+install_progress_snapshot() {
+	local tick=${1:-0}
+	local excerpt=""
+	local progress=5
+	local label="Preparing installation..."
+
+	excerpt="$(tail -n 50 "${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}" 2>/dev/null || true)"
+	case "$excerpt" in
+		*"Refreshing archlinux-keyring"*)
+			progress=10
+			label="Refreshing keyring..."
+			;;
+		*"Installing reflector on the live environment"*|*"Refreshing pacman mirrors"*|*"Refreshing pacman package databases"*)
+			progress=15
+			label="Preparing pacman and mirrors..."
+			;;
+		*"Creating a GPT partition table"*|*"Creating an MBR partition table"*|*"Creating the EFI system partition"*|*"Creating the root partition"*)
+			progress=25
+			label="Partitioning target disk..."
+			;;
+		*"Formatting the EFI partition as FAT32"*|*"Formatting the root partition"*)
+			progress=35
+			label="Formatting filesystems..."
+			;;
+		*"Mounting the root filesystem"*|*"Mounting the btrfs root subvolume"*|*"Mounting the EFI partition"*)
+			progress=45
+			label="Mounting target filesystem..."
+			;;
+		*"Installing the base Arch Linux packages"*)
+			progress=$((55 + (tick % 20)))
+			label="Installing packages..."
+			;;
+		*"Generating fstab"*)
+			progress=82
+			label="Generating fstab..."
+			;;
+		*"Configuring the target system inside chroot"*|*"Configuring the new system"*)
+			progress=92
+			label="Configuring installed system..."
+			;;
+		*"Installation completed successfully"*)
+			progress=100
+			label="Installation completed successfully."
+			;;
+	esac
+
+	printf '%s|%s\n' "$progress" "$label"
+}
+
+run_install_with_dialog() {
+	local install_pid=0
+	local install_status=1
+	local gauge_status=0
+	local tick=0
+	local progress_info=""
+	local progress_value=0
+	local progress_label=""
+
+	: > "${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}" || return 1
+	INSTALL_UI_MODE=plain run_install true >> "${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}" 2>&1 &
+	install_pid=$!
+
+	dialog --title "Install Log" --tailboxbg "${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}" 20 100
+	{
+		while kill -0 "$install_pid" 2>/dev/null; do
+			progress_info="$(install_progress_snapshot "$tick")"
+			progress_value=${progress_info%%|*}
+			progress_label=${progress_info#*|}
+			printf '%s\n' "$progress_value"
+			printf '# %s\n' "$progress_label"
+			tick=$((tick + 1))
+			sleep 1
+		done
+
+		printf '100\n'
+		printf '# Finishing installation...\n'
+	} | dialog --title "ArchInstall Progress" --gauge "Installing system..." 10 70 0
+	gauge_status=${PIPESTATUS[1]:-0}
+
+	if [[ $gauge_status -ne 0 && -n $install_pid ]]; then
+		kill -INT "$install_pid" 2>/dev/null || true
+	fi
+
+	wait "$install_pid"
+	install_status=$?
+	clear_screen
+	return "$install_status"
 }
 
 select_filesystem() {
@@ -320,7 +462,6 @@ confirm_installation() {
 run_install_flow() {
 	local status=0
 	local prompt_status=0
-	local skip_confirm=false
 
 	confirm_installation
 	prompt_status=$?
@@ -328,35 +469,17 @@ run_install_flow() {
 		return "$prompt_status"
 	fi
 
-	clear
-	if command -v tput >/dev/null 2>&1; then
-		tput cnorm || true
+	apply_runtime_mode || return 1
+	if install_ui_uses_dialog; then
+		step_box "Starting Installer" "Launching unattended install core. Real-time logs will stay visible in the dialog log view."
+		run_install_with_dialog
+		status=$?
+	else
+		run_install true
+		status=$?
 	fi
 
-	echo "[*] Starting Arch installation..."
-	echo "[*] This may take a while..."
-	echo
-
-	apply_runtime_mode || return 1
-	skip_confirm=true
-	run_install "$skip_confirm"
-	status=$?
-
-	echo
-	case $status in
-		0)
-			echo "[✓] Installation finished successfully"
-			;;
-		130)
-			echo "[!] Installation interrupted"
-			;;
-		*)
-			echo "[!] Installation finished with errors (status: $status)"
-			;;
-	esac
-	echo "[*] Log file: ${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}"
-	read -r -p "Press Enter to return to menu..." _
-	clear
+	show_install_result_dialog "$status" || true
 
 	case $status in
 		0|1|255|130)

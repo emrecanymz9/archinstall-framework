@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 ARCHINSTALL_BACKTITLE=${ARCHINSTALL_BACKTITLE:-"ArchInstall Framework"}
+ARCHINSTALL_FOOTER_HINTS=${ARCHINSTALL_FOOTER_HINTS:-"Use arrow keys to navigate. ENTER=Select. ESC=Back."}
 
 sanitize_dialog_text() {
 	printf '%s' "${1-}" | LC_ALL=C tr -cd '\11\12\15\40-\176'
@@ -8,6 +9,18 @@ sanitize_dialog_text() {
 
 sanitize_dialog_choice() {
 	printf '%s' "${1-}" | LC_ALL=C tr -cd '[:alnum:]_.:/-'
+}
+
+with_footer_hints() {
+	local body=${1-}
+	local hints=${2:-$ARCHINSTALL_FOOTER_HINTS}
+
+	if [[ -z $hints ]]; then
+		printf '%s' "$body"
+		return 0
+	fi
+
+	printf '%s\n\n%s' "$body" "$hints"
 }
 
 require_dialog() {
@@ -39,7 +52,9 @@ menu() {
 		--clear \
 		--backtitle "$ARCHINSTALL_BACKTITLE" \
 		--title "$sanitized_title" \
-		--menu "$sanitized_prompt" \
+		--cancel-label "Back" \
+		--visit-items \
+		--menu "$(sanitize_dialog_text "$(with_footer_hints "$sanitized_prompt")")" \
 		"$height" "$width" "$menu_height" \
 		"$@" \
 		3>&1 1>&2 2>&3)"
@@ -69,7 +84,7 @@ confirm() {
 	local width=${4:-70}
 
 	require_dialog || return $?
-	dialog --clear --backtitle "$ARCHINSTALL_BACKTITLE" --title "$(sanitize_dialog_text "$title")" --yesno "$(sanitize_dialog_text "$body")" "$height" "$width"
+	dialog --clear --backtitle "$ARCHINSTALL_BACKTITLE" --title "$(sanitize_dialog_text "$title")" --defaultno --yesno "$(sanitize_dialog_text "$(with_footer_hints "$body" "ESC=Back, LEFT/RIGHT=Choose")")" "$height" "$width"
 }
 
 input_box() {
@@ -144,6 +159,33 @@ progress() {
 
 	require_dialog || return $?
 	dialog --clear --backtitle "$ARCHINSTALL_BACKTITLE" --title "$(sanitize_dialog_text "$title")" --infobox "$(sanitize_dialog_text "$body")" "$height" "$width"
+}
+
+info_box() {
+	local title=${1:-"Information"}
+	local body=${2:-""}
+	local height=${3:-12}
+	local width=${4:-76}
+
+	msg "$title" "$(with_footer_hints "$body")" "$height" "$width"
+}
+
+warning_box() {
+	local title=${1:-"Warning"}
+	local body=${2:-"Review this action carefully."}
+	local height=${3:-12}
+	local width=${4:-76}
+
+	msg "$title" "$(with_footer_hints "$body" "This action may be destructive. ESC=Back, ENTER=Continue")" "$height" "$width"
+}
+
+step_box() {
+	local title=${1:-"Working"}
+	local body=${2:-"Preparing next step..."}
+	local height=${3:-10}
+	local width=${4:-76}
+
+	progress "$title" "$(sanitize_dialog_text "$body")" "$height" "$width"
 }
 
 error_box() {

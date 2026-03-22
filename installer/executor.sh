@@ -16,6 +16,10 @@ INSTALL_UI_MODE=${INSTALL_UI_MODE:-plain}
 source "$SCRIPT_DIR/ui.sh"
 # shellcheck source=installer/state.sh
 source "$SCRIPT_DIR/state.sh"
+# shellcheck source=installer/modules/bootloader.sh
+source "$SCRIPT_DIR/modules/bootloader.sh"
+# shellcheck source=installer/modules/network.sh
+source "$SCRIPT_DIR/modules/network.sh"
 # shellcheck source=installer/modules/desktop.sh
 source "$SCRIPT_DIR/modules/desktop.sh"
 
@@ -32,15 +36,6 @@ flag_enabled() {
 
 install_ui_uses_dialog() {
 	[[ ${INSTALL_UI_MODE:-plain} == "dialog" ]]
-}
-
-detect_boot_mode() {
-	if [[ -d /sys/firmware/efi/efivars || -d /sys/firmware/efi ]]; then
-		printf 'uefi\n'
-		return 0
-	fi
-
-	printf 'bios\n'
 }
 
 build_pacstrap_package_list() {
@@ -183,13 +178,6 @@ run_logged_shell_command() {
 	fi
 
 	bash -lc "$command_string" 2>&1 | sanitize_stream | tee -a "$ARCHINSTALL_LOG"
-}
-
-initialize_pacman_environment() {
-	run_step "Refreshing archlinux-keyring" pacman -Sy --noconfirm archlinux-keyring || return 1
-	run_step "Installing reflector on the live environment" pacman -S --needed --noconfirm reflector || return 1
-	run_step "Refreshing pacman mirrors" reflector --latest 10 --sort rate --save /etc/pacman.d/mirrorlist || return 1
-	run_step "Refreshing pacman package databases" pacman -Syy --noconfirm || return 1
 }
 
 cleanup_mounts() {
@@ -744,34 +732,30 @@ run_install() {
 			run_step "Mounting the EFI partition" mount "$efi_partition" /mnt/boot || exit 1
 		fi
 
-		if install_ui_uses_dialog; then
-			run_install_gauge "$root_partition" "$boot_mode" "$disk" "$filesystem" "$enable_zram" "$desktop_profile" "$display_manager" || exit 1
+		if flag_enabled "$SKIP_PACSTRAP"; then
+			log_line "Skipping pacstrap because SKIP_PACSTRAP=$SKIP_PACSTRAP"
+			if [[ ! -d /mnt/etc ]]; then
+				print_install_error "SKIP_PACSTRAP=true requires an existing system mounted at /mnt."
+				exit 1
+			fi
 		else
-			if flag_enabled "$SKIP_PACSTRAP"; then
-				log_line "Skipping pacstrap because SKIP_PACSTRAP=$SKIP_PACSTRAP"
-				if [[ ! -d /mnt/etc ]]; then
-					print_install_error "SKIP_PACSTRAP=true requires an existing system mounted at /mnt."
+			run_pacstrap_install "${pacstrap_packages[@]}" || exit 1
+		fi
+
+		run_shell_step "Generating fstab" 'mkdir -p /mnt/etc && : > /mnt/etc/fstab && genfstab -U /mnt >> /mnt/etc/fstab' || exit 1
+
+		if flag_enabled "$SKIP_CHROOT"; then
+			log_line "Skipping chroot configuration because SKIP_CHROOT=$SKIP_CHROOT"
+		else
+			if [[ $boot_mode == "uefi" ]]; then
+				root_partuuid="$(blkid -s PARTUUID -o value "$root_partition" 2>> "$ARCHINSTALL_LOG" || true)"
+				if [[ -z $root_partuuid ]]; then
+					print_install_error "Could not determine the root PARTUUID for: $root_partition"
 					exit 1
 				fi
-			else
-				run_pacstrap_install "${pacstrap_packages[@]}" || exit 1
 			fi
 
-			run_shell_step "Generating fstab" 'mkdir -p /mnt/etc && : > /mnt/etc/fstab && genfstab -U /mnt >> /mnt/etc/fstab' || exit 1
-
-			if flag_enabled "$SKIP_CHROOT"; then
-				log_line "Skipping chroot configuration because SKIP_CHROOT=$SKIP_CHROOT"
-			else
-				if [[ $boot_mode == "uefi" ]]; then
-					root_partuuid="$(blkid -s PARTUUID -o value "$root_partition" 2>> "$ARCHINSTALL_LOG" || true)"
-					if [[ -z $root_partuuid ]]; then
-						print_install_error "Could not determine the root PARTUUID for: $root_partition"
-						exit 1
-					fi
-				fi
-
-				run_chroot_configuration "$boot_mode" "$disk" "$root_partuuid" "$filesystem" "$enable_zram" "$desktop_profile" "$display_manager" || exit 1
-			fi
+			run_chroot_configuration "$boot_mode" "$disk" "$root_partuuid" "$filesystem" "$enable_zram" "$desktop_profile" "$display_manager" || exit 1
 		fi
 
 		ARCHINSTALL_INSTALL_SUCCESS=true

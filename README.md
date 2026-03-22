@@ -41,6 +41,10 @@ installer/
   disk.sh        Disk discovery and selection
   executor.sh    Base installation workflow
   install.sh     Main TUI entry point
+  modules/
+    bootloader.sh  Boot mode helpers
+    desktop.sh     Desktop profile helpers
+    network.sh     Pacman and mirror bootstrap helpers
   postinstall.sh Placeholder for future post-install hooks
   state.sh       Shared installer state helpers
   ui.sh          Reusable dialog wrappers
@@ -86,10 +90,12 @@ bash installer/install.sh
   - retry pacstrap up to three times
    - generate /etc/fstab
   - configure hostname, timezone, locale, NetworkManager, optional zram, and the primary user
-  - optionally install KDE Plasma, kde-applications, a display manager, PipeWire, and Bluetooth packages
+  - optionally install KDE Plasma, explicit desktop packages, a display manager, PipeWire, and Bluetooth packages
   - enable SDDM or greetd when a desktop profile is selected
   - enable Bluetooth and PipeWire user services for desktop installs
   - install systemd-boot on UEFI or GRUB on BIOS
+
+In dialog mode the installer now keeps package management outside the dialog pipeline. The install core runs in the background, a progress gauge shows fake progress, and a parallel log viewer tails `/tmp/archinstall_install.log`.
 
 ## Safety Notes
 
@@ -102,10 +108,13 @@ bash installer/install.sh
 ## Makefile
 
 ```bash
+make deps
+make mirror
 make run
+make dev
+make log
+make clean
 ```
-
-This runs the installer from the repository root.
 
 ## 🚀 Full Installation (Bootable System)
 
