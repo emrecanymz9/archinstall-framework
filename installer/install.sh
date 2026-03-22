@@ -11,7 +11,19 @@ source "$SCRIPT_DIR/state.sh"
 # shellcheck source=installer/disk.sh
 source "$SCRIPT_DIR/disk.sh"
 # shellcheck source=installer/executor.sh
-source "$SCRIPT_DIR/executor.sh"
+source "$SCRIPT_DIR/executor.sh" || {
+	printf 'failed to source %s/executor.sh\n' "$SCRIPT_DIR" >&2
+	exit 1
+}
+
+ensure_executor_loaded() {
+	if declare -F run_install >/dev/null 2>&1; then
+		return 0
+	fi
+
+	printf 'run_install is not available after sourcing %s/executor.sh\n' "$SCRIPT_DIR" >&2
+	return 1
+}
 
 show_state_summary() {
 	local disk
@@ -194,6 +206,7 @@ main() {
 	local status=0
 
 	require_dialog || exit $?
+	ensure_executor_loaded || exit 1
 	ensure_state_file || exit 1
 
 	while true; do
