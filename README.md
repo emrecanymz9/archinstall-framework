@@ -124,3 +124,19 @@ Available flags:
 - `SKIP_CHROOT=true`
 
 These flags skip destructive or time-consuming phases and make it easier to test the menu flow and installer logic without rerunning the full Arch installation every time.
+
+## 🎛️ Installer UI Modes
+
+Default plain mode shows the full terminal output during installation.
+
+```bash
+bash installer/install.sh
+```
+
+Dialog mode uses a progress bar during the long-running install stage.
+
+```bash
+INSTALL_UI_MODE=dialog bash installer/install.sh
+```
+
+Dialog mode hides most logs while the progress bar is active, so it is less useful for debugging than the default plain mode.

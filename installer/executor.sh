@@ -10,6 +10,7 @@ DEV_MODE=${DEV_MODE:-false}
 SKIP_PARTITION=${SKIP_PARTITION:-false}
 SKIP_PACSTRAP=${SKIP_PACSTRAP:-false}
 SKIP_CHROOT=${SKIP_CHROOT:-false}
+INSTALL_UI_MODE=${INSTALL_UI_MODE:-plain}
 
 # shellcheck source=installer/ui.sh
 source "$SCRIPT_DIR/ui.sh"
@@ -25,6 +26,10 @@ flag_enabled() {
 			return 1
 			;;
 	esac
+}
+
+install_ui_uses_dialog() {
+	[[ ${INSTALL_UI_MODE:-plain} == "dialog" ]]
 }
 
 require_root() {
@@ -72,6 +77,34 @@ log_line() {
 	printf '[%s] %s\n' "$(date '+%F %T')" "$message" >> "$ARCHINSTALL_LOG"
 }
 
+print_install_info() {
+	printf '[*] %s\n' "$1"
+}
+
+print_install_error() {
+	printf '[!] %s\n' "$1" >&2
+}
+
+run_logged_command() {
+	if install_ui_uses_dialog; then
+		"$@" >> "$ARCHINSTALL_LOG" 2>&1
+		return $?
+	fi
+
+	"$@" 2>&1 | tee -a "$ARCHINSTALL_LOG"
+}
+
+run_logged_shell_command() {
+	local command_string=${1:?command string is required}
+
+	if install_ui_uses_dialog; then
+		bash -lc "$command_string" >> "$ARCHINSTALL_LOG" 2>&1
+		return $?
+	fi
+
+	bash -lc "$command_string" 2>&1 | tee -a "$ARCHINSTALL_LOG"
+}
+
 cleanup_mounts() {
 	umount -R /mnt >> "$ARCHINSTALL_LOG" 2>&1 || true
 
@@ -97,17 +130,21 @@ show_install_error() {
 	local excerpt
 
 	excerpt="$(tail -n 15 "$ARCHINSTALL_LOG" 2>/dev/null || true)"
-	error_box "Installation Failed" "Step failed: $step\n\nRecent log output:\n$excerpt"
+	print_install_error "Installation failed during: $step"
+	if [[ -n $excerpt ]]; then
+		printf '%s\n' "$excerpt" >&2
+	fi
+	print_install_error "Full log: $ARCHINSTALL_LOG"
 }
 
 run_step() {
 	local step=${1:?step description is required}
 
 	shift
-	progress "Installing" "$step"
+	install_ui_uses_dialog || print_install_info "$step"
 	log_line "$step"
 
-	if "$@" >> "$ARCHINSTALL_LOG" 2>&1; then
+	if run_logged_command "$@"; then
 		return 0
 	fi
 
@@ -119,10 +156,10 @@ run_shell_step() {
 	local step=${1:?step description is required}
 	local command_string=${2:?command string is required}
 
-	progress "Installing" "$step"
+	install_ui_uses_dialog || print_install_info "$step"
 	log_line "$step"
 
-	if bash -lc "$command_string" >> "$ARCHINSTALL_LOG" 2>&1; then
+	if run_logged_shell_command "$command_string"; then
 		return 0
 	fi
 
@@ -138,10 +175,10 @@ run_step_with_retry() {
 	shift 2
 
 	while (( attempt <= max_attempts )); do
-		progress "Installing" "$step\n\nAttempt $attempt/$max_attempts"
+		install_ui_uses_dialog || print_install_info "$step (attempt $attempt/$max_attempts)"
 		log_line "$step (attempt $attempt/$max_attempts)"
 
-		if "$@" >> "$ARCHINSTALL_LOG" 2>&1; then
+		if run_logged_command "$@"; then
 			return 0
 		fi
 
@@ -152,6 +189,60 @@ run_step_with_retry() {
 
 		attempt=$((attempt + 1))
 	done
+}
+
+run_install_gauge() {
+	local root_partition=${1:?root partition is required}
+	local root_partuuid=""
+	local gauge_status=0
+	local -a gauge_pipe_status=()
+
+	if (
+		echo 10
+		echo "# Preparing install..."
+
+		if flag_enabled "$SKIP_PACSTRAP"; then
+			log_line "Skipping pacstrap because SKIP_PACSTRAP=$SKIP_PACSTRAP"
+			if [[ ! -d /mnt/etc ]]; then
+				print_install_error "SKIP_PACSTRAP=true requires an existing system mounted at /mnt."
+				exit 1
+			fi
+		else
+			echo 30
+			echo "# Installing base system..."
+			run_step_with_retry "Installing the base Arch Linux packages" 3 pacstrap /mnt base linux linux-firmware || exit 1
+		fi
+
+		echo 80
+		echo "# Generating fstab..."
+		run_shell_step "Generating fstab" 'mkdir -p /mnt/etc && : > /mnt/etc/fstab && genfstab -U /mnt >> /mnt/etc/fstab' || exit 1
+
+		if flag_enabled "$SKIP_CHROOT"; then
+			log_line "Skipping chroot configuration because SKIP_CHROOT=$SKIP_CHROOT"
+		else
+			root_partuuid="$(blkid -s PARTUUID -o value "$root_partition" 2>> "$ARCHINSTALL_LOG" || true)"
+			if [[ -z $root_partuuid ]]; then
+				print_install_error "Could not determine the root PARTUUID for: $root_partition"
+				exit 1
+			fi
+
+			echo 90
+			echo "# Configuring system..."
+			run_chroot_configuration "$root_partuuid" || exit 1
+		fi
+
+		echo 100
+		echo "# Done"
+	) | dialog --title "ArchInstall Framework" --gauge "Installing system..." 10 70 0
+	gauge_pipe_status=("${PIPESTATUS[@]}")
+	gauge_status=${gauge_pipe_status[0]:-1}
+
+	if [[ $gauge_status -eq 0 ]]; then
+		return 0
+	fi
+
+	show_install_error "Bootable system installation"
+	return "$gauge_status"
 }
 
 resolve_target_partitions() {
@@ -166,7 +257,7 @@ resolve_target_partitions() {
 	[[ -n $root_partition ]] || root_partition="$(partition_path "$disk" 2)"
 
 	if [[ ! -b $efi_partition || ! -b $root_partition ]]; then
-		error_box "Partition Detection Failed" "Expected partitions were not found:\n\n$efi_partition\n$root_partition"
+		print_install_error "Expected partitions were not found: $efi_partition $root_partition"
 		return 1
 	fi
 
@@ -176,10 +267,11 @@ resolve_target_partitions() {
 run_chroot_configuration() {
 	local root_partuuid=${1:?root PARTUUID is required}
 
-	progress "Installing" "Configuring the new system and installing systemd-boot"
+	install_ui_uses_dialog || print_install_info "Configuring the new system and installing systemd-boot"
 	log_line "Configuring the target system inside chroot"
 
-	if arch-chroot /mnt /bin/bash <<EOF >> "$ARCHINSTALL_LOG" 2>&1
+	if install_ui_uses_dialog; then
+		if arch-chroot /mnt /bin/bash <<EOF >> "$ARCHINSTALL_LOG" 2>&1
 set -euo pipefail
 
 ln -sf /usr/share/zoneinfo/UTC /etc/localtime
@@ -217,8 +309,51 @@ initrd /initramfs-linux.img
 options root=PARTUUID=$root_partuuid rw
 EOT
 EOF
-	then
-		return 0
+		then
+			return 0
+		fi
+	else
+		if arch-chroot /mnt /bin/bash <<EOF 2>&1 | tee -a "$ARCHINSTALL_LOG"
+set -euo pipefail
+
+ln -sf /usr/share/zoneinfo/UTC /etc/localtime
+hwclock --systohc
+
+if ! grep -qx 'en_US.UTF-8 UTF-8' /etc/locale.gen; then
+	echo 'en_US.UTF-8 UTF-8' >> /etc/locale.gen
+fi
+locale-gen
+printf '%s\n' 'LANG=en_US.UTF-8' > /etc/locale.conf
+
+printf '%s\n' 'archlinux' > /etc/hostname
+cat > /etc/hosts <<'EOT'
+127.0.0.1 localhost
+::1       localhost
+127.0.1.1 archlinux.localdomain archlinux
+EOT
+
+echo 'root:root' | chpasswd
+pacman -S --noconfirm networkmanager
+systemctl enable NetworkManager
+
+bootctl install
+mkdir -p /boot/loader/entries
+cat > /boot/loader/loader.conf <<'EOT'
+default arch
+timeout 3
+editor no
+EOT
+
+cat > /boot/loader/entries/arch.conf <<EOT
+title Arch Linux
+linux /vmlinuz-linux
+initrd /initramfs-linux.img
+options root=PARTUUID=$root_partuuid rw
+EOT
+EOF
+		then
+			return 0
+		fi
 	fi
 
 	show_install_error "Configuring the new system"
@@ -230,37 +365,29 @@ install_base_system() {
 	local efi_partition=""
 	local root_partition=""
 	local root_partuuid=""
-	local confirm_status=0
 	local install_status=0
-	local dev_notice=""
 	local -a resolved_partitions=()
 
-	require_root || return 1
+	if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+		print_install_error "Run the installer as root from the Arch Linux live environment."
+		return 1
+	fi
+
 	require_commands || return 1
 
 	disk="$(get_state "DISK" 2>/dev/null || true)"
 	if [[ -z $disk ]]; then
-		msg "Disk Required" "Select a target disk before starting the installation."
+		print_install_error "Select a target disk before starting the installation."
 		return 1
 	fi
 
 	if [[ ! -b $disk ]]; then
-		error_box "Invalid Disk" "The saved disk does not exist anymore:\n\n$disk"
+		print_install_error "The saved disk does not exist anymore: $disk"
 		return 1
 	fi
 
-	if flag_enabled "$DEV_MODE"; then
-		dev_notice="\n\nDev mode flags:\nSKIP_PARTITION=$SKIP_PARTITION\nSKIP_PACSTRAP=$SKIP_PACSTRAP\nSKIP_CHROOT=$SKIP_CHROOT"
-	fi
-
-	confirm "Confirm Installation" "This will prepare a bootable Arch Linux system on:\n\n$disk\n\nDestructive steps may erase existing data.$dev_notice\n\nContinue?" 16 76
-	confirm_status=$?
-	if [[ $confirm_status -ne 0 ]]; then
-		return "$confirm_status"
-	fi
-
 	: > "$ARCHINSTALL_LOG" || {
-		error_box "Log Error" "Could not write the install log:\n\n$ARCHINSTALL_LOG"
+		print_install_error "Could not write the install log: $ARCHINSTALL_LOG"
 		return 1
 	}
 
@@ -300,7 +427,7 @@ install_base_system() {
 		root_partition=${resolved_partitions[1]:-}
 
 		if [[ -z $efi_partition || -z $root_partition ]]; then
-			error_box "Partition Detection Failed" "Could not resolve the EFI and root partitions for:\n\n$disk"
+			print_install_error "Could not resolve the EFI and root partitions for: $disk"
 			exit 1
 		fi
 
@@ -318,28 +445,32 @@ install_base_system() {
 		run_step "Creating the EFI mount point" mkdir -p /mnt/boot || exit 1
 		run_step "Mounting the EFI partition" mount "$efi_partition" /mnt/boot || exit 1
 
-		if flag_enabled "$SKIP_PACSTRAP"; then
-			log_line "Skipping pacstrap because SKIP_PACSTRAP=$SKIP_PACSTRAP"
-			if [[ ! -d /mnt/etc ]]; then
-				error_box "Pacstrap Skipped" "SKIP_PACSTRAP=true requires an existing system mounted at /mnt."
-				exit 1
-			fi
+		if install_ui_uses_dialog; then
+			run_install_gauge "$root_partition" || exit 1
 		else
-			run_step_with_retry "Installing the base Arch Linux packages" 3 pacstrap /mnt base linux linux-firmware || exit 1
-		fi
-
-		run_shell_step "Generating fstab" 'mkdir -p /mnt/etc && : > /mnt/etc/fstab && genfstab -U /mnt >> /mnt/etc/fstab' || exit 1
-
-		if flag_enabled "$SKIP_CHROOT"; then
-			log_line "Skipping chroot configuration because SKIP_CHROOT=$SKIP_CHROOT"
-		else
-			root_partuuid="$(blkid -s PARTUUID -o value "$root_partition" 2>> "$ARCHINSTALL_LOG" || true)"
-			if [[ -z $root_partuuid ]]; then
-				error_box "Bootloader Error" "Could not determine the root PARTUUID for:\n\n$root_partition"
-				exit 1
+			if flag_enabled "$SKIP_PACSTRAP"; then
+				log_line "Skipping pacstrap because SKIP_PACSTRAP=$SKIP_PACSTRAP"
+				if [[ ! -d /mnt/etc ]]; then
+					print_install_error "SKIP_PACSTRAP=true requires an existing system mounted at /mnt."
+					exit 1
+				fi
+			else
+				run_step_with_retry "Installing the base Arch Linux packages" 3 pacstrap /mnt base linux linux-firmware || exit 1
 			fi
 
-			run_chroot_configuration "$root_partuuid" || exit 1
+			run_shell_step "Generating fstab" 'mkdir -p /mnt/etc && : > /mnt/etc/fstab && genfstab -U /mnt >> /mnt/etc/fstab' || exit 1
+
+			if flag_enabled "$SKIP_CHROOT"; then
+				log_line "Skipping chroot configuration because SKIP_CHROOT=$SKIP_CHROOT"
+			else
+				root_partuuid="$(blkid -s PARTUUID -o value "$root_partition" 2>> "$ARCHINSTALL_LOG" || true)"
+				if [[ -z $root_partuuid ]]; then
+					print_install_error "Could not determine the root PARTUUID for: $root_partition"
+					exit 1
+				fi
+
+				run_chroot_configuration "$root_partuuid" || exit 1
+			fi
 		fi
 
 		ARCHINSTALL_INSTALL_SUCCESS=true
@@ -347,7 +478,6 @@ install_base_system() {
 		log_line "Installation completed successfully"
 		exit 0
 	); then
-		msg "Installation Complete" "A bootable Arch Linux system was prepared successfully.\n\nMounted target:\n/mnt\n\nLog file:\n$ARCHINSTALL_LOG"
 		return 0
 	else
 		install_status=$?

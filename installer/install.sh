@@ -25,11 +25,70 @@ show_state_summary() {
 	msg "Installer State" "Saved state:\n\nDisk: $disk\nEFI: $efi_partition\nRoot: $root_partition" 12 76
 }
 
+confirm_installation() {
+	local disk=""
+	local message=""
+
+	require_root || return 1
+
+	disk="$(get_state "DISK" 2>/dev/null || true)"
+	if [[ -z $disk ]]; then
+		msg "Disk Required" "Select a target disk before starting the installation."
+		return 1
+	fi
+
+	if [[ ! -b $disk ]]; then
+		error_box "Invalid Disk" "The saved disk does not exist anymore:\n\n$disk"
+		return 1
+	fi
+
+	message="This will prepare a bootable Arch Linux system on:\n\n$disk\n\nDestructive steps may erase existing data."
+	if flag_enabled "$DEV_MODE"; then
+		message+="\n\nDev mode flags:\nSKIP_PARTITION=$SKIP_PARTITION\nSKIP_PACSTRAP=$SKIP_PACSTRAP\nSKIP_CHROOT=$SKIP_CHROOT\nINSTALL_UI_MODE=$INSTALL_UI_MODE"
+	fi
+
+	confirm "Confirm Installation" "$message\n\nContinue?" 18 76
+}
+
 run_install() {
 	local status=0
+	local prompt_status=0
+	local skip_confirm=false
 
-	install_base_system
+	confirm_installation
+	prompt_status=$?
+	if [[ $prompt_status -ne 0 ]]; then
+		return "$prompt_status"
+	fi
+
+	clear
+	if command -v tput >/dev/null 2>&1; then
+		tput cnorm || true
+	fi
+
+	echo "[*] Starting Arch installation..."
+	echo "[*] This may take a while..."
+	echo
+
+	skip_confirm=true
+	install_base_system "$skip_confirm"
 	status=$?
+
+	echo
+	case $status in
+		0)
+			echo "[✓] Installation finished successfully"
+			;;
+		130)
+			echo "[!] Installation interrupted"
+			;;
+		*)
+			echo "[!] Installation finished with errors (status: $status)"
+			;;
+	esac
+	echo "[*] Log file: ${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}"
+	read -r -p "Press Enter to return to menu..." _
+	clear
 
 	case $status in
 		0|1|255|130)
