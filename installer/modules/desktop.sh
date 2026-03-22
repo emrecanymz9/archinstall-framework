@@ -23,7 +23,7 @@ display_manager_label() {
 			printf 'SDDM\n'
 			;;
 		greetd)
-			printf 'greetd + qtgreet\n'
+			printf 'greetd + tuigreet\n'
 			;;
 		*)
 			printf '%s\n' "$1"
@@ -62,7 +62,7 @@ select_display_manager() {
 
 	selected="$(menu "Display Manager" "Choose the display manager for KDE Plasma." 14 76 4 \
 		"sddm" "Recommended for KDE Plasma" \
-		"greetd" "greetd with qtgreet")"
+		"greetd" "greetd with tuigreet")"
 	case $? in
 		0)
 			printf '%s\n' "$selected"
@@ -90,8 +90,18 @@ desktop_profile_packages() {
 			;;
 		kde)
 			package_ref=(
-				plasma
-				kde-applications
+				plasma-desktop
+				plasma-workspace
+				plasma-nm
+				plasma-pa
+				konsole
+				dolphin
+				kate
+				ark
+				gwenview
+				spectacle
+				kde-gtk-config
+				packagekit-qt6
 				xdg-desktop-portal-kde
 				pipewire
 				pipewire-alsa
@@ -106,7 +116,7 @@ desktop_profile_packages() {
 					package_ref+=(sddm)
 					;;
 				greetd)
-					package_ref+=(greetd qtgreet)
+					package_ref+=(greetd greetd-tuigreet)
 					;;
 			esac
 			;;

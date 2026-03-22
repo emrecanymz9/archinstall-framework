@@ -148,6 +148,15 @@ log_line() {
 	printf '[%s] %s\n' "$(date '+%F %T')" "$message" >> "$ARCHINSTALL_LOG"
 }
 
+sanitize_stream() {
+	if command -v stdbuf >/dev/null 2>&1; then
+		stdbuf -oL tr -cd '\11\12\15\40-\176'
+		return
+	fi
+
+	tr -cd '\11\12\15\40-\176'
+}
+
 print_install_info() {
 	printf '[*] %s\n' "$1"
 }
@@ -158,22 +167,22 @@ print_install_error() {
 
 run_logged_command() {
 	if install_ui_uses_dialog; then
-		"$@" >> "$ARCHINSTALL_LOG" 2>&1
+		"$@" 2>&1 | sanitize_stream >> "$ARCHINSTALL_LOG"
 		return $?
 	fi
 
-	"$@" 2>&1 | tee -a "$ARCHINSTALL_LOG"
+	"$@" 2>&1 | sanitize_stream | tee -a "$ARCHINSTALL_LOG"
 }
 
 run_logged_shell_command() {
 	local command_string=${1:?command string is required}
 
 	if install_ui_uses_dialog; then
-		bash -lc "$command_string" >> "$ARCHINSTALL_LOG" 2>&1
+		bash -lc "$command_string" 2>&1 | sanitize_stream >> "$ARCHINSTALL_LOG"
 		return $?
 	fi
 
-	bash -lc "$command_string" 2>&1 | tee -a "$ARCHINSTALL_LOG"
+	bash -lc "$command_string" 2>&1 | sanitize_stream | tee -a "$ARCHINSTALL_LOG"
 }
 
 cleanup_mounts() {
@@ -200,7 +209,7 @@ show_install_error() {
 	local step=${1:-"Unknown step"}
 	local excerpt
 
-	excerpt="$(tail -n 15 "$ARCHINSTALL_LOG" 2>/dev/null || true)"
+	excerpt="$(tail -n 20 "$ARCHINSTALL_LOG" 2>/dev/null || true)"
 	print_install_error "Installation failed during: $step"
 	if [[ -n $excerpt ]]; then
 		printf '%s\n' "$excerpt" >&2
@@ -262,6 +271,12 @@ run_step_with_retry() {
 	done
 }
 
+run_pacstrap_install() {
+	local -a packages=("$@")
+
+	run_step_with_retry "Installing the base Arch Linux packages" 3 pacstrap -K /mnt --noconfirm --needed "${packages[@]}"
+}
+
 
 run_install_gauge() {
 	local root_partition=${1:?root partition is required}
@@ -291,7 +306,7 @@ run_install_gauge() {
 		else
 			echo 30
 			echo "# Installing base system..."
-			run_step_with_retry "Installing the base Arch Linux packages" 3 pacstrap /mnt "${pacstrap_packages[@]}" || exit 1
+			run_pacstrap_install "${pacstrap_packages[@]}" || exit 1
 		fi
 
 		echo 80
@@ -316,7 +331,7 @@ run_install_gauge() {
 
 		echo 100
 		echo "# Done"
-	) | dialog --title "ArchInstall Framework" --gauge "Installing system..." 10 70 0
+	) | sanitize_stream | dialog --title "ArchInstall Framework" --gauge "Installing system..." 10 70 0
 	gauge_pipe_status=("${PIPESTATUS[@]}")
 	gauge_status=${gauge_pipe_status[0]:-1}
 
@@ -525,7 +540,7 @@ if [[ \$TARGET_DESKTOP_PROFILE == "kde" ]]; then
 vt = 1
 
 [default_session]
-command = "qtgreet --cmd startplasma-wayland"
+command = "tuigreet --cmd startplasma-wayland"
 user = "greeter"
 EOT
 			systemctl enable greetd
@@ -726,7 +741,7 @@ run_install() {
 					exit 1
 				fi
 			else
-				run_step_with_retry "Installing the base Arch Linux packages" 3 pacstrap /mnt "${pacstrap_packages[@]}" || exit 1
+				run_pacstrap_install "${pacstrap_packages[@]}" || exit 1
 			fi
 
 			run_shell_step "Generating fstab" 'mkdir -p /mnt/etc && : > /mnt/etc/fstab && genfstab -U /mnt >> /mnt/etc/fstab' || exit 1
