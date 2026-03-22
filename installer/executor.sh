@@ -7,6 +7,8 @@ ARCHINSTALL_LOG=${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}
 ARCHINSTALL_INSTALL_SUCCESS=${ARCHINSTALL_INSTALL_SUCCESS:-false}
 ARCHINSTALL_CLEANUP_ACTIVE=${ARCHINSTALL_CLEANUP_ACTIVE:-false}
 ARCHINSTALL_PROGRESS_LOG=${ARCHINSTALL_PROGRESS_LOG:-/tmp/archinstall_progress.log}
+PACMAN_OPTS=${PACMAN_OPTS:---noconfirm --needed}
+export PACMAN_OPTS
 DEV_MODE=${DEV_MODE:-false}
 SKIP_PARTITION=${SKIP_PARTITION:-false}
 SKIP_PACSTRAP=${SKIP_PACSTRAP:-false}
@@ -41,6 +43,34 @@ flag_enabled() {
 
 install_ui_uses_dialog() {
 	[[ ${INSTALL_UI_MODE:-plain} == "dialog" ]]
+}
+
+build_pacman_opts_array() {
+	local -n options_ref=${1:?options reference is required}
+
+	read -r -a options_ref <<< "${PACMAN_OPTS:---noconfirm --needed}"
+}
+
+run_pacman_step_with_retry() {
+	local step=${1:?step description is required}
+	local max_attempts=${2:?max attempts is required}
+	local operation=${3:?pacman operation is required}
+	local -a pacman_opts=()
+
+	shift 3
+	build_pacman_opts_array pacman_opts
+	run_step_with_retry "$step" "$max_attempts" pacman "$operation" "${pacman_opts[@]}" "$@"
+}
+
+run_optional_pacman_step_with_retry() {
+	local step=${1:?step description is required}
+	local max_attempts=${2:?max attempts is required}
+	local operation=${3:?pacman operation is required}
+	local -a pacman_opts=()
+
+	shift 3
+	build_pacman_opts_array pacman_opts
+	run_optional_step_with_retry "$step" "$max_attempts" pacman "$operation" "${pacman_opts[@]}" "$@"
 }
 
 render_command() {
@@ -700,13 +730,21 @@ TARGET_DESKTOP_PROFILE=$quoted_desktop_profile
 TARGET_DISPLAY_MANAGER=$quoted_display_manager
 TARGET_DISPLAY_MODE=$quoted_display_mode
 TARGET_RESOLVED_DISPLAY_MODE=$quoted_resolved_display_mode
+export PACMAN_OPTS='${PACMAN_OPTS:---noconfirm --needed}'
 
+log_chroot_step() {
+	echo "[STEP] $1"
+}
+
+log_chroot_step "Configuring mkinitcpio hooks"
 echo "[DEBUG] Applying mkinitcpio hooks"
 sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect modconf block filesystems keyboard fsck)/' /etc/mkinitcpio.conf
 
+log_chroot_step "Configuring timezone"
 ln -sf "/usr/share/zoneinfo/\$TARGET_TIMEZONE" /etc/localtime
 hwclock --systohc
 
+log_chroot_step "Configuring locale"
 if ! grep -qx "\$TARGET_LOCALE UTF-8" /etc/locale.gen; then
 	echo "\$TARGET_LOCALE UTF-8" >> /etc/locale.gen
 fi
@@ -714,6 +752,7 @@ locale-gen
 printf '%s\n' "LANG=\$TARGET_LOCALE" > /etc/locale.conf
 printf '%s\n' "KEYMAP=\$TARGET_KEYMAP" > /etc/vconsole.conf
 
+log_chroot_step "Configuring hostname and hosts"
 printf '%s\n' "\$TARGET_HOSTNAME" > /etc/hostname
 cat > /etc/hosts <<'EOT'
 127.0.0.1 localhost
@@ -722,21 +761,25 @@ cat > /etc/hosts <<'EOT'
 EOT
 sed -i "s/TARGET_HOSTNAME/\$TARGET_HOSTNAME/g" /etc/hosts
 
+log_chroot_step "Creating user accounts and setting passwords"
 if ! id -u "\$TARGET_USERNAME" >/dev/null 2>&1; then
 	useradd -m -G wheel -s /bin/bash "\$TARGET_USERNAME"
 fi
 echo "\$TARGET_USERNAME:\$TARGET_USER_PASSWORD" | chpasswd
 echo "root:\$TARGET_ROOT_PASSWORD" | chpasswd
 
+log_chroot_step "Configuring sudo permissions"
 if grep -q '^# %wheel ALL=(ALL:ALL) ALL' /etc/sudoers; then
 	sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
 elif ! grep -q '^%wheel ALL=(ALL:ALL) ALL' /etc/sudoers; then
 	echo '%wheel ALL=(ALL:ALL) ALL' >> /etc/sudoers
 fi
 
+log_chroot_step "Enabling NetworkManager"
 systemctl enable NetworkManager
 
 if [[ \$TARGET_ENABLE_ZRAM == "true" ]]; then
+	log_chroot_step "Configuring zram"
 	mkdir -p /etc/systemd
 	cat > /etc/systemd/zram-generator.conf <<'EOT'
 [zram0]
@@ -780,9 +823,11 @@ plasma_sddm_session() {
 PLASMA_SESSION_COMMAND="\$(plasma_session_command "\$TARGET_RESOLVED_DISPLAY_MODE")"
 PLASMA_SDDM_SESSION="\$(plasma_sddm_session "\$TARGET_RESOLVED_DISPLAY_MODE")"
 
+log_chroot_step "Rebuilding initramfs"
 mkinitcpio -P
 
 if [[ \$TARGET_DESKTOP_PROFILE == "kde" ]]; then
+	log_chroot_step "Configuring KDE services"
 	systemctl enable bluetooth
 	install -d -m 0755 /etc/systemd/user/default.target.wants
 	ln -sf /usr/lib/systemd/user/pipewire.service /etc/systemd/user/default.target.wants/pipewire.service
@@ -791,6 +836,7 @@ if [[ \$TARGET_DESKTOP_PROFILE == "kde" ]]; then
 
 	case \$TARGET_DISPLAY_MANAGER in
 		sddm)
+			log_chroot_step "Configuring SDDM"
 			if command -v sddm >/dev/null 2>&1; then
 				install -d -m 0755 /etc/sddm.conf.d /var/lib/sddm
 				cat > /etc/sddm.conf.d/archinstall.conf <<'EOT'
@@ -813,6 +859,7 @@ EOT
 			fi
 			;;
 		greetd)
+			log_chroot_step "Configuring greetd"
 			if command -v tuigreet >/dev/null 2>&1; then
 				install -d -m 0755 /etc/greetd
 				cat > /etc/greetd/config.toml <<EOT
@@ -837,6 +884,7 @@ EOT
 fi
 
 if [[ \$BOOT_MODE == "uefi" ]]; then
+	log_chroot_step "Installing systemd-boot"
 	bootctl install
 	mkdir -p /boot/loader/entries
 	cat > /boot/loader/loader.conf <<'EOT'
@@ -855,6 +903,7 @@ EOT
 	echo "[DEBUG] systemd-boot entry"
 	cat /boot/loader/entries/arch.conf
 else
+	log_chroot_step "Installing GRUB"
 	grub_cmdline="root=UUID=\$ROOT_UUID"
 	if [[ \$TARGET_FILESYSTEM == "btrfs" ]]; then
 		grub_cmdline="\$grub_cmdline rootfstype=btrfs rootflags=\$TARGET_ROOT_MOUNT_OPTIONS"
@@ -897,13 +946,13 @@ run_chroot_configuration() {
 	log_line "[STEP] Configuring the target system inside chroot"
 
 	if install_ui_uses_dialog; then
-		if build_chroot_script "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_mode" "$resolved_display_mode" | arch-chroot /mnt /bin/bash >> "$ARCHINSTALL_LOG" 2>&1
+		if build_chroot_script "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_mode" "$resolved_display_mode" | arch-chroot /mnt /bin/bash 2>&1 | sanitize_stream | tee_install_logs >/dev/null
 		then
 			log_line "[ OK ] Configuring the target system inside chroot"
 			return 0
 		fi
 	else
-		if build_chroot_script "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_mode" "$resolved_display_mode" | arch-chroot /mnt /bin/bash 2>&1 | tee -a "$ARCHINSTALL_LOG"
+		if build_chroot_script "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_mode" "$resolved_display_mode" | arch-chroot /mnt /bin/bash 2>&1 | sanitize_stream | tee_install_logs
 		then
 			log_line "[ OK ] Configuring the target system inside chroot"
 			return 0
