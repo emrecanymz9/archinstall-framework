@@ -28,6 +28,16 @@ INSTALL_USER_PASSWORD=${INSTALL_USER_PASSWORD:-""}
 INSTALL_ROOT_PASSWORD=${INSTALL_ROOT_PASSWORD:-""}
 ZRAM=${ZRAM:-false}
 LIVE_CONSOLE_FONT=${LIVE_CONSOLE_FONT:-ter-v16n}
+ARCHINSTALL_DEBUG_LOG=${ARCHINSTALL_DEBUG_LOG:-/tmp/archinstall_debug.log}
+ARCHINSTALL_PROGRESS_DIALOG_PID=${ARCHINSTALL_PROGRESS_DIALOG_PID:-0}
+ARCHINSTALL_PROGRESS_KEEPALIVE_FD=${ARCHINSTALL_PROGRESS_KEEPALIVE_FD:-}
+ARCHINSTALL_PROGRESS_WRITER_FD=${ARCHINSTALL_PROGRESS_WRITER_FD:-}
+
+log_debug() {
+	local message=${1:-}
+
+	printf '[%s] %s\n' "$(date '+%F %T')" "$message" >> "$ARCHINSTALL_DEBUG_LOG" 2>/dev/null || true
+}
 
 sync_install_ui_mode() {
 	if [[ ${UI_MODE:-dialog} == "tty" ]] || flag_enabled "$DEV_MODE"; then
@@ -126,14 +136,43 @@ start_install_progress_dialog() {
 	local progress_fifo=${1:?progress fifo is required}
 	local progress_error_log=${2:?progress error log is required}
 
-	dialog \
+	log_debug "progress relay starting for fifo=$progress_fifo"
+	(
+		while IFS= read -r line; do
+			printf '%s\n' "$line"
+		done < "$progress_fifo"
+	) | dialog \
 		--clear \
 		--backtitle "$ARCHINSTALL_BACKTITLE" \
 		--title "Installing Arch Linux" \
 		--gauge "Preparing installer..." \
 		22 100 0 \
-		< "$progress_fifo" 2> "$progress_error_log" &
-	printf '%s\n' "$!"
+		2> "$progress_error_log" &
+	ARCHINSTALL_PROGRESS_DIALOG_PID=$!
+	log_debug "progress dialog started pid=$ARCHINSTALL_PROGRESS_DIALOG_PID"
+	return 0
+}
+
+open_install_progress_writer() {
+	local progress_fifo=${1:?progress fifo is required}
+
+	log_debug "opening progress keepalive for fifo=$progress_fifo"
+	exec {ARCHINSTALL_PROGRESS_KEEPALIVE_FD}<>"$progress_fifo" || return 1
+	log_debug "opening progress writer for fifo=$progress_fifo"
+	exec {ARCHINSTALL_PROGRESS_WRITER_FD}>"$progress_fifo" || return 1
+	log_debug "progress writer started fd=$ARCHINSTALL_PROGRESS_WRITER_FD"
+	return 0
+}
+
+close_install_progress_writer() {
+	if [[ -n ${ARCHINSTALL_PROGRESS_WRITER_FD:-} ]]; then
+		exec {ARCHINSTALL_PROGRESS_WRITER_FD}>&-
+		ARCHINSTALL_PROGRESS_WRITER_FD=
+	fi
+	if [[ -n ${ARCHINSTALL_PROGRESS_KEEPALIVE_FD:-} ]]; then
+		exec {ARCHINSTALL_PROGRESS_KEEPALIVE_FD}>&-
+		ARCHINSTALL_PROGRESS_KEEPALIVE_FD=
+	fi
 }
 
 write_install_progress_dialog() {
@@ -147,13 +186,17 @@ write_install_progress_dialog() {
 	local progress_log=${8:?progress log is required}
 	local message=""
 
+	if [[ -z ${ARCHINSTALL_PROGRESS_WRITER_FD:-} ]]; then
+		return 1
+	fi
+
 	message="$(render_install_progress_text "$progress_log" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode")"
 	{
 		printf 'XXX\n'
 		printf '%s\n' "$percent"
 		printf '%s\n' "$message"
 		printf 'XXX\n'
-	} > "$progress_fifo"
+	} >&${ARCHINSTALL_PROGRESS_WRITER_FD}
 }
 
 show_install_progress_tty() {
@@ -399,17 +442,18 @@ run_install_with_dialog() {
 	local tty_fallback_active=false
 
 	stop_progress_dialog() {
+		close_install_progress_writer
 		if (( progress_dialog_pid > 0 )); then
 			kill "$progress_dialog_pid" >/dev/null 2>&1 || true
 			wait "$progress_dialog_pid" 2>/dev/null || true
 			progress_dialog_pid=0
 		fi
-		[[ -n $progress_fifo ]] && rm -f "$progress_fifo"
-		[[ -n $progress_error_log ]] && rm -f "$progress_error_log"
 	}
 
 	: > "$log_file" || return 1
 	: > "$progress_log" || return 1
+	: > "$ARCHINSTALL_DEBUG_LOG" || true
+	log_debug "run_install_with_dialog entered"
 	boot_mode="$(state_or_default "BOOT_MODE" "auto")"
 	filesystem="$(state_or_default "FILESYSTEM" "ext4")"
 	desktop_profile="$(state_or_default "DESKTOP_PROFILE" "none")"
@@ -417,46 +461,76 @@ run_install_with_dialog() {
 	expected_steps="$(estimate_install_step_count "$boot_mode" "$desktop_profile")"
 	progress_fifo="$(mktemp -u /tmp/archinstall_progress_fifo.XXXXXX)"
 	progress_error_log="$(mktemp /tmp/archinstall_progress_error.XXXXXX 2>/dev/null || printf '/tmp/archinstall_progress_error.log')"
+	log_debug "progress fifo path prepared: $progress_fifo"
 	if ! mkfifo "$progress_fifo"; then
+		log_debug "progress fifo creation failed"
 		log_ui_error "[UI ERROR] could not create progress fifo; switching to TTY progress"
 		set_ui_mode tty
 		tty_fallback_active=true
 	fi
 	if [[ $tty_fallback_active == false && ${UI_MODE:-dialog} != "tty" ]]; then
-		progress_dialog_pid="$(start_install_progress_dialog "$progress_fifo" "$progress_error_log")"
+		if open_install_progress_writer "$progress_fifo" && start_install_progress_dialog "$progress_fifo" "$progress_error_log"; then
+			progress_dialog_pid=$ARCHINSTALL_PROGRESS_DIALOG_PID
+			log_debug "progress system started writer_fd=$ARCHINSTALL_PROGRESS_WRITER_FD dialog_pid=$progress_dialog_pid"
+			write_install_progress_dialog "$progress_fifo" 0 "Starting installer" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode" "$progress_log" || true
+		else
+			log_debug "progress system startup failed; falling back to tty"
+			set_ui_mode tty
+			tty_fallback_active=true
+			apply_runtime_mode || true
+		fi
 	fi
-	INSTALL_UI_MODE=dialog ARCHINSTALL_PROGRESS_LOG="$progress_log" run_install >> "$log_file" 2>&1 &
+	log_debug "run_install launch requested"
+	apply_runtime_mode || true
+	INSTALL_UI_MODE="$INSTALL_UI_MODE" ARCHINSTALL_PROGRESS_LOG="$progress_log" run_install >> "$log_file" 2>&1 &
 	install_pid=$!
+	log_debug "run_install started pid=$install_pid"
 
 	while kill -0 "$install_pid" 2>/dev/null; do
 		sync_install_ui_mode
 		percent="$(install_progress_percent "$log_file" "$expected_steps")"
 		current_step="$(grep '^\[[0-9-]\{10\} [0-9:]\{8\}\] \[STEP\]' "$log_file" 2>/dev/null | tail -n 1 | sed 's/^.*\[STEP\] //' || printf 'Preparing install')"
 		if [[ $tty_fallback_active == true || ${UI_MODE:-dialog} == "tty" ]]; then
+			log_debug "progress switching to tty mode"
 			stop_progress_dialog
 			show_install_progress_tty "$log_file" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode"
 		else
 			if (( progress_dialog_pid <= 0 )) || ! kill -0 "$progress_dialog_pid" 2>/dev/null; then
 				RETRY_COUNT=$((RETRY_COUNT + 1))
+				log_debug "progress dialog not alive retry=$RETRY_COUNT"
 				if [[ -s $progress_error_log ]]; then
 					log_ui_error "[UI ERROR] progress dialog exited: $(tr -cd '\11\12\15\40-\176' < "$progress_error_log")"
 				fi
 				if (( RETRY_COUNT >= MAX_RETRY )); then
+					log_debug "progress dialog retry limit reached; switching to tty"
 					set_ui_mode tty
 					tty_fallback_active=true
 					apply_runtime_mode || true
 					show_install_progress_tty "$log_file" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode"
 					continue
 				fi
-				progress_dialog_pid="$(start_install_progress_dialog "$progress_fifo" "$progress_error_log")"
+				stop_progress_dialog
+				if open_install_progress_writer "$progress_fifo" && start_install_progress_dialog "$progress_fifo" "$progress_error_log"; then
+					progress_dialog_pid=$ARCHINSTALL_PROGRESS_DIALOG_PID
+					log_debug "progress dialog restarted pid=$progress_dialog_pid"
+				else
+					log_debug "progress dialog restart failed; switching to tty"
+					set_ui_mode tty
+					tty_fallback_active=true
+					apply_runtime_mode || true
+					show_install_progress_tty "$log_file" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode"
+					continue
+				fi
 			fi
 
 			if write_install_progress_dialog "$progress_fifo" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode" "$progress_log"; then
 				RETRY_COUNT=0
 			else
 				RETRY_COUNT=$((RETRY_COUNT + 1))
+				log_debug "progress writer failed retry=$RETRY_COUNT"
 				if (( RETRY_COUNT >= MAX_RETRY )); then
 					log_ui_error "[UI ERROR] install progress dialog failed repeatedly; switching to TTY progress"
+					log_debug "progress writer retry limit reached; switching to tty"
 					set_ui_mode tty
 					tty_fallback_active=true
 					apply_runtime_mode || true
@@ -467,9 +541,13 @@ run_install_with_dialog() {
 		sleep 1
 	done
 
+	log_debug "run_install process exited"
 	stop_progress_dialog
+	[[ -n $progress_fifo ]] && rm -f "$progress_fifo"
+	[[ -n $progress_error_log ]] && rm -f "$progress_error_log"
 	wait "$install_pid"
 	install_status=$?
+	log_debug "run_install exit status=$install_status"
 	clear_screen
 	return "$install_status"
 }
