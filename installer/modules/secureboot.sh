@@ -55,7 +55,7 @@ secure_boot_packages() {
 
 	case $secure_boot_mode in
 		assisted|advanced)
-			package_ref+=(sbctl)
+			package_ref+=(sbctl systemd-ukify)
 			;;
 		*)
 			;;
@@ -77,10 +77,10 @@ secure_boot_guidance_text() {
 			printf 'Secure Boot configuration is disabled.'
 			;;
 		assisted)
-			printf 'Assisted mode installs sbctl and prepares a safe post-install Secure Boot workflow. If firmware is already enforcing Secure Boot, keep a recovery path available until keys are enrolled.'
+			printf 'Assisted mode installs sbctl and systemd-ukify, prepares a UKI workflow, and attempts safe key enrollment when firmware setup mode allows it.'
 			;;
 		advanced)
-			printf 'Advanced mode installs the Secure Boot tooling but leaves enrollment and signing decisions to manual follow-up.'
+			printf 'Advanced mode installs the Secure Boot and UKI tooling but leaves enrollment policy to manual follow-up.'
 			;;
 		*)
 			printf 'Secure Boot mode: %s' "$secure_boot_mode"

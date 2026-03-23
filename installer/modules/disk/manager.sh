@@ -182,6 +182,120 @@ partition_menu_entries() {
 	done < <(disk_partition_rows "$disk")
 }
 
+disk_has_mounted_partitions() {
+	local disk=${1:?disk is required}
+
+	if lsblk -lnpo MOUNTPOINTS,TYPE "$disk" 2>/dev/null | awk '$2 == "part" && $1 != "" { found = 1 } END { exit(found ? 0 : 1) }'; then
+		return 0
+	fi
+
+	return 1
+}
+
+validate_disk_layout_access() {
+	local disk=${1:?disk is required}
+	parted -s "$disk" print >/dev/null 2>&1
+}
+
+typed_yes_confirmation() {
+	local title=${1:-"Confirm"}
+	local prompt=${2:-"Type YES to continue."}
+	local response=""
+
+	input_box "$title" "$prompt" "" 12 76
+	response="$DIALOG_RESULT"
+	if [[ $DIALOG_STATUS -ne 0 ]]; then
+		return 1
+	fi
+
+	[[ $response == "YES" ]]
+}
+
+disk_preview_operations() {
+	local scenario=${1:?scenario is required}
+	local disk=${2:?disk is required}
+	local boot_mode=${3:-bios}
+	local filesystem=${4:-ext4}
+	local root_partition=${5:-}
+	local efi_partition=${6:-}
+	local free_space_size_mib=${7:-0}
+	local format_efi=${8:-false}
+	local lines=()
+
+	case $scenario in
+		wipe)
+			lines+=("- Remove every existing partition from $disk")
+			if [[ $boot_mode == "uefi" ]]; then
+				lines+=("- Create partition 1: EFI System Partition, 512 MiB, FAT32")
+				lines+=("- Mount partition 1 at /boot")
+			fi
+			if [[ $boot_mode == "uefi" ]]; then
+				lines+=("- Create partition 2: root filesystem, remaining space, $filesystem")
+			else
+				lines+=("- Create partition 1: root filesystem, full disk, $filesystem")
+			fi
+			lines+=("- Mount the root filesystem at /")
+			;;
+		free-space|dual-boot)
+			lines+=("- Keep the existing partitions already present on $disk")
+			lines+=("- Use the largest free-space region: ${free_space_size_mib} MiB")
+			if [[ $boot_mode == "uefi" ]]; then
+				if [[ -n $efi_partition ]]; then
+					lines+=("- Reuse EFI partition $efi_partition and mount it at /boot")
+				else
+					lines+=("- Create a new EFI partition in free space: 512 MiB, FAT32")
+					lines+=("- Mount the new EFI partition at /boot")
+				fi
+			fi
+			lines+=("- Create a new root partition in the remaining free space: $filesystem")
+			lines+=("- Mount the new root filesystem at /")
+			;;
+		manual)
+			lines+=("- Reuse the manual partition layout already present on $disk")
+			lines+=("- Format root partition $root_partition as $filesystem")
+			lines+=("- Mount $root_partition at /")
+			if [[ -n $efi_partition ]]; then
+				if [[ $format_efi == "true" ]]; then
+					lines+=("- Format EFI partition $efi_partition as FAT32")
+				else
+					lines+=("- Keep the existing contents of EFI partition $efi_partition")
+				fi
+				lines+=("- Mount $efi_partition at /boot")
+			fi
+			;;
+	esac
+
+	if [[ $filesystem == "btrfs" ]]; then
+		lines+=("- Create btrfs subvolume @ and mount it at /")
+		lines+=("- Create btrfs subvolume @home and mount it at /home")
+	fi
+	if [[ $boot_mode == "uefi" ]]; then
+		lines+=("- Install systemd-boot to the EFI partition")
+	else
+		lines+=("- Install GRUB to the disk MBR: $disk")
+	fi
+	if [[ $(state_or_default "SECURE_BOOT_MODE" "disabled") != "disabled" ]]; then
+		lines+=("- Prepare Secure Boot tooling, UKI generation, and kernel signing")
+	fi
+
+	printf '%s\n' "${lines[@]}"
+}
+
+show_disk_operation_preview() {
+	local scenario=${1:?scenario is required}
+	local disk=${2:?disk is required}
+	local boot_mode=${3:-bios}
+	local filesystem=${4:-ext4}
+	local root_partition=${5:-}
+	local efi_partition=${6:-}
+	local free_space_size_mib=${7:-0}
+	local format_efi=${8:-false}
+	local preview_text=""
+
+	preview_text="$(disk_preview_operations "$scenario" "$disk" "$boot_mode" "$filesystem" "$root_partition" "$efi_partition" "$free_space_size_mib" "$format_efi")"
+	msg "Preview Changes" "Exact operations for $disk:\n\n$preview_text" 22 90
+}
+
 show_disk_analysis() {
 	local disk=${1:?disk is required}
 	local model=""
@@ -226,6 +340,18 @@ prepare_install_state() {
 prepare_full_wipe_install() {
 	local disk=${1:?disk is required}
 	local boot_mode=${2:-bios}
+	local filesystem="$(state_or_default "FILESYSTEM" "ext4")"
+
+	if ! validate_disk_layout_access "$disk"; then
+		error_box "Disk Access Failed" "Could not read the current partition table for $disk."
+		return 1
+	fi
+	if disk_has_mounted_partitions "$disk"; then
+		warning_box "Mounted Partitions Detected" "One or more partitions on $disk are currently mounted. Unmount them before planning a destructive install on this disk."
+		return 1
+	fi
+
+	show_disk_operation_preview "wipe" "$disk" "$boot_mode" "$filesystem"
 
 	if ! confirm "Full Disk Wipe" "This will use the entire disk and recreate the partition table.\n\nDisk: $disk\nBoot mode: $boot_mode\n\nAll existing partitions will be lost. Continue?" 16 76; then
 		return 1
@@ -255,6 +381,7 @@ prepare_free_space_install() {
 	local efi_start_mib=0
 	local efi_end_mib=0
 	local root_start_mib=0
+	local filesystem="$(state_or_default "FILESYSTEM" "ext4")"
 
 	required_root_mib="$(estimate_target_required_space_mib "$(state_or_default "DESKTOP_PROFILE" "none")" "$(state_or_default "FILESYSTEM" "ext4")")"
 	existing_efi="$(find_existing_efi_partition "$disk" || true)"
@@ -278,8 +405,22 @@ prepare_free_space_install() {
 	if [[ $scenario == "dual-boot" ]]; then
 		warning_box "Windows Installation Detected" "Windows signatures were detected on this disk.\n\nThe installer will avoid wiping the disk and will create Linux partitions only in existing free space."
 	fi
+	if ! validate_disk_layout_access "$disk"; then
+		error_box "Disk Access Failed" "Could not read the current partition table for $disk."
+		return 1
+	fi
+	if disk_has_mounted_partitions "$disk"; then
+		warning_box "Mounted Partitions Detected" "One or more partitions on $disk are currently mounted. Unmount them before modifying free space on this disk."
+		return 1
+	fi
+
+	show_disk_operation_preview "$scenario" "$disk" "$boot_mode" "$filesystem" "" "$existing_efi" "$size_mib"
 
 	if ! confirm "Use Free Space" "Disk: $disk\nLargest free region: ${size_mib} MiB\nRoot filesystem requirement: ${required_root_mib} MiB\nExisting EFI: ${existing_efi:-none}\n\nCreate new Linux partitions in that free region now?" 18 78; then
+		return 1
+	fi
+	if ! typed_yes_confirmation "Final Confirmation" "Preview approved. Type YES to create the new partitions on $disk."; then
+		warning_box "Confirmation Failed" "Exact confirmation text was not entered. No partition changes were made."
 		return 1
 	fi
 
@@ -329,6 +470,12 @@ manual_partition_editor() {
 	local format_efi="false"
 	local -a root_entries=()
 	local -a efi_entries=()
+	local filesystem="$(state_or_default "FILESYSTEM" "ext4")"
+
+	if ! validate_disk_layout_access "$disk"; then
+		error_box "Disk Access Failed" "Could not read the current partition table for $disk."
+		return 1
+	fi
 
 	clear_screen
 	if command -v cfdisk >/dev/null 2>&1; then
@@ -371,6 +518,8 @@ manual_partition_editor() {
 		esac
 		format_efi="$(select_boolean_value "EFI Formatting" "Format the selected EFI partition? Choose false when reusing a Windows or existing EFI partition." "false" "Format EFI" "Keep EFI contents")" || return 1
 	fi
+
+	show_disk_operation_preview "manual" "$disk" "$boot_mode" "$filesystem" "$root_partition" "$efi_partition" 0 "$format_efi"
 
 	prepare_install_state "$disk" "manual" "$root_partition" "$efi_partition" "true" "$format_efi"
 	msg "Manual Layout Saved" "Disk: $disk\nRoot partition: $root_partition\nEFI partition: ${efi_partition:-not required}\nFormat EFI: $format_efi\n\nThe executor will reuse this manual layout."

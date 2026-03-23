@@ -35,10 +35,12 @@ The installer intentionally keeps the live ISO minimal. Heavy packages belong in
 - Secure Boot modes: `Disabled`, `Assisted`, `Advanced`
 - hardware abstraction for VMware, VirtualBox, QEMU/KVM, and common GPU vendors
 - optional zram via `zram-generator`
+- config-driven package tiers from `config/system.conf`
 - KDE Plasma profile with both Wayland and X11 session support
 - install profiles: `DAILY`, `DEV`, `CUSTOM`
 - display mode selection: `Auto`, `Wayland`, `X11`
-- `sddm` or `greetd + tuigreet`
+- `greetd` with `tuigreet` by default and optional `qtgreet`
+- plugin hooks for packages, chroot snippets, and menu extensions
 - pacman-key and mirror bootstrap hardening
 - install log at `/tmp/archinstall_install.log`
 - mixed-gauge dialog progress view with recent log lines
@@ -50,6 +52,8 @@ Additional documentation:
 - `docs/SECURE_BOOT.md`
 - `docs/HARDWARE.md`
 - `docs/PROFILES.md`
+- `docs/INSTALL_FLOW.md`
+- `docs/PLUGINS.md`
 
 ## Live ISO Rules
 
@@ -147,8 +151,10 @@ Display mode choices:
 
 Current display-manager behavior:
 
-- `sddm`: enabled only if the binary exists in the target system, with the default Plasma session set from the resolved mode
-- `greetd`: always launches Plasma on Wayland and leaves X11 available as a manual fallback helper
+- `greetd`: default display manager for Plasma installs
+- `tuigreet`: default frontend and always supported by the built-in package set
+- `qtgreet`: optional frontend for KDE-oriented deployments when a plugin or custom package source provides it
+- greetd always launches Plasma on Wayland and leaves X11 available as a manual fallback helper
 - invalid or missing display-manager binaries leave the system on TTY with a manual start hint
 
 ## Package Set
@@ -251,7 +257,7 @@ df -h /mnt
 - verify the selected display manager exists in the target system
 - start Plasma manually with the command shown on login
 
-### SDDM or greetd works but the wrong session starts
+### greetd works but the wrong session starts
 
 - check the saved `Display mode` value in the installer state
 - for VMs, `Auto` may intentionally resolve to X11

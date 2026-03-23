@@ -36,6 +36,10 @@ safe_source_module() {
 source "$SCRIPT_DIR/ui.sh"
 # shellcheck source=installer/state.sh
 source "$SCRIPT_DIR/state.sh"
+# shellcheck source=installer/core/hooks.sh
+safe_source_module "$SCRIPT_DIR/core/hooks.sh" || true
+# shellcheck source=installer/core/plugin-loader.sh
+safe_source_module "$SCRIPT_DIR/core/plugin-loader.sh" || true
 # shellcheck source=installer/modules/runtime.sh
 safe_source_module "$SCRIPT_DIR/modules/runtime.sh" || true
 # shellcheck source=installer/modules/hardware.sh
@@ -54,6 +58,10 @@ safe_source_module "$SCRIPT_DIR/modules/network.sh" || true
 safe_source_module "$SCRIPT_DIR/modules/disk/layout.sh" || true
 # shellcheck source=installer/modules/disk/space.sh
 safe_source_module "$SCRIPT_DIR/modules/disk/space.sh" || true
+
+if type load_installer_plugins >/dev/null 2>&1; then
+	load_installer_plugins || true
+fi
 
 flag_enabled() {
 	case ${1:-false} in
@@ -217,12 +225,14 @@ build_pacstrap_package_list() {
 	local environment_vendor=${12:-baremetal}
 	local gpu_vendor=${13:-unknown}
 	local secure_boot_mode=${14:-disabled}
+	local greeter_frontend=${15:-tuigreet}
 	local -a desktop_packages=()
 	local -a install_profile_packages_ref=()
 	local -a hardware_packages_ref=()
 	local -a secure_boot_packages_ref=()
 
-	package_ref=(base base-devel linux linux-firmware sudo networkmanager iptables-nft mkinitcpio make git dialog)
+	package_ref=()
+	get_final_packages "$install_profile" "$editor_choice" "$include_vscode" "$custom_tools" package_ref || return 1
 	if [[ $filesystem == "btrfs" ]]; then
 		package_ref+=(btrfs-progs)
 	fi
@@ -238,7 +248,11 @@ build_pacstrap_package_list() {
 	append_unique_items package_ref "${install_profile_packages_ref[@]}"
 	append_unique_items package_ref "${hardware_packages_ref[@]}"
 	append_unique_items package_ref "${secure_boot_packages_ref[@]}"
-	if desktop_profile_packages "$desktop_profile" "$display_manager" "$display_mode" desktop_packages; then
+	if type list_plugin_packages >/dev/null 2>&1; then
+		mapfile -t install_profile_packages_ref < <(list_plugin_packages)
+		append_unique_items package_ref "${install_profile_packages_ref[@]}"
+	fi
+	if desktop_profile_packages "$desktop_profile" "$display_manager" "$display_mode" desktop_packages "$greeter_frontend"; then
 		if [[ ${#desktop_packages[@]} -gt 0 ]]; then
 			append_unique_items package_ref "${desktop_packages[@]}"
 		fi
@@ -715,6 +729,7 @@ build_chroot_script() {
 	local display_manager=${8:-none}
 	local display_mode=${9:-auto}
 	local resolved_display_mode=${10:-wayland}
+	local greeter_frontend=""
 	local hostname=""
 	local timezone=""
 	local locale=""
@@ -737,6 +752,7 @@ build_chroot_script() {
 	local quoted_enable_zram=""
 	local quoted_desktop_profile=""
 	local quoted_display_manager=""
+	local quoted_greeter_frontend=""
 	local quoted_display_mode=""
 	local quoted_resolved_display_mode=""
 	local install_profile=""
@@ -772,6 +788,7 @@ build_chroot_script() {
 	current_secure_boot_setup_mode="$(get_state "CURRENT_SECURE_BOOT_SETUP_MODE" 2>/dev/null || printf 'unknown')"
 	environment_vendor="$(get_state "ENVIRONMENT_VENDOR" 2>/dev/null || printf 'baremetal')"
 	gpu_vendor="$(get_state "GPU_VENDOR" 2>/dev/null || printf 'unknown')"
+	greeter_frontend="$(get_state "GREETER_FRONTEND" 2>/dev/null || printf 'tuigreet')"
 
 	if [[ -z $user_password ]]; then
 		print_install_error "The installer user password is not set. Configure the install profile before starting."
@@ -797,6 +814,7 @@ build_chroot_script() {
 	printf -v quoted_enable_zram '%q' "$enable_zram"
 	printf -v quoted_desktop_profile '%q' "$desktop_profile"
 	printf -v quoted_display_manager '%q' "$display_manager"
+	printf -v quoted_greeter_frontend '%q' "$greeter_frontend"
 	printf -v quoted_display_mode '%q' "$display_mode"
 	printf -v quoted_resolved_display_mode '%q' "$resolved_display_mode"
 	printf -v quoted_install_profile '%q' "$install_profile"
@@ -827,6 +845,7 @@ TARGET_ROOT_MOUNT_OPTIONS=$quoted_root_mount_options
 TARGET_ENABLE_ZRAM=$quoted_enable_zram
 TARGET_DESKTOP_PROFILE=$quoted_desktop_profile
 TARGET_DISPLAY_MANAGER=$quoted_display_manager
+TARGET_GREETER_FRONTEND=$quoted_greeter_frontend
 TARGET_DISPLAY_MODE=$quoted_display_mode
 TARGET_RESOLVED_DISPLAY_MODE=$quoted_resolved_display_mode
 TARGET_INSTALL_PROFILE=$quoted_install_profile
@@ -906,8 +925,11 @@ Install profile: \$TARGET_INSTALL_PROFILE
 Environment: \$TARGET_ENVIRONMENT_VENDOR
 GPU: \$TARGET_GPU_VENDOR
 
-Assisted mode installs sbctl and prepares the target for safe follow-up signing and enrollment.
-If firmware is already enforcing Secure Boot, keep a recovery path available until you validate the new boot chain.
+This installer uses mkinitcpio + ukify to build a Unified Kernel Image when Secure Boot mode is enabled.
+It keeps the workflow non-fatal: VM firmware quirks, missing tooling, or signing failures will not abort the install.
+
+If the GPU is NVIDIA, the installer enables early driver modules and appends nvidia_drm.modeset=1 to the kernel command line.
+If the environment is virtualized, automatic key enrollment is skipped unless you handle firmware ownership manually.
 
 Recommended follow-up commands:
   sbctl status
@@ -915,6 +937,62 @@ Recommended follow-up commands:
   sbctl enroll-keys -m
   sbctl verify
 EOT
+}
+
+build_kernel_cmdline() {
+	local kernel_cmdline="root=UUID=\$ROOT_UUID rw"
+
+	if [[ \$TARGET_FILESYSTEM == "btrfs" ]]; then
+		kernel_cmdline="\$kernel_cmdline rootfstype=btrfs rootflags=\$TARGET_ROOT_MOUNT_OPTIONS"
+	fi
+	if [[ \$TARGET_GPU_VENDOR == "nvidia" ]]; then
+		kernel_cmdline="\$kernel_cmdline nvidia_drm.modeset=1"
+	fi
+
+	printf '%s\n' "\$kernel_cmdline"
+}
+
+configure_nvidia_mkinitcpio() {
+	if [[ \$TARGET_GPU_VENDOR != "nvidia" ]]; then
+		return 0
+	fi
+
+	if grep -q '^MODULES=' /etc/mkinitcpio.conf; then
+		sed -i 's/^MODULES=.*/MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)/' /etc/mkinitcpio.conf
+	else
+		echo 'MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)' >> /etc/mkinitcpio.conf
+	fi
+}
+
+write_uki_configuration() {
+	local kernel_cmdline=""
+
+	install -d -m 0755 /etc/kernel /boot/EFI/Linux
+	kernel_cmdline="\$(build_kernel_cmdline)"
+	printf '%s\n' "\$kernel_cmdline" > /etc/kernel/cmdline
+	cat > /etc/mkinitcpio.d/linux.preset <<'EOT'
+ALL_config="/etc/mkinitcpio.conf"
+ALL_kver="/boot/vmlinuz-linux"
+
+PRESETS=('default' 'fallback')
+
+default_uki="/boot/EFI/Linux/arch-linux.efi"
+fallback_uki="/boot/EFI/Linux/arch-linux-fallback.efi"
+fallback_options="-S autodetect"
+EOT
+}
+
+sign_efi_binary_if_present() {
+	local binary_path=
+	binary_path=\${1:-}
+	[[ -n \$binary_path ]] || return 0
+	[[ -e \$binary_path ]] || return 0
+
+	if ! sbctl sign -s "\$binary_path"; then
+		echo "[WARN] sbctl could not sign \$binary_path"
+		return 1
+	fi
+	return 0
 }
 
 configure_vm_services() {
@@ -944,19 +1022,39 @@ configure_secure_boot_mode() {
 			return 0
 			;;
 		assisted|advanced)
-			log_chroot_step "Preparing Secure Boot tooling"
+			log_chroot_step "Preparing Secure Boot and UKI tooling"
 			if ! command -v sbctl >/dev/null 2>&1; then
 				echo "[WARN] sbctl is not installed in the target system."
+				mkinitcpio -P || true
 				write_secure_boot_notice
 				return 0
 			fi
+			if ! command -v ukify >/dev/null 2>&1; then
+				echo "[WARN] ukify is not installed in the target system. Falling back to the standard initramfs path."
+				mkinitcpio -P || true
+				write_secure_boot_notice
+				return 0
+			fi
+			configure_nvidia_mkinitcpio
+			write_uki_configuration
 			sbctl status || true
 			if [[ ! -d /var/lib/sbctl/keys ]]; then
 				sbctl create-keys || true
 			fi
-			if [[ \$TARGET_SECURE_BOOT_MODE == "assisted" && \$TARGET_SECURE_BOOT_SETUP_MODE == "setup" ]]; then
+			if [[ \$TARGET_SECURE_BOOT_MODE == "assisted" && \$TARGET_SECURE_BOOT_SETUP_MODE == "setup" && \$TARGET_ENVIRONMENT_VENDOR == "baremetal" ]]; then
 				sbctl enroll-keys -m || true
+			elif [[ \$TARGET_SECURE_BOOT_MODE == "assisted" && \$TARGET_ENVIRONMENT_VENDOR != "baremetal" ]]; then
+				echo "[WARN] Virtualized environment detected. Skipping automatic key enrollment."
 			fi
+			mkinitcpio -P || {
+				echo "[WARN] mkinitcpio failed to build UKIs. Continuing with the rest of the install."
+				write_secure_boot_notice
+				return 0
+			}
+			sign_efi_binary_if_present /boot/EFI/Linux/arch-linux.efi || true
+			sign_efi_binary_if_present /boot/EFI/Linux/arch-linux-fallback.efi || true
+			sign_efi_binary_if_present /boot/EFI/systemd/systemd-bootx64.efi || true
+			sign_efi_binary_if_present /boot/EFI/BOOT/BOOTX64.EFI || true
 			write_secure_boot_notice
 			;;
 		*)
@@ -1006,25 +1104,26 @@ plasma_session_command() {
 	esac
 }
 
-plasma_sddm_session() {
-	case \${1:-wayland} in
-		x11)
-			printf 'plasmax11.desktop\n'
-			;;
-		*)
-			printf 'plasma.desktop\n'
-			;;
-	esac
-}
-
 PLASMA_SESSION_COMMAND="\$(plasma_session_command "\$TARGET_RESOLVED_DISPLAY_MODE")"
-PLASMA_SDDM_SESSION="\$(plasma_sddm_session "\$TARGET_RESOLVED_DISPLAY_MODE")"
 PLASMA_GREETD_COMMAND="startplasma-wayland"
 
 write_x11_fallback_helper
 
-log_chroot_step "Rebuilding initramfs"
-mkinitcpio -P
+build_greetd_command() {
+	case \${1:-tuigreet} in
+		qtgreet)
+			printf 'qtgreet\n'
+			;;
+		*)
+			printf 'tuigreet --remember --remember-session --sessions /usr/share/wayland-sessions --cmd %s\n' "\$PLASMA_GREETD_COMMAND"
+			;;
+	esac
+}
+
+if [[ \$TARGET_SECURE_BOOT_MODE == "disabled" || \$BOOT_MODE != "uefi" ]]; then
+	log_chroot_step "Rebuilding initramfs"
+	mkinitcpio -P
+fi
 
 if [[ \$TARGET_DESKTOP_PROFILE == "kde" ]]; then
 	log_chroot_step "Configuring KDE services"
@@ -1035,45 +1134,38 @@ if [[ \$TARGET_DESKTOP_PROFILE == "kde" ]]; then
 	ln -sf /usr/lib/systemd/user/wireplumber.service /etc/systemd/user/default.target.wants/wireplumber.service
 
 	case \$TARGET_DISPLAY_MANAGER in
-		sddm)
-			log_chroot_step "Configuring SDDM"
-			if command -v sddm >/dev/null 2>&1; then
-				install -d -m 0755 /etc/sddm.conf.d /var/lib/sddm
-				cat > /etc/sddm.conf.d/archinstall.conf <<'EOT'
-[General]
-DisplayServer=wayland
-GreeterEnvironment=QT_WAYLAND_SHELL_INTEGRATION=layer-shell
-EOT
-				cat > /var/lib/sddm/state.conf <<EOT
-[Last]
-Session=\$PLASMA_SDDM_SESSION
-EOT
-				if [[ \$TARGET_RESOLVED_DISPLAY_MODE == "x11" ]]; then
-					sed -i 's/^DisplayServer=.*/DisplayServer=x11/' /etc/sddm.conf.d/archinstall.conf
-				fi
-				systemctl enable sddm.service
-				rm -f /etc/profile.d/archinstall-desktop-fallback.sh
-			else
-				echo "[WARN] sddm is not installed in the target system. Leaving the system on TTY."
-				write_display_manager_fallback_notice "\$PLASMA_SESSION_COMMAND"
-			fi
-			;;
 		greetd)
 			log_chroot_step "Configuring greetd"
-			if command -v tuigreet >/dev/null 2>&1; then
+			if [[ \$TARGET_GREETER_FRONTEND == "qtgreet" ]] && ! command -v qtgreet >/dev/null 2>&1; then
+				echo "[WARN] qtgreet was selected but is not installed. Falling back to tuigreet if available."
+				TARGET_GREETER_FRONTEND="tuigreet"
+			fi
+			if [[ \$TARGET_GREETER_FRONTEND == "qtgreet" ]] && command -v qtgreet >/dev/null 2>&1; then
 				install -d -m 0755 /etc/greetd
 				cat > /etc/greetd/config.toml <<EOT
 [terminal]
 vt = 1
 
 [default_session]
-command = "tuigreet --remember --remember-session --sessions /usr/share/wayland-sessions --cmd \$PLASMA_GREETD_COMMAND"
+command = "\$(build_greetd_command qtgreet)"
+user = "greeter"
+EOT
+				systemctl enable greetd.service
+				write_display_manager_fallback_notice "archinstall-startplasma-x11"
+			elif command -v tuigreet >/dev/null 2>&1; then
+				install -d -m 0755 /etc/greetd
+				cat > /etc/greetd/config.toml <<EOT
+[terminal]
+vt = 1
+
+[default_session]
+command = "\$(build_greetd_command tuigreet)"
 user = "greeter"
 EOT
 				systemctl enable greetd.service
 				write_display_manager_fallback_notice "archinstall-startplasma-x11"
 			else
-				echo "[WARN] greetd-tuigreet is not installed in the target system. Leaving the system on TTY."
+				echo "[WARN] No supported greetd frontend is installed in the target system. Leaving the system on TTY."
 				write_display_manager_fallback_notice "archinstall-startplasma-x11"
 			fi
 			;;
@@ -1083,27 +1175,40 @@ EOT
 	esac
 fi
 
+if type emit_chroot_snippets >/dev/null 2>&1; then
+	emit_chroot_snippets
+fi
+
 configure_vm_services
 
 if [[ \$BOOT_MODE == "uefi" ]]; then
 	log_chroot_step "Installing systemd-boot"
 	bootctl install
 	mkdir -p /boot/loader/entries
-	cat > /boot/loader/loader.conf <<'EOT'
+	if [[ \$TARGET_SECURE_BOOT_MODE == "disabled" ]]; then
+		cat > /boot/loader/loader.conf <<'EOT'
 default arch
 timeout 3
 editor no
 EOT
 
-	cat > /boot/loader/entries/arch.conf <<EOT
+		cat > /boot/loader/entries/arch.conf <<EOT
 title Arch Linux
 linux /vmlinuz-linux
 initrd /initramfs-linux.img
-options root=UUID=\$ROOT_UUID rw$( [[ $filesystem == "btrfs" ]] && printf ' rootfstype=btrfs rootflags=%s' "\$TARGET_ROOT_MOUNT_OPTIONS" )
+options \$(build_kernel_cmdline)
 EOT
 
-	echo "[DEBUG] systemd-boot entry"
-	cat /boot/loader/entries/arch.conf
+		echo "[DEBUG] systemd-boot entry"
+		cat /boot/loader/entries/arch.conf
+	else
+		cat > /boot/loader/loader.conf <<'EOT'
+default @saved
+timeout 3
+editor no
+EOT
+		rm -f /boot/loader/entries/arch.conf
+	fi
 else
 	log_chroot_step "Installing GRUB"
 	grub_cmdline="root=UUID=\$ROOT_UUID"
@@ -1190,6 +1295,7 @@ run_install() {
 	local format_efi="true"
 	local desktop_profile=""
 	local display_manager=""
+	local greeter_frontend="tuigreet"
 	local display_mode=""
 	local resolved_display_mode=""
 	local required_space_mib=""
@@ -1219,6 +1325,7 @@ run_install() {
 	format_efi="$(get_state "FORMAT_EFI" 2>/dev/null || printf 'true')"
 	desktop_profile="$(get_state "DESKTOP_PROFILE" 2>/dev/null || printf 'none')"
 	display_manager="$(get_state "DISPLAY_MANAGER" 2>/dev/null || printf 'none')"
+	greeter_frontend="$(get_state "GREETER_FRONTEND" 2>/dev/null || printf 'tuigreet')"
 	display_mode="$(get_state "DISPLAY_MODE" 2>/dev/null || printf 'auto')"
 	[[ -n $boot_mode ]] || boot_mode="$(detect_boot_mode)"
 	current_secure_boot_state="$(detect_secure_boot_state "$boot_mode")"
@@ -1248,8 +1355,11 @@ run_install() {
 		print_install_error "The saved disk does not exist anymore: $disk"
 		return 1
 	fi
+	if type run_hooks >/dev/null 2>&1; then
+		run_hooks pre_install "$disk" || true
+	fi
 
-	build_pacstrap_package_list "$boot_mode" "$filesystem" "$enable_zram" pacstrap_packages "$desktop_profile" "$display_manager" "$display_mode" "$install_profile" "$editor_choice" "$include_vscode" "$custom_tools" "$environment_vendor" "$gpu_vendor" "$secure_boot_mode"
+	build_pacstrap_package_list "$boot_mode" "$filesystem" "$enable_zram" pacstrap_packages "$desktop_profile" "$display_manager" "$display_mode" "$install_profile" "$editor_choice" "$include_vscode" "$custom_tools" "$environment_vendor" "$gpu_vendor" "$secure_boot_mode" "$greeter_frontend"
 
 	: > "$ARCHINSTALL_LOG" || {
 		print_install_error "Could not write the install log: $ARCHINSTALL_LOG"
@@ -1278,6 +1388,7 @@ run_install() {
 		log_line "Desktop profile: $desktop_profile"
 		log_line "Display mode: $display_mode"
 		log_line "Display manager: $display_manager"
+		log_line "Greeter frontend: $greeter_frontend"
 
 		resolve_display_mode() {
 			local requested_mode=${1:-auto}
@@ -1422,12 +1533,18 @@ run_install() {
 				root_mount_options=""
 			fi
 			run_chroot_configuration "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_mode" "$resolved_display_mode" || exit 1
+			if type run_hooks >/dev/null 2>&1; then
+				run_hooks post_chroot "$disk" "$root_partition" || true
+			fi
 		fi
 
 		ARCHINSTALL_INSTALL_SUCCESS=true
 		ARCHINSTALL_CLEANUP_ACTIVE=false
 		log_line "[ OK ] Installation completed successfully"
 		log_line "Close the log view to continue to the final menu."
+		if type run_hooks >/dev/null 2>&1; then
+			run_hooks post_install "$disk" || true
+		fi
 		exit 0
 	); then
 		return 0

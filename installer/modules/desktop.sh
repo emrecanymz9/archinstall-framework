@@ -23,7 +23,7 @@ display_mode_label() {
 			printf 'Wayland\n'
 			;;
 		x11)
-			printf 'X11 (SDDM or manual fallback)\n'
+			printf 'X11 (manual fallback only)\n'
 			;;
 		*)
 			printf '%s\n' "$1"
@@ -36,11 +36,22 @@ display_manager_label() {
 		none)
 			printf 'None\n'
 			;;
-		sddm)
-			printf 'SDDM\n'
-			;;
 		greetd)
-			printf 'greetd + tuigreet\n'
+			printf 'greetd\n'
+			;;
+		*)
+			printf '%s\n' "$1"
+			;;
+	esac
+}
+
+greeter_frontend_label() {
+	case ${1:-tuigreet} in
+		tuigreet)
+			printf 'tuigreet\n'
+			;;
+		qtgreet)
+			printf 'qtgreet (requires plugin/AUR package source)\n'
 			;;
 		*)
 			printf '%s\n' "$1"
@@ -79,12 +90,38 @@ select_display_manager() {
 	fi
 
 	menu "Display Manager" "Choose the display manager for KDE Plasma." 14 76 4 \
-		"sddm" "Recommended for KDE Plasma" \
-		"greetd" "greetd with tuigreet"
+		"greetd" "Wayland-first greetd stack"
 	selected="$DIALOG_RESULT"
 	case $DIALOG_STATUS in
 		0)
 			printf '%s\n' "$selected"
+			return 0
+			;;
+		1|255)
+			return 1
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+select_greeter_frontend() {
+	local desktop_profile=${1:-none}
+	local current_frontend=${2:-tuigreet}
+
+	if [[ $desktop_profile != "kde" ]]; then
+		printf 'tuigreet\n'
+		return 0
+	fi
+
+	menu "Greeter Frontend" "Choose the greetd frontend.\n\nCurrent: $(greeter_frontend_label "$current_frontend")\n\nqtgreet is optional and expects a plugin or custom package source to provide the binary." 16 78 4 \
+		"tuigreet" "Default TUI greeter" \
+		"qtgreet" "Optional Qt greeter for KDE deployments"
+
+	case $DIALOG_STATUS in
+		0)
+			printf '%s\n' "$DIALOG_RESULT"
 			return 0
 			;;
 		1|255)
@@ -106,10 +143,10 @@ select_display_mode() {
 		return 0
 	fi
 
-	menu "Display Mode" "Choose the preferred KDE session mode.\n\nSDDM follows this setting directly. greetd always starts Wayland and leaves X11 available only as a manual fallback.\n\nCurrent: $(display_mode_label "$current_mode")" 16 78 4 \
+	menu "Display Mode" "Choose the preferred KDE session mode.\n\ngreetd always starts Wayland and leaves X11 available only as a manual fallback helper.\n\nCurrent: $(display_mode_label "$current_mode")" 16 78 4 \
 		"auto" "Prefer Wayland, fall back to X11 for VMs or weak graphics" \
 		"wayland" "Force startplasma-wayland" \
-		"x11" "Use X11 with SDDM or the manual fallback helper"
+		"x11" "Use X11 only through the manual fallback helper"
 	selected="$DIALOG_RESULT"
 	case $DIALOG_STATUS in
 		0)
@@ -130,6 +167,7 @@ desktop_profile_packages() {
 	local display_manager=${2:-none}
 	local display_mode=${3:-auto}
 	local -n package_ref=${4:?package reference is required}
+	local greeter_frontend=${5:-tuigreet}
 
 	package_ref=()
 
@@ -173,9 +211,6 @@ desktop_profile_packages() {
 					;;
 			esac
 			case $display_manager in
-				sddm)
-					package_ref+=(sddm)
-					;;
 				greetd)
 					package_ref+=(greetd greetd-tuigreet)
 					;;
