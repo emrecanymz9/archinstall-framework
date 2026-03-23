@@ -298,7 +298,7 @@ require_commands() {
 	boot_mode="$(get_state "BOOT_MODE" 2>/dev/null || detect_boot_mode 2>/dev/null || printf 'uefi')"
 	filesystem="$(normalize_filesystem "$(get_state "FILESYSTEM" 2>/dev/null || printf 'ext4')")"
 
-	for cmd in lsblk wipefs parted partprobe mkfs.ext4 mount umount pacman pacstrap ping blkid arch-chroot tee tail findmnt genfstab; do
+	for cmd in lsblk wipefs parted partprobe mkfs.ext4 mount umount pacman pacstrap ping blkid arch-chroot tee tail findmnt genfstab mountpoint; do
 		command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
 	done
 	if [[ ${UI_MODE:-dialog} == "dialog" ]]; then
@@ -630,29 +630,64 @@ format_root_filesystem() {
 validate_target_mount() {
 	local root_partition=${1:-}
 	local mounted_source=""
-	local mount_contents=""
+	local mounted_fstype=""
+	local normalized_source=""
 
 	if [[ ! -d /mnt ]]; then
 		print_install_error "Target mount point /mnt does not exist."
 		return 1
 	fi
+	if ! mountpoint -q /mnt 2>> "$ARCHINSTALL_LOG"; then
+		print_install_error "Target mount point /mnt is not an active mountpoint."
+		return 1
+	fi
 
 	mounted_source="$(findmnt -n -o SOURCE /mnt 2>> "$ARCHINSTALL_LOG" || true)"
+	mounted_fstype="$(findmnt -n -o FSTYPE /mnt 2>> "$ARCHINSTALL_LOG" || true)"
 	if [[ -z $mounted_source ]]; then
 		print_install_error "Target root filesystem is not mounted on /mnt."
 		return 1
 	fi
-
-	if [[ -n $root_partition && $mounted_source != "$root_partition" ]]; then
-		log_line "[WARN] /mnt is mounted from $mounted_source instead of expected $root_partition"
-	fi
-
-	mount_contents="$(ls -A /mnt 2>/dev/null || true)"
-	if [[ -z $mount_contents ]]; then
-		print_install_error "Target mount /mnt is empty after mounting. Aborting before pacstrap."
+	if [[ $mounted_source == *airootfs* || $mounted_fstype == overlay || $mounted_fstype == squashfs ]]; then
+		print_install_error "Target mount /mnt is pointing at the live environment instead of the install target."
 		return 1
 	fi
 
+	normalized_source=${mounted_source%%\[*}
+
+	if [[ -n $root_partition && $normalized_source != "$root_partition" ]]; then
+		log_line "[WARN] /mnt is mounted from $mounted_source instead of expected $root_partition"
+	fi
+
+	return 0
+}
+
+verify_target_system_present() {
+	validate_target_mount "$1" || return 1
+	if [[ ! -f /mnt/etc/arch-release ]]; then
+		print_install_error "Target system was not installed correctly: /mnt/etc/arch-release is missing."
+		return 1
+	fi
+	return 0
+}
+
+log_mount_state() {
+	log_line "[DEBUG] Current mount state before chroot:"
+	findmnt -R /mnt >> "$ARCHINSTALL_LOG" 2>&1 || true
+}
+
+prepare_chroot_mounts() {
+	run_step "Creating API filesystem mount points" mkdir -p /mnt/dev /mnt/proc /mnt/sys || return 1
+	if ! mountpoint -q /mnt/dev 2>> "$ARCHINSTALL_LOG"; then
+		run_step "Bind mounting /dev into target" mount --bind /dev /mnt/dev || return 1
+	fi
+	if ! mountpoint -q /mnt/proc 2>> "$ARCHINSTALL_LOG"; then
+		run_step "Bind mounting /proc into target" mount --bind /proc /mnt/proc || return 1
+	fi
+	if ! mountpoint -q /mnt/sys 2>> "$ARCHINSTALL_LOG"; then
+		run_step "Bind mounting /sys into target" mount --bind /sys /mnt/sys || return 1
+	fi
+	log_mount_state
 	return 0
 }
 
@@ -1525,14 +1560,14 @@ run_install() {
 
 		if flag_enabled "$SKIP_PACSTRAP"; then
 			log_line "Skipping pacstrap because SKIP_PACSTRAP=$SKIP_PACSTRAP"
-			validate_target_mount "$root_partition" || exit 1
-			if [[ ! -d /mnt/etc ]]; then
-				print_install_error "SKIP_PACSTRAP=true requires an existing system mounted at /mnt."
+			if ! verify_target_system_present "$root_partition"; then
+				print_install_error "SKIP_PACSTRAP=true requires an existing installed system mounted at /mnt."
 				exit 1
 			fi
 		else
 			validate_target_mount "$root_partition" || exit 1
 			run_pacstrap_install "${pacstrap_packages[@]}" || exit 1
+			verify_target_system_present "$root_partition" || exit 1
 		fi
 
 		write_target_fstab "$filesystem" "$disk_type" "$root_partition" "$efi_partition" || exit 1
@@ -1546,6 +1581,7 @@ run_install() {
 			else
 				root_mount_options=""
 			fi
+			prepare_chroot_mounts || exit 1
 			run_chroot_configuration "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_mode" "$resolved_display_mode" || exit 1
 			if type run_hooks >/dev/null 2>&1; then
 				run_hooks post_chroot "$disk" "$root_partition" || true
