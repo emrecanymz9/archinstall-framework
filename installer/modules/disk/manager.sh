@@ -6,16 +6,153 @@ disk_size_gib() {
 
 	size_bytes="$(lsblk -dnbo SIZE "$disk" 2>/dev/null || true)"
 	if [[ ! $size_bytes =~ ^[0-9]+$ ]]; then
-		printf 'Unknown\n'
+		printf 'Size not reported\n'
 		return 0
 	fi
 
 	awk -v size_bytes="$size_bytes" 'BEGIN { printf "%.1f GiB\n", size_bytes / 1024 / 1024 / 1024 }'
 }
 
+disk_size_mib() {
+	local disk=${1:?disk is required}
+	local size_bytes=""
+
+	size_bytes="$(lsblk -dnbo SIZE "$disk" 2>/dev/null || true)"
+	if [[ ! $size_bytes =~ ^[0-9]+$ ]]; then
+		return 1
+	fi
+
+	awk -v size_bytes="$size_bytes" 'BEGIN { printf "%d\n", size_bytes / 1024 / 1024 }'
+}
+
+disk_lsblk_snapshot() {
+	local disk=${1:?disk is required}
+	lsblk -J -b -o NAME,PATH,TYPE,SIZE,FSTYPE,PARTLABEL,LABEL,MOUNTPOINTS,MODEL "$disk" 2>/dev/null || true
+}
+
+disk_partition_count() {
+	local disk=${1:?disk is required}
+	local snapshot=""
+
+	snapshot="$(disk_lsblk_snapshot "$disk")"
+	if [[ -z $snapshot ]]; then
+		printf '0\n'
+		return 0
+	fi
+
+	grep -o '"type":"part"' <<< "$snapshot" | wc -l | awk '{print $1}'
+}
+
+disk_parted_print_output() {
+	local disk=${1:?disk is required}
+	parted -s "$disk" unit MiB print 2>&1 || true
+}
+
+disk_layout_state() {
+	local disk=${1:?disk is required}
+	local snapshot=""
+	local parted_output=""
+	local partition_count=0
+	local has_signatures="false"
+
+	snapshot="$(disk_lsblk_snapshot "$disk")"
+	if [[ -z $snapshot ]]; then
+		printf 'unreadable\n'
+		return 0
+	fi
+
+	partition_count="$(disk_partition_count "$disk")"
+	parted_output="$(disk_parted_print_output "$disk")"
+	if [[ $parted_output == *"Partition Table:"* ]]; then
+		printf 'ready\n'
+		return 0
+	fi
+
+	if wipefs -n "$disk" >/dev/null 2>&1; then
+		if [[ -n $(wipefs -n "$disk" 2>/dev/null || true) ]]; then
+			has_signatures="true"
+		fi
+	fi
+
+	if [[ ${partition_count:-0} -eq 0 && $has_signatures == "false" ]]; then
+		printf 'empty\n'
+		return 0
+	fi
+
+	if [[ $parted_output == *"unrecognised disk label"* || $parted_output == *"unrecognized disk label"* || $parted_output == *"does not contain a recognized partition table"* || $parted_output == *"contains GPT signatures"* || $parted_output == *"invalid partition table"* ]]; then
+		printf 'corrupt\n'
+		return 0
+	fi
+
+	if [[ ${partition_count:-0} -gt 0 ]]; then
+		printf 'ready\n'
+		return 0
+	fi
+
+	printf 'unreadable\n'
+}
+
+disk_layout_message() {
+	local disk=${1:?disk is required}
+
+	case $(disk_layout_state "$disk") in
+		empty)
+			printf 'No partition table detected (new disk)\n'
+			;;
+		corrupt)
+			printf 'Partition table looks damaged. Initialize the disk to continue safely.\n'
+			;;
+		ready)
+			printf 'Partition table detected\n'
+			;;
+		*)
+			printf 'Disk layout could not be read cleanly. You can try initializing the disk if it is a new target.\n'
+			;;
+	esac
+}
+
+recover_disk_layout_access() {
+	local disk=${1:?disk is required}
+
+	wipefs -a "$disk" >/dev/null 2>&1 || return 1
+	partprobe "$disk" >/dev/null 2>&1 || true
+	if command -v udevadm >/dev/null 2>&1; then
+		udevadm settle >/dev/null 2>&1 || true
+	fi
+	return 0
+}
+
+initialize_disk_gpt() {
+	local disk=${1:?disk is required}
+	local layout_state=""
+
+	layout_state="$(disk_layout_state "$disk")"
+	if [[ $layout_state == "corrupt" || $layout_state == "unreadable" ]]; then
+		recover_disk_layout_access "$disk" || true
+	fi
+
+	parted -s "$disk" mklabel gpt || return 1
+	partprobe "$disk" >/dev/null 2>&1 || true
+	if command -v udevadm >/dev/null 2>&1; then
+		udevadm settle >/dev/null 2>&1 || true
+	fi
+	return 0
+}
+
 disk_label_value() {
 	local disk=${1:?disk is required}
 	local label=""
+	local layout_state=""
+
+	layout_state="$(disk_layout_state "$disk")"
+	if [[ $layout_state == "empty" ]]; then
+		printf 'New disk\n'
+		return 0
+	fi
+	if [[ $layout_state == "corrupt" ]]; then
+		printf 'Unreadable label\n'
+		return 0
+	fi
 
 	label="$(lsblk -dnro LABEL "$disk" 2>/dev/null | head -n 1 || true)"
 	if [[ -z $label ]]; then
@@ -26,12 +163,25 @@ disk_label_value() {
 
 disk_alerts() {
 	local disk=${1:?disk is required}
+	local layout_state=""
 	local has_windows="false"
 	local has_linux="false"
 	local fstype=""
 	local partlabel=""
 	local row=""
 	local alerts=()
+
+	layout_state="$(disk_layout_state "$disk")"
+	case $layout_state in
+		empty)
+			printf 'No partition table detected (new disk)\n'
+			return 0
+			;;
+		corrupt)
+			printf 'Partition table needs recovery or initialization\n'
+			return 0
+			;;
+	esac
 
 	while IFS=$'\t' read -r _ _ fstype partlabel; do
 		case ${fstype,,}:${partlabel,,} in
@@ -70,6 +220,7 @@ disk_partition_rows() {
 
 disk_partition_summary() {
 	local disk=${1:?disk is required}
+	local layout_state=""
 	local row=""
 	local path=""
 	local size=""
@@ -78,6 +229,16 @@ disk_partition_summary() {
 	local label=""
 	local mountpoint=""
 	local summaries=()
+
+	layout_state="$(disk_layout_state "$disk")"
+	if [[ $layout_state == "empty" ]]; then
+		printf 'No partition table detected (new disk)\n'
+		return 0
+	fi
+	if [[ $layout_state == "corrupt" ]]; then
+		printf 'Partition table unreadable. Initialize the disk to continue.\n'
+		return 0
+	fi
 
 	while IFS=$'\t' read -r path size fstype partlabel label mountpoint; do
 		summaries+=("${path##*/} ${size} ${fstype} ${partlabel} ${label}")
@@ -93,6 +254,20 @@ disk_partition_summary() {
 
 largest_free_region() {
 	local disk=${1:?disk is required}
+	local layout_state=""
+	local disk_size_total_mib=""
+
+	layout_state="$(disk_layout_state "$disk")"
+	if [[ $layout_state == "empty" ]]; then
+		disk_size_total_mib="$(disk_size_mib "$disk" || true)"
+		if [[ $disk_size_total_mib =~ ^[0-9]+$ && $disk_size_total_mib -gt 4 ]]; then
+			printf '1\t%d\t%d\n' "$((disk_size_total_mib - 1))" "$((disk_size_total_mib - 1))"
+		fi
+		return 0
+	fi
+	if [[ $layout_state == "corrupt" ]]; then
+		return 1
+	fi
 
 	parted -ms "$disk" unit MiB print free 2>/dev/null | awk -F: '
 		$1 ~ /^[0-9]+$/ && $5 == "free;" {
@@ -194,7 +369,33 @@ disk_has_mounted_partitions() {
 
 validate_disk_layout_access() {
 	local disk=${1:?disk is required}
-	parted -s "$disk" print >/dev/null 2>&1
+	case $(disk_layout_state "$disk") in
+		ready|empty|corrupt)
+			return 0
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+initialize_disk_dialog() {
+	local disk=${1:?disk is required}
+	local layout_message=""
+
+	layout_message="$(disk_layout_message "$disk")"
+	if ! confirm "Initialize Disk" "Disk: $disk\n\n$layout_message\n\nThis will create a new GPT partition table and remove any unreadable signatures. Continue?" 18 80; then
+		return 1
+	fi
+	if ! typed_yes_confirmation "Initialize Disk" "Type YES to initialize $disk with a new GPT partition table."; then
+		warning_box "Confirmation Failed" "Exact confirmation text was not entered. No disk changes were made."
+		return 1
+	fi
+	if ! initialize_disk_gpt "$disk"; then
+		error_box "Initialization Failed" "The disk could not be initialized:\n\n$disk"
+		return 1
+	fi
+	msg "Disk Initialized" "A new GPT partition table was created on $disk.\n\nYou can now choose a disk strategy safely."
 }
 
 typed_yes_confirmation() {
@@ -303,14 +504,16 @@ show_disk_analysis() {
 	local label=""
 	local alerts=""
 	local partitions=""
+	local layout_message=""
 
-	model="$(lsblk -dnro MODEL "$disk" 2>/dev/null || printf 'Unknown model')"
+	model="$(lsblk -dnro MODEL "$disk" 2>/dev/null || printf 'Model not reported')"
 	size_gib="$(disk_size_gib "$disk")"
 	label="$(disk_label_value "$disk")"
 	alerts="$(disk_alerts "$disk")"
 	partitions="$(disk_partition_summary "$disk")"
+	layout_message="$(disk_layout_message "$disk")"
 
-	msg "Disk Analysis" "Disk: $disk\nModel: $model\nSize: $size_gib\nLabel: $label\nAlerts: $alerts\n\nPartitions:\n$partitions" 20 90
+	msg "Disk Analysis" "Disk: $disk\nModel: $model\nSize: $size_gib\nLabel: $label\nStatus: $layout_message\nAlerts: $alerts\n\nPartitions:\n$partitions" 20 90
 }
 
 prepare_install_state() {
@@ -341,11 +544,9 @@ prepare_full_wipe_install() {
 	local disk=${1:?disk is required}
 	local boot_mode=${2:-bios}
 	local filesystem="$(state_or_default "FILESYSTEM" "ext4")"
+	local layout_state=""
 
-	if ! validate_disk_layout_access "$disk"; then
-		error_box "Disk Access Failed" "Could not read the current partition table for $disk."
-		return 1
-	fi
+	layout_state="$(disk_layout_state "$disk")"
 	if disk_has_mounted_partitions "$disk"; then
 		warning_box "Mounted Partitions Detected" "One or more partitions on $disk are currently mounted. Unmount them before planning a destructive install on this disk."
 		return 1
@@ -353,8 +554,15 @@ prepare_full_wipe_install() {
 
 	show_disk_operation_preview "wipe" "$disk" "$boot_mode" "$filesystem"
 
-	if ! confirm "Full Disk Wipe" "This will use the entire disk and recreate the partition table.\n\nDisk: $disk\nBoot mode: $boot_mode\n\nAll existing partitions will be lost. Continue?" 16 76; then
+	if ! confirm "Full Disk Wipe" "This will use the entire disk and recreate the partition table.\n\nDisk: $disk\nBoot mode: $boot_mode\nCurrent status: $(disk_layout_message "$disk")\n\nAll existing partitions will be lost. Continue?" 18 78; then
 		return 1
+	fi
+	if ! typed_yes_confirmation "Full Disk Wipe" "Type YES to wipe and reinstall on $disk."; then
+		warning_box "Confirmation Failed" "Exact confirmation text was not entered. No disk changes were made."
+		return 1
+	fi
+	if [[ $layout_state == "corrupt" || $layout_state == "unreadable" ]]; then
+		recover_disk_layout_access "$disk" || true
 	fi
 
 	prepare_install_state "$disk" "wipe" "" "" "true" "true"
@@ -382,6 +590,17 @@ prepare_free_space_install() {
 	local efi_end_mib=0
 	local root_start_mib=0
 	local filesystem="$(state_or_default "FILESYSTEM" "ext4")"
+	local layout_state=""
+
+	layout_state="$(disk_layout_state "$disk")"
+	if [[ $layout_state == "empty" ]]; then
+		warning_box "Initialize Disk First" "No partition table detected (new disk).\n\nChoose 'Initialize disk (create GPT)' first, then use this strategy if you want to partition the disk without the full-wipe path."
+		return 1
+	fi
+	if [[ $layout_state == "corrupt" || $layout_state == "unreadable" ]]; then
+		warning_box "Unreadable Disk Layout" "The partition table could not be read safely. Initialize the disk first or use the full wipe path."
+		return 1
+	fi
 
 	required_root_mib="$(estimate_target_required_space_mib "$(state_or_default "DESKTOP_PROFILE" "none")" "$(state_or_default "FILESYSTEM" "ext4")")"
 	existing_efi="$(find_existing_efi_partition "$disk" || true)"
@@ -392,7 +611,7 @@ prepare_free_space_install() {
 
 	largest_region="$(largest_free_region "$disk")"
 	if [[ -z $largest_region ]]; then
-		warning_box "No Free Space" "No usable free-space region was detected on $disk. Use the manual partition editor if you want to resize or rearrange partitions first."
+		warning_box "No Free Space Available" "The installer could not find a free-space region large enough to use on $disk. Use the manual partition editor or the full-wipe path if you want to continue."
 		return 1
 	fi
 
@@ -465,6 +684,7 @@ prepare_free_space_install() {
 manual_partition_editor() {
 	local disk=${1:?disk is required}
 	local boot_mode=${2:-bios}
+	local layout_state=""
 	local root_partition=""
 	local efi_partition=""
 	local format_efi="false"
@@ -472,8 +692,9 @@ manual_partition_editor() {
 	local -a efi_entries=()
 	local filesystem="$(state_or_default "FILESYSTEM" "ext4")"
 
-	if ! validate_disk_layout_access "$disk"; then
-		error_box "Disk Access Failed" "Could not read the current partition table for $disk."
+	layout_state="$(disk_layout_state "$disk")"
+	if [[ $layout_state == "corrupt" || $layout_state == "unreadable" ]]; then
+		warning_box "Initialize Disk First" "The partition table could not be read safely. Initialize the disk first, then reopen the manual editor."
 		return 1
 	fi
 

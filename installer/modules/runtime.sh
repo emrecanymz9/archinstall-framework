@@ -20,18 +20,35 @@ fi
 
 if ! type runtime_boot_summary >/dev/null 2>&1; then
 	runtime_boot_summary() {
-		printf 'Unknown\n'
+		printf 'BIOS (Secure Boot: Not Supported)\n'
 	}
 fi
 
 if ! type boot_mode_status_label >/dev/null 2>&1; then
 	boot_mode_status_label() {
-		printf '%s\n' "${1:-Unknown}"
+		case ${1:-bios} in
+			uefi)
+				printf 'UEFI (Secure Boot: %s)\n' "$(secure_boot_state_label "${2:-unsupported}")"
+				;;
+			*)
+				printf 'BIOS (Secure Boot: Not Supported)\n'
+				;;
+		esac
 	}
 fi
 
 if ! type secure_boot_state_label >/dev/null 2>&1; then
 	secure_boot_state_label() {
-		printf '%s\n' "${1:-Unknown}"
+		case ${1:-unsupported} in
+			enabled)
+				printf 'Enabled\n'
+				;;
+			disabled)
+				printf 'Disabled\n'
+				;;
+			*)
+				printf 'Unavailable\n'
+				;;
+		esac
 	}
 fi

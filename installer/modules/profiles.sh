@@ -5,6 +5,8 @@ ARCHINSTALL_SYSTEM_CONFIG_PATH="$(cd -- "$PROFILES_MODULE_DIR/../.." && pwd)/con
 ARCHINSTALL_SYSTEM_CONFIG_LOADED=${ARCHINSTALL_SYSTEM_CONFIG_LOADED:-false}
 
 load_system_package_config() {
+	ARCHINSTALL_SYSTEM_CONFIG_STATUS=${ARCHINSTALL_SYSTEM_CONFIG_STATUS:-missing}
+
 	if [[ ${ARCHINSTALL_SYSTEM_CONFIG_LOADED:-false} == "true" ]]; then
 		return 0
 	fi
@@ -12,9 +14,35 @@ load_system_package_config() {
 	if [[ -r $ARCHINSTALL_SYSTEM_CONFIG_PATH ]] && bash -n "$ARCHINSTALL_SYSTEM_CONFIG_PATH" >/dev/null 2>&1; then
 		# shellcheck disable=SC1090
 		source "$ARCHINSTALL_SYSTEM_CONFIG_PATH" || true
+		ARCHINSTALL_SYSTEM_CONFIG_STATUS=loaded
+	else
+		if [[ -r $ARCHINSTALL_SYSTEM_CONFIG_PATH ]]; then
+			ARCHINSTALL_SYSTEM_CONFIG_STATUS=invalid
+		else
+			ARCHINSTALL_SYSTEM_CONFIG_STATUS=missing
+		fi
 	fi
 
 	ARCHINSTALL_SYSTEM_CONFIG_LOADED=true
+}
+
+package_config_status() {
+	load_system_package_config
+	printf '%s\n' "${ARCHINSTALL_SYSTEM_CONFIG_STATUS:-missing}"
+}
+
+package_config_warning_text() {
+	case $(package_config_status) in
+		loaded)
+			return 1
+			;;
+		invalid)
+			printf 'Package config exists but has invalid syntax. Safe defaults will be used.\n'
+			;;
+		*)
+			printf 'Package config is missing. Safe defaults will be used.\n'
+			;;
+	esac
 }
 
 config_csv_or_default() {

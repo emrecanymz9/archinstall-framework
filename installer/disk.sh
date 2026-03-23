@@ -60,7 +60,7 @@ list_disks() {
 		model="$(lsblk -dnro MODEL "$name" 2>/dev/null || true)"
 		model=${model//$'\t'/ }
 		model=${model//$'\n'/ }
-		[[ -n $model ]] || model="Unknown model"
+		[[ -n $model ]] || model="Model not reported"
 		size_gib="$(disk_size_gib "$name")"
 		label="$(disk_label_value "$name")"
 		alerts="$(disk_alerts "$name")"
@@ -84,6 +84,8 @@ select_disk() {
 	local boot_mode
 	local strategy
 	local status
+	local layout_state=""
+	local -a strategy_args=()
 
 	mapfile -t rows < <(list_disks)
 	if [[ ${#rows[@]} -eq 0 ]]; then
@@ -104,18 +106,29 @@ select_disk() {
 	case $status in
 		0)
 			show_disk_analysis "$selected_disk"
-			menu "Disk Strategy" "Choose how to use $selected_disk.\n\nBoot mode: $boot_mode\nAlerts: $(disk_alerts "$selected_disk")" 18 88 8 \
-				"wipe" "Full disk wipe and automatic partitioning" \
-				"free-space" "Create Linux partitions in the largest free-space region" \
-				"dual-boot" "Use free space while preserving detected Windows partitions" \
-				"manual" "Open the manual partition editor and select partitions" \
+			layout_state="$(disk_layout_state "$selected_disk")"
+			strategy_args=(
+				"wipe" "Full disk wipe and automatic partitioning"
+			)
+			if [[ $layout_state == "empty" || $layout_state == "corrupt" || $layout_state == "unreadable" ]]; then
+				strategy_args+=("initialize" "Initialize disk (create GPT)")
+			fi
+			strategy_args+=(
+				"free-space" "Create Linux partitions in the largest free-space region"
+				"dual-boot" "Use free space while preserving detected Windows partitions"
+				"manual" "Open the manual partition editor and select partitions"
 				"back" "Return to disk selection"
+			)
+			menu "Disk Strategy" "Choose how to use $selected_disk.\n\nBoot mode: $boot_mode\nStatus: $(disk_layout_message "$selected_disk")\nAlerts: $(disk_alerts "$selected_disk")" 20 90 10 "${strategy_args[@]}"
 			strategy="$DIALOG_RESULT"
 			case $DIALOG_STATUS in
 				0)
 					case $strategy in
 						wipe)
 							prepare_full_wipe_install "$selected_disk" "$boot_mode" || true
+							;;
+						initialize)
+							initialize_disk_dialog "$selected_disk" || true
 							;;
 						free-space)
 							prepare_free_space_install "$selected_disk" "$boot_mode" "free-space" || true

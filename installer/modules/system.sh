@@ -190,10 +190,10 @@ secure_boot_state_label() {
 			printf 'Not Supported\n'
 			;;
 		unknown)
-			printf 'Unknown\n'
+			printf 'Unavailable\n'
 			;;
 		*)
-			printf '%s\n' "$1"
+			printf 'Unavailable\n'
 			;;
 	esac
 }
@@ -210,7 +210,7 @@ boot_mode_status_label() {
 			printf 'BIOS (Secure Boot: Not Supported)\n'
 			;;
 		*)
-			printf '%s\n' "$boot_mode"
+			printf 'BIOS (Secure Boot: Not Supported)\n'
 			;;
 	esac
 }

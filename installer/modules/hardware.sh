@@ -11,33 +11,53 @@ gpu_vendor_label() {
 		nvidia)
 			printf 'NVIDIA\n'
 			;;
+		vmware|virtualbox|qemu|hyperv|xen)
+			printf 'VM\n'
+			;;
 		none)
-			printf 'None detected\n'
+			printf 'Generic\n'
 			;;
 		unknown)
-			printf 'Unknown\n'
+			printf 'Generic\n'
+			;;
+		generic)
+			printf 'Generic\n'
 			;;
 		*)
-			printf '%s\n' "$1"
+			printf 'Generic\n'
 			;;
 	esac
 }
 
 detect_gpu_vendor() {
 	local lspci_output=""
+	local environment_vendor="baremetal"
+
+	if type detect_virtualization_vendor >/dev/null 2>&1; then
+		environment_vendor="$(detect_virtualization_vendor)"
+	fi
+	case $environment_vendor in
+		vmware|virtualbox|qemu|hyperv|xen)
+			printf '%s\n' "$environment_vendor"
+			return 0
+			;;
+	esac
 
 	if ! command -v lspci >/dev/null 2>&1; then
-		printf 'unknown\n'
+		printf 'generic\n'
 		return 0
 	fi
 
-	lspci_output="$(lspci -nn 2>/dev/null | grep -E 'VGA|3D|Display' || true)"
+	lspci_output="$(lspci 2>/dev/null | grep -E 'VGA|3D' || true)"
 	if [[ -z $lspci_output ]]; then
-		printf 'none\n'
+		printf 'generic\n'
 		return 0
 	fi
 
 	case ${lspci_output,,} in
+		*"vmware"*|*"virtualbox"*|*"qemu"*)
+			printf 'qemu\n'
+			;;
 		*"nvidia"*)
 			printf 'nvidia\n'
 			;;
@@ -48,7 +68,7 @@ detect_gpu_vendor() {
 			printf 'intel\n'
 			;;
 		*)
-			printf 'unknown\n'
+			printf 'generic\n'
 			;;
 	esac
 }
@@ -89,7 +109,7 @@ hardware_profile_packages() {
 			nvidia)
 				package_ref+=(nvidia nvidia-utils)
 				;;
-			intel|amd|unknown)
+			intel|amd|generic|vmware|virtualbox|qemu|hyperv|xen)
 				package_ref+=(mesa)
 				;;
 			*)

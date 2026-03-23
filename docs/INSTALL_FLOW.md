@@ -19,12 +19,14 @@ State is persisted in `/tmp/archinstall_state` through [installer/state.sh](../i
    - GPU vendor
 3. The operator chooses a disk strategy:
    - wipe
+   - initialize
    - free-space
    - dual-boot
    - manual
 4. The operator configures the install profile.
-5. The installer shows a final summary and requires typed `YES`.
-6. The executor performs the install.
+5. The installer runs in safe mode by default and shows a final summary.
+6. The operator must type `YES` for destructive operations and for the final install launch.
+7. The executor performs the install.
 
 ## Package Resolution
 
@@ -55,6 +57,12 @@ Duplicates are removed before `pacstrap` runs.
 
 Disk planning happens before the executor starts destructive work.
 
+Disk classification distinguishes:
+
+- ready partition tables
+- empty new disks with no partition table
+- damaged or unreadable layouts that should be initialized first
+
 The preview screen shows:
 
 - partitions to create or reuse
@@ -65,6 +73,7 @@ The preview screen shows:
 - Secure Boot/UKI preparation when enabled
 
 Free-space partition creation requires typed `YES` before changes are applied.
+Full-disk wipe and disk initialization also require typed `YES`.
 The final install launch also requires typed `YES`.
 
 ## Chroot Flow

@@ -55,6 +55,7 @@ safe_source_module "$SCRIPT_DIR/modules/profile.sh" || true
 
 INSTALL_USER_PASSWORD=${INSTALL_USER_PASSWORD:-""}
 INSTALL_ROOT_PASSWORD=${INSTALL_ROOT_PASSWORD:-""}
+INSTALL_SAFE_MODE=${INSTALL_SAFE_MODE:-true}
 ZRAM=${ZRAM:-false}
 LIVE_CONSOLE_FONT=${LIVE_CONSOLE_FONT:-ter-v16n}
 ARCHINSTALL_DEBUG_LOG=${ARCHINSTALL_DEBUG_LOG:-/tmp/archinstall_debug.log}
@@ -87,20 +88,20 @@ log_info() {
 
 safe_runtime_boot_summary() {
 	if type runtime_boot_summary >/dev/null 2>&1; then
-		runtime_boot_summary 2>/dev/null || printf 'Unknown\n'
+		runtime_boot_summary 2>/dev/null || printf 'BIOS (Secure Boot: Not Supported)\n'
 		return 0
 	fi
 
-	printf 'Unknown\n'
+	printf 'BIOS (Secure Boot: Not Supported)\n'
 }
 
 safe_runtime_environment_summary() {
 	if type runtime_environment_summary >/dev/null 2>&1; then
-		runtime_environment_summary 2>/dev/null || printf 'Unknown\n'
+		runtime_environment_summary 2>/dev/null || printf 'Bare Metal\n'
 		return 0
 	fi
 
-	printf 'Unknown\n'
+	printf 'Bare Metal\n'
 }
 
 sync_install_ui_mode() {
@@ -454,7 +455,7 @@ refresh_runtime_context() {
 installer_context_header() {
 	local boot_summary="$(safe_runtime_boot_summary)"
 	local environment_summary_value="$(safe_runtime_environment_summary)"
-	local gpu_label_value="$(state_or_default "GPU_LABEL" "Unknown")"
+	local gpu_label_value="$(state_or_default "GPU_LABEL" "Generic")"
 
 	printf 'Boot Mode: %s\nEnvironment: %s\nGPU: %s' "$boot_summary" "$environment_summary_value" "$gpu_label_value"
 }
@@ -533,6 +534,7 @@ apply_runtime_mode() {
 	sync_install_ui_mode
 
 	set_state "DEV_MODE" "$DEV_MODE" || return 1
+	set_state "INSTALL_SAFE_MODE" "$INSTALL_SAFE_MODE" || return 1
 	set_state "UI_MODE" "${UI_MODE:-dialog}" || return 1
 	set_state "INSTALL_UI_MODE" "$INSTALL_UI_MODE" || return 1
 }
@@ -578,7 +580,7 @@ show_install_summary_dialog() {
 	secure_boot_state="$(secure_boot_state_label "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")"
 	secure_boot_mode="$(secure_boot_mode_label "$(state_or_default "SECURE_BOOT_MODE" "disabled")")"
 	environment_summary_value="$(safe_runtime_environment_summary)"
-	gpu_label_value="$(state_or_default "GPU_LABEL" "Unknown")"
+	gpu_label_value="$(state_or_default "GPU_LABEL" "Generic")"
 	local keymap="$(state_or_default "KEYMAP" "us")"
 	if [[ $install_status -eq 0 ]]; then
 		status_label="SUCCESS"
@@ -951,8 +953,15 @@ configure_install_profile() {
 	local display_manager=""
 	local greeter_frontend="tuigreet"
 	local display_mode=""
+	local package_config_warning=""
 
 	refresh_runtime_context || true
+	if type package_config_warning_text >/dev/null 2>&1; then
+		package_config_warning="$(package_config_warning_text 2>/dev/null || true)"
+		if [[ -n $package_config_warning ]]; then
+			warning_box "Package Config Warning" "$package_config_warning"
+		fi
+	fi
 	hostname="$(prompt_required_input "Hostname" "Set the system hostname." "$(state_or_default "HOSTNAME" "archlinux")")" || return 1
 	timezone="$(select_timezone_value "$(state_or_default "TIMEZONE" "Europe/Istanbul")")" || return 1
 	locale="$(select_locale_value "$(state_or_default "LOCALE" "en_US.UTF-8")")" || return 1
@@ -1087,7 +1096,7 @@ show_state_summary() {
 	local root_password_state
 
 	disk="$(get_state "DISK" 2>/dev/null || printf 'Not selected')"
-	boot_mode="$(get_state "BOOT_MODE" 2>/dev/null || detect_boot_mode 2>/dev/null || printf 'Unknown')"
+	boot_mode="$(get_state "BOOT_MODE" 2>/dev/null || detect_boot_mode 2>/dev/null || printf 'bios')"
 	efi_partition="$(get_state "EFI_PART" 2>/dev/null || printf 'Not created')"
 	root_partition="$(get_state "ROOT_PART" 2>/dev/null || printf 'Not created')"
 	hostname="$(state_or_default "HOSTNAME" "archlinux")"
@@ -1096,7 +1105,7 @@ show_state_summary() {
 	keymap="$(state_or_default "KEYMAP" "us")"
 	username="$(state_or_default "USERNAME" "Not configured")"
 	filesystem="$(state_or_default "FILESYSTEM" "ext4")"
-	disk_type="$(state_or_default "DISK_TYPE" "Unknown")"
+	disk_type="$(state_or_default "DISK_TYPE" "auto")"
 	install_scenario="$(state_or_default "INSTALL_SCENARIO" "wipe")"
 	enable_zram="$(state_or_default "ENABLE_ZRAM" "false")"
 	desktop_profile="$(state_or_default "DESKTOP_PROFILE" "none")"
@@ -1107,14 +1116,14 @@ show_state_summary() {
 	secure_boot_state="$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")"
 	secure_boot_mode="$(state_or_default "SECURE_BOOT_MODE" "disabled")"
 	environment_summary_value="$(safe_runtime_environment_summary)"
-	gpu_label_value="$(state_or_default "GPU_LABEL" "Unknown")"
+	gpu_label_value="$(state_or_default "GPU_LABEL" "Generic")"
 	install_profile_value="$(state_or_default "INSTALL_PROFILE" "daily")"
 	user_password_state="not set"
 	root_password_state="not set"
 	[[ -n $INSTALL_USER_PASSWORD ]] && user_password_state="set"
 	[[ -n $INSTALL_ROOT_PASSWORD ]] && root_password_state="set"
 
-	msg "Installer State" "Saved state:\n\nEnvironment: $environment_summary_value\nGPU: $gpu_label_value\nDisk: $disk\nDisk type: $disk_type\nDisk strategy: $install_scenario\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nSecure Boot mode: $(secure_boot_mode_label "$secure_boot_mode")\nEFI: $efi_partition\nRoot: $root_partition\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nInstall profile: $(install_profile_label "$install_profile_value")\nFilesystem: $filesystem\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay mode: $(display_mode_label "$display_mode")\nResolved mode: $(display_mode_label "$resolved_display_mode")\nDisplay manager: $(display_manager_label "$display_manager")\nGreeter frontend: $(greeter_frontend_label "$greeter_frontend")\nUser password: $user_password_state\nRoot password: $root_password_state\nDEV_MODE: $DEV_MODE\nUI mode: $INSTALL_UI_MODE" 27 82
+	msg "Installer State" "Saved state:\n\nEnvironment: $environment_summary_value\nGPU: $gpu_label_value\nDisk: $disk\nDisk type: $disk_type\nDisk strategy: $install_scenario\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nSecure Boot mode: $(secure_boot_mode_label "$secure_boot_mode")\nEFI: $efi_partition\nRoot: $root_partition\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nInstall profile: $(install_profile_label "$install_profile_value")\nFilesystem: $filesystem\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay mode: $(display_mode_label "$display_mode")\nResolved mode: $(display_mode_label "$resolved_display_mode")\nDisplay manager: $(display_manager_label "$display_manager")\nGreeter frontend: $(greeter_frontend_label "$greeter_frontend")\nSafe mode: $INSTALL_SAFE_MODE\nUser password: $user_password_state\nRoot password: $root_password_state\nDEV_MODE: $DEV_MODE\nUI mode: $INSTALL_UI_MODE" 27 82
 }
 
 confirm_installation() {
@@ -1136,7 +1145,7 @@ confirm_installation() {
 
 	validate_install_profile || return 1
 
-	message="$(installer_context_header)\n\nThis will prepare a bootable Arch Linux system on:\n\n$disk\n\nDisk type: $(state_or_default "DISK_TYPE" "auto")\nDisk strategy: $(state_or_default "INSTALL_SCENARIO" "wipe")\nBoot mode: $(boot_mode_status_label "$(state_or_default "BOOT_MODE" "auto")" "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")\nSecure Boot mode: $(secure_boot_mode_label "$(state_or_default "SECURE_BOOT_MODE" "disabled")")\nHostname: $(state_or_default "HOSTNAME" "archlinux")\nTimezone: $(state_or_default "TIMEZONE" "Europe/Istanbul")\nLocale: $(state_or_default "LOCALE" "en_US.UTF-8")\nKeyboard: $(state_or_default "KEYMAP" "us")\nUser: $(state_or_default "USERNAME" "archuser")\nInstall profile: $(install_profile_label "$(state_or_default "INSTALL_PROFILE" "daily")")\nFilesystem: $(state_or_default "FILESYSTEM" "ext4")\nZram: $(state_or_default "ENABLE_ZRAM" "false")\nDesktop: $(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")\nDisplay mode: $(display_mode_label "$(state_or_default "DISPLAY_MODE" "auto")")\nDisplay manager: $(display_manager_label "$(state_or_default "DISPLAY_MANAGER" "none")")\nGreeter frontend: $(greeter_frontend_label "$(state_or_default "GREETER_FRONTEND" "tuigreet")")\n\nDestructive steps may erase existing data."
+	message="$(installer_context_header)\n\nThis will prepare a bootable Arch Linux system on:\n\n$disk\n\nDisk type: $(state_or_default "DISK_TYPE" "auto")\nDisk strategy: $(state_or_default "INSTALL_SCENARIO" "wipe")\nBoot mode: $(boot_mode_status_label "$(state_or_default "BOOT_MODE" "bios")" "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")\nSecure Boot mode: $(secure_boot_mode_label "$(state_or_default "SECURE_BOOT_MODE" "disabled")")\nHostname: $(state_or_default "HOSTNAME" "archlinux")\nTimezone: $(state_or_default "TIMEZONE" "Europe/Istanbul")\nLocale: $(state_or_default "LOCALE" "en_US.UTF-8")\nKeyboard: $(state_or_default "KEYMAP" "us")\nUser: $(state_or_default "USERNAME" "archuser")\nInstall profile: $(install_profile_label "$(state_or_default "INSTALL_PROFILE" "daily")")\nFilesystem: $(state_or_default "FILESYSTEM" "ext4")\nZram: $(state_or_default "ENABLE_ZRAM" "false")\nDesktop: $(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")\nDisplay mode: $(display_mode_label "$(state_or_default "DISPLAY_MODE" "auto")")\nDisplay manager: $(display_manager_label "$(state_or_default "DISPLAY_MANAGER" "none")")\nGreeter frontend: $(greeter_frontend_label "$(state_or_default "GREETER_FRONTEND" "tuigreet")")\nSafe mode: $(state_or_default "INSTALL_SAFE_MODE" "$INSTALL_SAFE_MODE")\n\nDestructive steps may erase existing data."
 	if flag_enabled "$DEV_MODE"; then
 		message+="\n\nDev mode flags:\nSKIP_PARTITION=$SKIP_PARTITION\nSKIP_PACSTRAP=$SKIP_PACSTRAP\nSKIP_CHROOT=$SKIP_CHROOT\nINSTALL_UI_MODE=$INSTALL_UI_MODE"
 	fi

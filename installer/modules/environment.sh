@@ -9,13 +9,13 @@ fi
 
 if ! type environment_label >/dev/null 2>&1; then
 	environment_label() {
-		printf '%s\n' "${1:-Unknown}"
+		printf '%s\n' "${1:-Bare Metal}"
 	}
 fi
 
 if ! type runtime_environment_summary >/dev/null 2>&1; then
 	runtime_environment_summary() {
-		printf 'Unknown\n'
+		printf 'Bare Metal\n'
 	}
 fi
 

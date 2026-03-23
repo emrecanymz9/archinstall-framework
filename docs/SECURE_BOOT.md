@@ -8,6 +8,8 @@ The installer detects:
 - Secure Boot state through EFI variables when available
 - firmware setup mode through EFI variables when available
 
+Boot mode always falls back to `bios` when EFI is not present.
+
 Detected values are shown in the UI headers and summaries.
 
 ## Modes
@@ -72,6 +74,12 @@ For systemd-boot, the legacy `arch.conf` entry is removed and sd-boot discovers 
 - Secure Boot state is still detected
 - automatic enrollment is skipped in virtualized environments
 - the install continues even if the VM firmware does not support the expected enrollment flow
+
+### Missing Tooling
+
+- if `sbctl` is missing, the installer rebuilds the normal initramfs and continues
+- if `ukify` is missing, the installer rebuilds the normal initramfs and continues
+- these cases are warnings, not fatal errors
 
 ### NVIDIA
 

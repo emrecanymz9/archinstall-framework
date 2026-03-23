@@ -25,6 +25,8 @@ Plugins can currently:
 - inject extra chroot script content with `register_chroot_snippet`
 - extend installer menus with `register_menu_entry`
 
+All plugin features are best-effort. A plugin may fail, be skipped, or be absent without aborting the installer.
+
 ## Lifecycle Hooks
 
 Available hook names:

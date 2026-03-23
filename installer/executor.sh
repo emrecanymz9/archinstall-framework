@@ -10,6 +10,7 @@ ARCHINSTALL_PROGRESS_LOG=${ARCHINSTALL_PROGRESS_LOG:-/tmp/archinstall_progress.l
 PACMAN_OPTS=${PACMAN_OPTS:---noconfirm --needed}
 export PACMAN_OPTS
 DEV_MODE=${DEV_MODE:-false}
+INSTALL_SAFE_MODE=${INSTALL_SAFE_MODE:-true}
 SKIP_PARTITION=${SKIP_PARTITION:-false}
 SKIP_PACSTRAP=${SKIP_PACSTRAP:-false}
 SKIP_CHROOT=${SKIP_CHROOT:-false}
@@ -223,7 +224,7 @@ build_pacstrap_package_list() {
 	local include_vscode=${10:-false}
 	local custom_tools=${11:-}
 	local environment_vendor=${12:-baremetal}
-	local gpu_vendor=${13:-unknown}
+	local gpu_vendor=${13:-generic}
 	local secure_boot_mode=${14:-disabled}
 	local greeter_frontend=${15:-tuigreet}
 	local -a desktop_packages=()
@@ -787,7 +788,7 @@ build_chroot_script() {
 	current_secure_boot_state="$(get_state "CURRENT_SECURE_BOOT_STATE" 2>/dev/null || printf 'unsupported')"
 	current_secure_boot_setup_mode="$(get_state "CURRENT_SECURE_BOOT_SETUP_MODE" 2>/dev/null || printf 'unknown')"
 	environment_vendor="$(get_state "ENVIRONMENT_VENDOR" 2>/dev/null || printf 'baremetal')"
-	gpu_vendor="$(get_state "GPU_VENDOR" 2>/dev/null || printf 'unknown')"
+	gpu_vendor="$(get_state "GPU_VENDOR" 2>/dev/null || printf 'generic')"
 	greeter_frontend="$(get_state "GREETER_FRONTEND" 2>/dev/null || printf 'tuigreet')"
 
 	if [[ -z $user_password ]]; then
@@ -1289,7 +1290,7 @@ run_install() {
 	local secure_boot_mode="disabled"
 	local current_secure_boot_state="unsupported"
 	local environment_vendor="baremetal"
-	local gpu_vendor="unknown"
+	local gpu_vendor="generic"
 	local install_scenario="wipe"
 	local format_root="true"
 	local format_efi="true"
@@ -1389,6 +1390,7 @@ run_install() {
 		log_line "Display mode: $display_mode"
 		log_line "Display manager: $display_manager"
 		log_line "Greeter frontend: $greeter_frontend"
+		log_line "Safe mode: $INSTALL_SAFE_MODE"
 
 		resolve_display_mode() {
 			local requested_mode=${1:-auto}

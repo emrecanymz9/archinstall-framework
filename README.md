@@ -49,6 +49,9 @@ Additional documentation:
 
 - `docs/ARCHITECTURE.md`
 - `docs/DISK_MANAGER.md`
+- `docs/INSTALL.md`
+- `docs/DEVELOPMENT.md`
+- `docs/KNOWN_ISSUES.md`
 - `docs/SECURE_BOOT.md`
 - `docs/HARDWARE.md`
 - `docs/PROFILES.md`
