@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 
+HARDWARE_MODULE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ -r "$HARDWARE_MODULE_DIR/detect.sh" ]]; then
+	# shellcheck source=installer/modules/detect.sh
+	source "$HARDWARE_MODULE_DIR/detect.sh"
+fi
+
 gpu_vendor_label() {
 	case ${1:-unknown} in
 		intel)
@@ -30,47 +37,12 @@ gpu_vendor_label() {
 }
 
 detect_gpu_vendor() {
-	local lspci_output=""
-	local environment_vendor="baremetal"
-
-	if type detect_virtualization_vendor >/dev/null 2>&1; then
-		environment_vendor="$(detect_virtualization_vendor)"
-	fi
-	case $environment_vendor in
-		vmware|virtualbox|qemu|hyperv|xen)
-			printf '%s\n' "$environment_vendor"
-			return 0
-			;;
-	esac
-
-	if ! command -v lspci >/dev/null 2>&1; then
-		printf 'generic\n'
+	if type detect_gpu_vendor_safe >/dev/null 2>&1; then
+		detect_gpu_vendor_safe
 		return 0
 	fi
 
-	lspci_output="$(lspci 2>/dev/null | grep -E 'VGA|3D' || true)"
-	if [[ -z $lspci_output ]]; then
-		printf 'generic\n'
-		return 0
-	fi
-
-	case ${lspci_output,,} in
-		*"vmware"*|*"virtualbox"*|*"qemu"*)
-			printf 'qemu\n'
-			;;
-		*"nvidia"*)
-			printf 'nvidia\n'
-			;;
-		*"amd"*|*"advanced micro devices"*|*"ati"*)
-			printf 'amd\n'
-			;;
-		*"intel"*)
-			printf 'intel\n'
-			;;
-		*)
-			printf 'generic\n'
-			;;
-	esac
+	printf 'generic\n'
 }
 
 refresh_hardware_state() {

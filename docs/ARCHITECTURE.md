@@ -8,7 +8,8 @@
 
 ## Shared State
 
-The installer persists UI and install decisions through `installer/state.sh`.
+The installer persists UI and install decisions through `installer/core/state.sh`.
+`installer/state.sh` remains as a compatibility shim for existing callers.
 
 Important state keys:
 
@@ -21,15 +22,20 @@ Important state keys:
 
 ## Runtime Awareness
 
-`installer/modules/system.sh` detects:
+`installer/modules/detect.sh` is the shared detection layer for:
 
 - BIOS vs UEFI
-- Secure Boot firmware state through EFI variables when available
 - virtualization platform through `systemd-detect-virt` and DMI data
+- environment type classification: `vm`, `laptop`, `desktop`
+- GPU vendor fallbacks
+- disk model strings and simple OS-presence hints
 
-`installer/modules/hardware.sh` detects:
+`installer/modules/system.sh` builds on that shared layer and detects:
 
-- GPU vendor through `lspci`
+- Secure Boot firmware state through EFI variables when available
+
+`installer/modules/hardware.sh` builds on that shared layer and detects:
+
 - guest additions packages and services for VMware, VirtualBox, and QEMU/KVM
 
 The UI refreshes these values at runtime and shows them in:
@@ -60,6 +66,8 @@ For other strategies it reuses the prepared partition layout and follows `FORMAT
 - `dev`
 - `custom`
 
+Package policy now loads from `config/packages.conf` first and falls back to `config/system.conf` for compatibility.
+
 `installer/executor.sh` merges package sources from:
 
 - base install requirements
@@ -68,6 +76,8 @@ For other strategies it reuses the prepared partition layout and follows `FORMAT
 - hardware packages
 - Secure Boot tooling packages
 - desktop profile packages
+
+Configured package dependencies are expanded after the full package list is assembled.
 
 Package deduplication happens before `pacstrap`.
 

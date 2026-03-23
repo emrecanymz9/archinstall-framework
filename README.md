@@ -14,7 +14,7 @@ setfont ter-v16n
 pacman-key --init
 pacman-key --populate archlinux
 pacman -Sy archlinux-keyring --noconfirm
-pacman -S --needed --noconfirm git dialog reflector
+pacman -Sy --noconfirm make git dialog reflector
 reflector --latest 10 --protocol https --sort rate --save /etc/pacman.d/mirrorlist
 git clone https://github.com/emrecanymz9/archinstall-framework.git
 cd archinstall-framework
@@ -35,7 +35,7 @@ The installer intentionally keeps the live ISO minimal. Heavy packages belong in
 - Secure Boot modes: `Disabled`, `Assisted`, `Advanced`
 - hardware abstraction for VMware, VirtualBox, QEMU/KVM, and common GPU vendors
 - optional zram via `zram-generator`
-- config-driven package tiers from `config/system.conf`
+- config-driven package tiers from `config/packages.conf`
 - KDE Plasma profile with both Wayland and X11 session support
 - install profiles: `DAILY`, `DEV`, `CUSTOM`
 - display mode selection: `Auto`, `Wayland`, `X11`
@@ -80,7 +80,7 @@ Minimal live ISO packages:
 
 ```bash
 pacman -Sy archlinux-keyring --noconfirm
-pacman -S --needed --noconfirm git dialog reflector
+pacman -Sy --noconfirm make git dialog reflector
 ```
 
 The installer expects the normal Arch ISO tooling already present, including `lsblk`, `wipefs`, `mount`, `umount`, `parted`, `pacstrap`, `blkid`, and `arch-chroot`.
@@ -97,6 +97,7 @@ Or use the helpers:
 
 ```bash
 make deps
+make install
 make mirror
 make run
 ```
@@ -111,6 +112,12 @@ Developer mode keeps terminal output visible:
 
 ```bash
 DEV_MODE=true bash installer/install.sh
+```
+
+Repository cleanup:
+
+```bash
+make clean
 ```
 
 ## Install Flow

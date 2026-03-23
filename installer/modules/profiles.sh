@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 PROFILES_MODULE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+ARCHINSTALL_PACKAGES_CONFIG_PATH="$(cd -- "$PROFILES_MODULE_DIR/../.." && pwd)/config/packages.conf"
 ARCHINSTALL_SYSTEM_CONFIG_PATH="$(cd -- "$PROFILES_MODULE_DIR/../.." && pwd)/config/system.conf"
 ARCHINSTALL_SYSTEM_CONFIG_LOADED=${ARCHINSTALL_SYSTEM_CONFIG_LOADED:-false}
 
@@ -11,7 +12,11 @@ load_system_package_config() {
 		return 0
 	fi
 
-	if [[ -r $ARCHINSTALL_SYSTEM_CONFIG_PATH ]] && bash -n "$ARCHINSTALL_SYSTEM_CONFIG_PATH" >/dev/null 2>&1; then
+	if [[ -r $ARCHINSTALL_PACKAGES_CONFIG_PATH ]] && bash -n "$ARCHINSTALL_PACKAGES_CONFIG_PATH" >/dev/null 2>&1; then
+		# shellcheck disable=SC1090
+		source "$ARCHINSTALL_PACKAGES_CONFIG_PATH" || true
+		ARCHINSTALL_SYSTEM_CONFIG_STATUS=loaded
+	elif [[ -r $ARCHINSTALL_SYSTEM_CONFIG_PATH ]] && bash -n "$ARCHINSTALL_SYSTEM_CONFIG_PATH" >/dev/null 2>&1; then
 		# shellcheck disable=SC1090
 		source "$ARCHINSTALL_SYSTEM_CONFIG_PATH" || true
 		ARCHINSTALL_SYSTEM_CONFIG_STATUS=loaded
@@ -125,6 +130,47 @@ visible_tool_label() {
 visible_tool_packages_csv() {
 	local tool_id=${1:?tool id is required}
 	config_csv_or_default "ARCHINSTALL_TOOL_PACKAGES_${tool_id}" "$tool_id"
+}
+
+package_dependency_config_key() {
+	local package_name=${1:?package name is required}
+	local normalized_name=""
+
+	normalized_name="${package_name//-/_}"
+	normalized_name="${normalized_name//./_}"
+	printf 'ARCHINSTALL_PACKAGE_DEPENDS_%s\n' "$normalized_name"
+}
+
+package_dependencies_csv() {
+	local package_name=${1:?package name is required}
+	local config_key=""
+
+	config_key="$(package_dependency_config_key "$package_name")"
+	config_csv_or_default "$config_key" ""
+}
+
+expand_package_dependencies() {
+	local -n package_ref=${1:?package reference is required}
+	local changed="true"
+	local package_name=""
+	local dependency_csv=""
+	local -a snapshot=()
+
+	while [[ $changed == "true" ]]; do
+		changed="false"
+		snapshot=("${package_ref[@]}")
+		for package_name in "${snapshot[@]}"; do
+			local before_count=${#package_ref[@]}
+			dependency_csv="$(package_dependencies_csv "$package_name")"
+			if [[ -z $dependency_csv ]]; then
+				continue
+			fi
+			append_csv_packages "$dependency_csv" package_ref
+			if [[ ${#package_ref[@]} -ne $before_count ]]; then
+				changed="true"
+			fi
+		done
+	done
 }
 
 profile_default_visible_tools() {

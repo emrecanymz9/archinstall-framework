@@ -258,6 +258,9 @@ build_pacstrap_package_list() {
 			append_unique_items package_ref "${desktop_packages[@]}"
 		fi
 	fi
+	if type expand_package_dependencies >/dev/null 2>&1; then
+		expand_package_dependencies package_ref || true
+	fi
 }
 
 normalize_filesystem() {

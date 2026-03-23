@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 
+SYSTEM_MODULE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ -r "$SYSTEM_MODULE_DIR/detect.sh" ]]; then
+	# shellcheck source=installer/modules/detect.sh
+	source "$SYSTEM_MODULE_DIR/detect.sh"
+fi
+
 ARCHINSTALL_EFI_GLOBAL_GUID=${ARCHINSTALL_EFI_GLOBAL_GUID:-8be4df61-93ca-11d2-aa0d-00e098032b8c}
 
 runtime_state_or_default() {
@@ -108,48 +115,12 @@ normalize_virtualization_vendor() {
 }
 
 detect_virtualization_vendor() {
-	local detected=""
-	local dmi_vendor=""
-	local dmi_product=""
-
-	if command -v systemd-detect-virt >/dev/null 2>&1; then
-		detected="$(systemd-detect-virt 2>/dev/null || true)"
+	if type detect_environment_vendor_safe >/dev/null 2>&1; then
+		detect_environment_vendor_safe
+		return 0
 	fi
 
-	if [[ -r /sys/class/dmi/id/sys_vendor ]]; then
-		read -r dmi_vendor < /sys/class/dmi/id/sys_vendor || true
-	fi
-	if [[ -r /sys/class/dmi/id/product_name ]]; then
-		read -r dmi_product < /sys/class/dmi/id/product_name || true
-	fi
-
-	case "${detected,,}:${dmi_vendor,,}:${dmi_product,,}" in
-		vmware*|*:vmware*|*:*:vmware*)
-			printf 'vmware\n'
-			;;
-		oracle*|virtualbox*|*:oracle*|*:innotek*|*:*:virtualbox*)
-			printf 'virtualbox\n'
-			;;
-		qemu*|kvm*|*:qemu*|*:*:kvm*|*:*:qemu*)
-			printf 'qemu\n'
-			;;
-		hyperv*|microsoft*|*:microsoft*|*:*:virtual machine*)
-			printf 'hyperv\n'
-			;;
-		xen*|*:xen*|*:*:xen*)
-			printf 'xen\n'
-			;;
-		:none:|baremetal:*|*:|*::)
-			printf 'baremetal\n'
-			;;
-		*)
-			if [[ -n $detected && $detected != none ]]; then
-				normalize_virtualization_vendor "$detected"
-			else
-				printf 'baremetal\n'
-			fi
-			;;
-		esac
+	printf 'baremetal\n'
 }
 
 environment_label() {
@@ -220,17 +191,28 @@ refresh_runtime_system_state() {
 	local secure_boot_state=""
 	local secure_boot_setup_mode=""
 	local environment_vendor=""
+	local environment_type=""
 
-	boot_mode="$(detect_boot_mode 2>/dev/null || printf 'bios')"
+	if type detect_boot_mode_safe >/dev/null 2>&1; then
+		boot_mode="$(detect_boot_mode_safe)"
+	else
+		boot_mode="$(detect_boot_mode 2>/dev/null || printf 'bios')"
+	fi
 	secure_boot_state="$(detect_secure_boot_state "$boot_mode")"
 	secure_boot_setup_mode="$(detect_secure_boot_setup_mode "$boot_mode")"
 	environment_vendor="$(detect_virtualization_vendor)"
+	if type detect_environment_type >/dev/null 2>&1; then
+		environment_type="$(detect_environment_type)"
+	else
+		environment_type="desktop"
+	fi
 
 	set_state "BOOT_MODE" "$boot_mode" || return 1
 	set_state "CURRENT_SECURE_BOOT_STATE" "$secure_boot_state" || return 1
 	set_state "CURRENT_SECURE_BOOT_SETUP_MODE" "$secure_boot_setup_mode" || return 1
 	set_state "ENVIRONMENT_VENDOR" "$environment_vendor" || return 1
 	set_state "ENVIRONMENT_LABEL" "$(environment_label "$environment_vendor")" || return 1
+	set_state "ENVIRONMENT_TYPE" "$environment_type" || return 1
 	return 0
 }
 

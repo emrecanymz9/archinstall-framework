@@ -8,6 +8,8 @@ source "$SCRIPT_DIR/ui.sh"
 source "$SCRIPT_DIR/state.sh"
 # shellcheck source=installer/modules/system.sh
 source "$SCRIPT_DIR/modules/system.sh"
+# shellcheck source=installer/modules/detect.sh
+source "$SCRIPT_DIR/modules/detect.sh"
 # shellcheck source=installer/modules/disk/layout.sh
 source "$SCRIPT_DIR/modules/disk/layout.sh"
 # shellcheck source=installer/modules/disk/space.sh
@@ -57,13 +59,10 @@ list_disks() {
 		[[ $type == "disk" ]] || continue
 		[[ -n $archiso_disk && $name == "$archiso_disk" ]] && continue
 
-		model="$(lsblk -dnro MODEL "$name" 2>/dev/null || true)"
-		model=${model//$'\t'/ }
-		model=${model//$'\n'/ }
-		[[ -n $model ]] || model="Model not reported"
+		model="$(disk_model_value "$name")"
 		size_gib="$(disk_size_gib "$name")"
 		label="$(disk_label_value "$name")"
-		alerts="$(disk_alerts "$name")"
+		alerts="$(detect_disk_os_presence "$name")"
 		partitions="$(disk_partition_summary "$name")"
 
 		printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$size_gib" "$model" "$label" "$alerts" "$partitions"
