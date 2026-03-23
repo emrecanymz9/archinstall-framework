@@ -553,11 +553,30 @@ load_runtime_preferences() {
 	apply_runtime_mode
 }
 
+post_install_kernel_label() {
+	printf '%s\n' "$(state_or_default "KERNEL_PACKAGE" "linux")"
+}
+
+post_install_bootloader_label() {
+	local boot_mode="$(state_or_default "BOOT_MODE" "auto")"
+
+	case "$boot_mode" in
+		uefi)
+			printf 'systemd-boot\n'
+			;;
+		*)
+			printf 'grub\n'
+			;;
+	esac
+}
+
 install_summary_text() {
 	local install_status=${1:-1}
 	local disk="$(state_or_default "DISK" "Not selected")"
 	local filesystem="$(state_or_default "FILESYSTEM" "ext4")"
 	local boot_mode="$(state_or_default "BOOT_MODE" "auto")"
+	local kernel="$(post_install_kernel_label)"
+	local bootloader="$(post_install_bootloader_label)"
 	local disk_type="$(state_or_default "DISK_TYPE" "auto")"
 	local desktop_profile="$(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")"
 	local display_mode="$(display_mode_label "$(state_or_default "DISPLAY_MODE" "auto")")"
@@ -574,13 +593,15 @@ install_summary_text() {
 		status_label="SUCCESS"
 	fi
 
-	printf 'Environment: %s\nGPU: %s\nDisk: %s\nDisk type: %s\nFilesystem: %s\nBoot mode: %s\nSecure Boot mode: %s\nKeyboard: %s\nInstall profile: %s\nDesktop: %s\nDisplay mode: %s\nResolved mode: %s\nZRAM: %s\nStatus: %s\n\nInstall log: %s' \
+	printf 'Environment: %s\nGPU: %s\nDisk: %s\nDisk type: %s\nFilesystem: %s\nBoot mode: %s\nKernel: %s\nBootloader: %s\nSecure Boot mode: %s\nKeyboard: %s\nInstall profile: %s\nDesktop: %s\nDisplay mode: %s\nResolved mode: %s\nZRAM: %s\nStatus: %s\n\nInstall log: %s' \
 		"$environment_summary_value" \
 		"$gpu_label_value" \
 		"$disk" \
 		"$disk_type" \
 		"$filesystem" \
 		"$(boot_mode_status_label "$boot_mode" "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")" \
+		"$kernel" \
+		"$bootloader" \
 		"$secure_boot_mode" \
 		"$keymap" \
 		"$install_profile" \
@@ -592,70 +613,87 @@ install_summary_text() {
 		"${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}"
 }
 
-show_install_summary_fallback() {
-	local install_status=${1:-1}
-	local summary_text=""
-
-	summary_text="$(install_summary_text "$install_status")"
-	printf '\nInstallation Summary\n\n%s\n\n' "$summary_text"
-	if [[ $install_status -eq 0 ]]; then
-		printf 'Return to the installer menu, or run: reboot\n'
-	fi
-	printf 'Press Enter to continue... '
-	read -r _ || true
-	return 0
-}
-
-show_install_summary_dialog() {
+show_post_install_screen() {
 	local install_status=${1:-1}
 	local prompt=""
 	local choice=""
 	local dialog_status=0
 
+	if [[ $install_status -ne 0 ]]; then
+		return 0
+	fi
+
 	prompt="$(install_summary_text "$install_status")"
-	log_info "Installer finished, launching summary dialog"
+	log_info "Showing post-install screen"
 
-	if [[ ${UI_MODE:-dialog} == "tty" ]]; then
-		show_install_summary_fallback "$install_status"
-		return 0
-	fi
-	if ! require_dialog >/dev/null 2>&1; then
-		show_install_summary_fallback "$install_status"
-		return 0
-	fi
-
-	menu "Installation Complete" "$prompt" 20 78 4 \
-		"reboot" "Reboot system" \
-		"shutdown" "Shutdown system" \
-		"back" "Return to main menu"
-	choice="$DIALOG_RESULT"
-	dialog_status=$DIALOG_STATUS
-	case $dialog_status in
-		0)
-			case "$choice" in
-				reboot)
-					reboot
+	if [[ ${UI_MODE:-dialog} != "tty" ]] && require_dialog >/dev/null 2>&1; then
+		while true; do
+			menu "Installation Complete" "$prompt" 22 82 3 \
+				"1" "Reboot" \
+				"2" "Shutdown" \
+				"3" "Return to Menu"
+			choice="$DIALOG_RESULT"
+			dialog_status=$DIALOG_STATUS
+			case $dialog_status in
+				0)
+					log_info "User selected action: $choice"
+					case "$choice" in
+						1)
+							reboot
+							return 0
+							;;
+						2)
+							poweroff
+							return 0
+							;;
+						3)
+							return 0
+							;;
+					esac
 					;;
-				shutdown)
-					poweroff
-					;;
-				*)
+				1|255)
+					log_info "User selected action: 3"
 					return 0
 					;;
+				*)
+					break
+					;;
 			esac
-			;;
-		1|255)
+		done
+	fi
+
+	while true; do
+		printf '\nInstallation Complete\n\n%s\n\n' "$prompt" >/dev/tty
+		printf '1) Reboot\n2) Shutdown\n3) Return to Menu\n\nSelect an action [1-3]: ' >/dev/tty
+		if ! IFS= read -r choice </dev/tty; then
+			log_info "User selected action: 3"
 			return 0
-			;;
-		*)
-			show_install_summary_fallback "$install_status"
-			return 0
-			;;
-	esac
+		fi
+
+		case "$choice" in
+			1)
+				log_info "User selected action: 1"
+				reboot
+				return 0
+				;;
+			2)
+				log_info "User selected action: 2"
+				poweroff
+				return 0
+				;;
+			3)
+				log_info "User selected action: 3"
+				return 0
+				;;
+			*)
+				printf 'Invalid selection. Enter 1, 2, or 3.\n' >/dev/tty
+				;;
+		esac
+	done
 }
 
 show_install_result_dialog() {
-	show_install_summary_dialog "$@"
+	show_post_install_screen "$@"
 }
 
 run_install_with_dialog() {
@@ -1210,7 +1248,9 @@ run_install_flow() {
 		show_install_failure_dialog "${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}" || true
 	fi
 
-	show_install_summary_dialog "$status" || true
+	if [[ $status -eq 0 ]]; then
+		show_post_install_screen "$status" || true
+	fi
 
 	case $status in
 		0|1|255|130)
