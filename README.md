@@ -2,7 +2,7 @@
 
 Modular Arch Linux installer written in Bash for the Arch Linux live ISO.
 
-Warning: this installer wipes the selected disk. Test in a VM before using real hardware.
+Warning: destructive installs are still possible. The disk manager now supports full-disk wipe, free-space installs, dual-boot preparation, and manual partition reuse, but you should still test in a VM before touching real hardware.
 
 ## Quick Start
 
@@ -26,17 +26,30 @@ The installer intentionally keeps the live ISO minimal. Heavy packages belong in
 ## Features
 
 - dialog-based install flow
+- runtime-aware UI with boot-mode, Secure Boot, and environment detection
 - ext4 and btrfs root installs
 - SSD, HDD, and NVMe mount-option detection
 - disk-space validation on `/mnt` before `pacstrap`
+- disk manager with full-wipe, free-space, dual-boot, and manual strategies
 - UEFI with systemd-boot or BIOS with GRUB
+- Secure Boot modes: `Disabled`, `Assisted`, `Advanced`
+- hardware abstraction for VMware, VirtualBox, QEMU/KVM, and common GPU vendors
 - optional zram via `zram-generator`
 - KDE Plasma profile with both Wayland and X11 session support
+- install profiles: `DAILY`, `DEV`, `CUSTOM`
 - display mode selection: `Auto`, `Wayland`, `X11`
 - `sddm` or `greetd + tuigreet`
 - pacman-key and mirror bootstrap hardening
 - install log at `/tmp/archinstall_install.log`
 - mixed-gauge dialog progress view with recent log lines
+
+Additional documentation:
+
+- `docs/ARCHITECTURE.md`
+- `docs/DISK_MANAGER.md`
+- `docs/SECURE_BOOT.md`
+- `docs/HARDWARE.md`
+- `docs/PROFILES.md`
 
 ## Live ISO Rules
 
@@ -105,8 +118,10 @@ DEV_MODE=true bash installer/install.sh
    - username
    - user password
    - root password
+  - install profile
    - filesystem
    - zram preference
+  - Secure Boot mode
    - desktop profile
    - display mode
    - display manager
@@ -133,7 +148,7 @@ Display mode choices:
 Current display-manager behavior:
 
 - `sddm`: enabled only if the binary exists in the target system, with the default Plasma session set from the resolved mode
-- `greetd`: uses `tuigreet --cmd startplasma-wayland` or `startplasma-x11` based on the resolved mode
+- `greetd`: always launches Plasma on Wayland and leaves X11 available as a manual fallback helper
 - invalid or missing display-manager binaries leave the system on TTY with a manual start hint
 
 ## Package Set

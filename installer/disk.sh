@@ -6,6 +6,14 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/ui.sh"
 # shellcheck source=installer/state.sh
 source "$SCRIPT_DIR/state.sh"
+# shellcheck source=installer/modules/system.sh
+source "$SCRIPT_DIR/modules/system.sh"
+# shellcheck source=installer/modules/disk/layout.sh
+source "$SCRIPT_DIR/modules/disk/layout.sh"
+# shellcheck source=installer/modules/disk/space.sh
+source "$SCRIPT_DIR/modules/disk/space.sh"
+# shellcheck source=installer/modules/disk/manager.sh
+source "$SCRIPT_DIR/modules/disk/manager.sh"
 
 get_archiso_boot_disk() {
 	local boot_source
@@ -25,30 +33,6 @@ get_archiso_boot_disk() {
 	printf '%s\n' "$boot_source"
 }
 
-disk_partition_summary() {
-	local disk=${1:?disk is required}
-	local summary
-
-	summary="$(lsblk -lnpo NAME,SIZE,FSTYPE,TYPE "$disk" 2>/dev/null | awk '
-		$4 == "part" {
-			fstype = ($3 == "" ? "unknown" : $3)
-			parts[++count] = $1 " " $2 " " fstype
-		}
-		END {
-			if (count == 0) {
-				print "No existing partitions"
-				exit
-			}
-
-			for (index = 1; index <= count; index++) {
-				printf "%s%s", parts[index], (index < count ? "; " : "")
-			}
-		}
-	')"
-
-	printf '%s\n' "$summary"
-}
-
 disk_details() {
 	local disk=${1:?disk is required}
 
@@ -58,15 +42,17 @@ disk_details() {
 list_disks() {
 	local archiso_disk
 	local name
-	local size
 	local type
 	local model
 	local partitions
+	local size_gib
+	local label
+	local alerts
 
 	archiso_disk="$(get_archiso_boot_disk 2>/dev/null || true)"
 
-	while read -r name size type; do
-		[[ -n $name && -n $size && -n $type ]] || continue
+	while read -r name _ type; do
+		[[ -n $name && -n $type ]] || continue
 
 		[[ $type == "disk" ]] || continue
 		[[ -n $archiso_disk && $name == "$archiso_disk" ]] && continue
@@ -75,18 +61,13 @@ list_disks() {
 		model=${model//$'\t'/ }
 		model=${model//$'\n'/ }
 		[[ -n $model ]] || model="Unknown model"
+		size_gib="$(disk_size_gib "$name")"
+		label="$(disk_label_value "$name")"
+		alerts="$(disk_alerts "$name")"
 		partitions="$(disk_partition_summary "$name")"
 
-		printf '%s\t%s\t%s\t%s\n' "$name" "$size" "$model" "$partitions"
+		printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$size_gib" "$model" "$label" "$alerts" "$partitions"
 	done < <(lsblk -dnpr -o NAME,SIZE,TYPE 2>/dev/null)
-}
-
-confirm_disk_selection() {
-	local disk=${1:?disk is required}
-	local details
-
-	details="$(disk_details "$disk")"
-	confirm "Confirm Disk Selection" "Selected full disk:\n\n$disk\n\nCurrent layout:\n$details\n\nThis installer currently uses full-disk installation only. Continuing later will erase existing partitions and data on this disk. Save this disk as the installation target?" 20 76
 }
 
 select_disk() {
@@ -96,8 +77,12 @@ select_disk() {
 	local disk_name
 	local disk_size
 	local disk_model
+	local disk_label
+	local disk_alerts_value
 	local disk_partitions
 	local selected_disk
+	local boot_mode
+	local strategy
 	local status
 
 	mapfile -t rows < <(list_disks)
@@ -107,24 +92,49 @@ select_disk() {
 	fi
 
 	for row in "${rows[@]}"; do
-		IFS=$'\t' read -r disk_name disk_size disk_model disk_partitions <<< "$row"
-		args+=("$disk_name" "$disk_size - $disk_model | $disk_partitions")
+		IFS=$'\t' read -r disk_name disk_size disk_model disk_label disk_alerts_value disk_partitions <<< "$row"
+		args+=("$disk_name" "$disk_size | $disk_model | label=$disk_label | $disk_alerts_value | $disk_partitions")
 	done
 
-	menu "Disk Selection" "Choose the full disk target for installation." 18 90 10 "${args[@]}"
+	menu "Disk Selection" "Choose a disk to manage for installation.\n\nThe installer will show the detected partitions and let you choose a safe strategy next." 20 100 10 "${args[@]}"
 	selected_disk="$DIALOG_RESULT"
 	status=$DIALOG_STATUS
+	boot_mode="$(state_or_default "BOOT_MODE" "$(detect_boot_mode 2>/dev/null || printf 'bios')")"
 
 	case $status in
 		0)
-			if ! confirm_disk_selection "$selected_disk"; then
-				return 0
-			fi
-
-			set_state "DISK" "$selected_disk"
-			unset_state "EFI_PART"
-			unset_state "ROOT_PART"
-			msg "Disk Selected" "Installation target saved as:\n\n$selected_disk\n\nThe installer will use the whole disk."
+			show_disk_analysis "$selected_disk"
+			menu "Disk Strategy" "Choose how to use $selected_disk.\n\nBoot mode: $boot_mode\nAlerts: $(disk_alerts "$selected_disk")" 18 88 8 \
+				"wipe" "Full disk wipe and automatic partitioning" \
+				"free-space" "Create Linux partitions in the largest free-space region" \
+				"dual-boot" "Use free space while preserving detected Windows partitions" \
+				"manual" "Open the manual partition editor and select partitions" \
+				"back" "Return to disk selection"
+			strategy="$DIALOG_RESULT"
+			case $DIALOG_STATUS in
+				0)
+					case $strategy in
+						wipe)
+							prepare_full_wipe_install "$selected_disk" "$boot_mode" || true
+							;;
+						free-space)
+							prepare_free_space_install "$selected_disk" "$boot_mode" "free-space" || true
+							;;
+						dual-boot)
+							prepare_free_space_install "$selected_disk" "$boot_mode" "dual-boot" || true
+							;;
+						manual)
+							manual_partition_editor "$selected_disk" "$boot_mode" || true
+							;;
+						*)
+							return 0
+							;;
+					esac
+					;;
+				*)
+					return 0
+					;;
+			esac
 			;;
 		1|255)
 			return "$status"
@@ -138,9 +148,11 @@ select_disk() {
 
 current_disk_label() {
 	local selected_disk
+	local scenario
 
 	if selected_disk="$(get_state "DISK" 2>/dev/null)"; then
-		printf '%s\n' "$selected_disk"
+		scenario="$(get_state "INSTALL_SCENARIO" 2>/dev/null || printf 'unset')"
+		printf '%s (%s)\n' "$selected_disk" "$scenario"
 		return 0
 	fi
 

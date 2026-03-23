@@ -12,10 +12,18 @@ source "$SCRIPT_DIR/state.sh"
 source "$SCRIPT_DIR/disk.sh"
 # shellcheck source=installer/modules/bootloader.sh
 source "$SCRIPT_DIR/modules/bootloader.sh"
+# shellcheck source=installer/modules/system.sh
+source "$SCRIPT_DIR/modules/system.sh"
 # shellcheck source=installer/modules/network.sh
 source "$SCRIPT_DIR/modules/network.sh"
+# shellcheck source=installer/modules/hardware.sh
+source "$SCRIPT_DIR/modules/hardware.sh"
 # shellcheck source=installer/modules/desktop.sh
 source "$SCRIPT_DIR/modules/desktop.sh"
+# shellcheck source=installer/modules/secureboot.sh
+source "$SCRIPT_DIR/modules/secureboot.sh"
+# shellcheck source=installer/modules/profiles.sh
+source "$SCRIPT_DIR/modules/profiles.sh"
 # shellcheck source=installer/modules/profile.sh
 source "$SCRIPT_DIR/modules/profile.sh"
 # shellcheck source=installer/executor.sh
@@ -126,13 +134,16 @@ render_install_progress_text() {
 	local filesystem=${5:-ext4}
 	local desktop_profile=${6:-none}
 	local display_mode=${7:-auto}
+	local secure_boot_state="$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")"
+	local environment_label_value="$(runtime_environment_summary)"
 	local excerpt=""
 
 	excerpt="$(progress_log_excerpt "$progress_log")"
-	printf 'Installing system... %s%%\n\nCurrent step: %s\nBoot mode: %s\nFilesystem: %s\nDesktop: %s\nDisplay mode: %s\n\nLatest logs:\n%s\n' \
+	printf 'Installing system... %s%%\n\nCurrent step: %s\nBoot mode: %s\nEnvironment: %s\nFilesystem: %s\nDesktop: %s\nDisplay mode: %s\n\nLatest logs:\n%s\n' \
 		"$percent" \
 		"$(sanitize_dialog_text "$current_step")" \
-		"$(sanitize_dialog_text "$boot_mode")" \
+		"$(sanitize_dialog_text "$(boot_mode_status_label "$boot_mode" "$secure_boot_state")")" \
+		"$(sanitize_dialog_text "$environment_label_value")" \
 		"$(sanitize_dialog_text "$filesystem")" \
 		"$(sanitize_dialog_text "$(desktop_profile_label "$desktop_profile")")" \
 		"$(sanitize_dialog_text "$(display_mode_label "$display_mode")")" \
@@ -234,6 +245,8 @@ show_install_progress_tty() {
 	local display_mode=${7:-auto}
 	local progress_key=""
 	local excerpt=""
+	local secure_boot_state="$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")"
+	local environment_label_value="$(runtime_environment_summary)"
 
 	progress_key="${percent}:${current_step}:${display_mode}"
 	if [[ ${ARCHINSTALL_LAST_TTY_PROGRESS_KEY:-} == "$progress_key" ]]; then
@@ -246,7 +259,8 @@ show_install_progress_tty() {
 	printf 'Installing Arch Linux\n\n'
 	printf 'Progress: %s%%\n' "$percent"
 	printf 'Current step: %s\n' "$current_step"
-	printf 'Boot mode: %s\n' "$boot_mode"
+	printf 'Boot mode: %s\n' "$(boot_mode_status_label "$boot_mode" "$secure_boot_state")"
+	printf 'Environment: %s\n' "$environment_label_value"
 	printf 'Filesystem: %s\n' "$filesystem"
 	printf 'Desktop: %s\n' "$(desktop_profile_label "$desktop_profile")"
 	printf 'Display mode: %s\n\n' "$(display_mode_label "$display_mode")"
@@ -373,6 +387,79 @@ state_or_default() {
 	printf '%s\n' "$default_value"
 }
 
+refresh_runtime_context() {
+	refresh_runtime_system_state || return 1
+	refresh_hardware_state || return 1
+	ARCHINSTALL_BACKTITLE="ArchInstall Framework | $(runtime_boot_summary | tr -d '\n') | $(runtime_environment_summary | tr -d '\n')"
+	return 0
+}
+
+installer_context_header() {
+	local boot_summary="$(runtime_boot_summary)"
+	local environment_summary_value="$(runtime_environment_summary)"
+	local gpu_label_value="$(state_or_default "GPU_LABEL" "Unknown")"
+
+	printf 'Boot Mode: %s\nEnvironment: %s\nGPU: %s' "$boot_summary" "$environment_summary_value" "$gpu_label_value"
+}
+
+select_boolean_value() {
+	local title=${1:?title is required}
+	local prompt=${2:?prompt is required}
+	local current_value=${3:-false}
+	local enable_label=${4:-Enable}
+	local disable_label=${5:-Disable}
+
+	menu "$title" "$prompt\n\nCurrent: $current_value" 14 70 3 \
+		"true" "$enable_label" \
+		"false" "$disable_label"
+
+	case $DIALOG_STATUS in
+		0)
+			printf '%s\n' "$DIALOG_RESULT"
+			return 0
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+join_csv_values() {
+	local joined=""
+	local item=""
+
+	for item in "$@"; do
+		[[ -n $item ]] || continue
+		if [[ -z $joined ]]; then
+			joined=$item
+		else
+			joined+=",$item"
+		fi
+	done
+
+	printf '%s\n' "$joined"
+}
+
+select_custom_tools() {
+	local selected_tools=()
+	local choice=""
+
+	choice="$(select_boolean_value "Custom Tools" "Include git?" "$(if csv_has_value "$(state_or_default "CUSTOM_TOOLS" "")" git; then printf 'true'; else printf 'false'; fi)" "Include git" "Skip git")" || return 1
+	[[ $choice == "true" ]] && selected_tools+=(git)
+	choice="$(select_boolean_value "Custom Tools" "Include base-devel?" "$(if csv_has_value "$(state_or_default "CUSTOM_TOOLS" "")" base-devel; then printf 'true'; else printf 'false'; fi)" "Include base-devel" "Skip base-devel")" || return 1
+	[[ $choice == "true" ]] && selected_tools+=(base-devel)
+	choice="$(select_boolean_value "Custom Tools" "Include htop?" "$(if csv_has_value "$(state_or_default "CUSTOM_TOOLS" "")" htop; then printf 'true'; else printf 'false'; fi)" "Include htop" "Skip htop")" || return 1
+	[[ $choice == "true" ]] && selected_tools+=(htop)
+	choice="$(select_boolean_value "Custom Tools" "Include tmux?" "$(if csv_has_value "$(state_or_default "CUSTOM_TOOLS" "")" tmux; then printf 'true'; else printf 'false'; fi)" "Include tmux" "Skip tmux")" || return 1
+	[[ $choice == "true" ]] && selected_tools+=(tmux)
+	choice="$(select_boolean_value "Custom Tools" "Include curl + wget?" "$(if csv_has_value "$(state_or_default "CUSTOM_TOOLS" "")" curl; then printf 'true'; else printf 'false'; fi)" "Include curl + wget" "Skip curl + wget")" || return 1
+	[[ $choice == "true" ]] && selected_tools+=(curl)
+	choice="$(select_boolean_value "Custom Tools" "Include fastfetch?" "$(if csv_has_value "$(state_or_default "CUSTOM_TOOLS" "")" fastfetch; then printf 'true'; else printf 'false'; fi)" "Include fastfetch" "Skip fastfetch")" || return 1
+	[[ $choice == "true" ]] && selected_tools+=(fastfetch)
+
+	join_csv_values "${selected_tools[@]}"
+}
+
 apply_runtime_mode() {
 	sync_install_ui_mode
 
@@ -387,6 +474,7 @@ load_runtime_preferences() {
 		UI_MODE="$(state_or_default "UI_MODE" "${UI_MODE:-dialog}")"
 	fi
 	debug_ui_mode
+	refresh_runtime_context || true
 	apply_runtime_mode
 }
 
@@ -400,6 +488,11 @@ show_install_summary_dialog() {
 	local resolved_display_mode=""
 	local enable_zram=""
 	local disk_type=""
+	local install_profile=""
+	local secure_boot_state=""
+	local secure_boot_mode=""
+	local environment_summary_value=""
+	local gpu_label_value=""
 	local status_label="FAILED"
 	local prompt=""
 	local choice=""
@@ -412,19 +505,25 @@ show_install_summary_dialog() {
 	display_mode="$(display_mode_label "$(state_or_default "DISPLAY_MODE" "auto")")"
 	resolved_display_mode="$(display_mode_label "$(state_or_default "RESOLVED_DISPLAY_MODE" "auto")")"
 	enable_zram="$(state_or_default "ENABLE_ZRAM" "false")"
+	install_profile="$(install_profile_label "$(state_or_default "INSTALL_PROFILE" "daily")")"
+	secure_boot_state="$(secure_boot_state_label "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")"
+	secure_boot_mode="$(secure_boot_mode_label "$(state_or_default "SECURE_BOOT_MODE" "disabled")")"
+	environment_summary_value="$(runtime_environment_summary)"
+	gpu_label_value="$(state_or_default "GPU_LABEL" "Unknown")"
 	local keymap="$(state_or_default "KEYMAP" "us")"
 	if [[ $install_status -eq 0 ]]; then
 		status_label="SUCCESS"
 	fi
 
-	prompt="Disk: $disk\nDisk type: $disk_type\nFilesystem: $filesystem\nBoot mode: $boot_mode\nKeyboard: $keymap\nDesktop: $desktop_profile\nDisplay mode: $display_mode\nResolved mode: $resolved_display_mode\nZRAM: $enable_zram\nStatus: $status_label\n\nInstall log: ${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}"
+	prompt="Environment: $environment_summary_value\nGPU: $gpu_label_value\nDisk: $disk\nDisk type: $disk_type\nFilesystem: $filesystem\nBoot mode: $(boot_mode_status_label "$boot_mode" "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")\nSecure Boot mode: $secure_boot_mode\nKeyboard: $keymap\nInstall profile: $install_profile\nDesktop: $desktop_profile\nDisplay mode: $display_mode\nResolved mode: $resolved_display_mode\nZRAM: $enable_zram\nStatus: $status_label\n\nInstall log: ${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}"
 	log_info "Installer finished, launching summary dialog"
 
 	if [[ ${UI_MODE:-dialog} == "tty" ]]; then
 		printf 'Installation complete\n'
 		printf 'Disk: %s\n' "$disk"
 		printf 'Filesystem: %s\n' "$filesystem"
-		printf 'Boot mode: %s\n' "$boot_mode"
+		printf 'Boot mode: %s\n' "$(boot_mode_status_label "$boot_mode" "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")"
+		printf 'Environment: %s\n' "$environment_summary_value"
 		printf 'Desktop: %s\n' "$desktop_profile"
 		printf 'Status: %s\n' "$status_label"
 		printf 'Run: reboot\n'
@@ -773,29 +872,76 @@ configure_install_profile() {
 	local boot_mode=""
 	local filesystem=""
 	local enable_zram=""
+	local install_profile=""
+	local editor_choice=""
+	local include_vscode="false"
+	local custom_tools=""
+	local secure_boot_mode=""
+	local secure_boot_state=""
 	local desktop_profile=""
 	local display_manager=""
 	local display_mode=""
 
+	refresh_runtime_context || return 1
 	hostname="$(prompt_required_input "Hostname" "Set the system hostname." "$(state_or_default "HOSTNAME" "archlinux")")" || return 1
 	timezone="$(select_timezone_value "$(state_or_default "TIMEZONE" "Europe/Istanbul")")" || return 1
 	locale="$(select_locale_value "$(state_or_default "LOCALE" "en_US.UTF-8")")" || return 1
 	keymap="$(select_keyboard_layout_value "$(state_or_default "KEYMAP" "us")")" || return 1
 	username="$(prompt_required_input "Username" "Create the primary user account." "$(state_or_default "USERNAME" "archuser")")" || return 1
+	install_profile="$(select_install_profile "$(state_or_default "INSTALL_PROFILE" "daily")")" || return 1
 	filesystem="$(select_filesystem "$(state_or_default "FILESYSTEM" "ext4")")" || return 1
 	enable_zram="$(select_zram_preference "$(state_or_default "ENABLE_ZRAM" "$ZRAM")")" || return 1
-	desktop_profile="$(select_desktop_profile)" || return 1
-	display_mode="$(select_display_mode "$desktop_profile" "$(state_or_default "DISPLAY_MODE" "auto")")" || return 1
-	display_manager="$(select_display_manager "$desktop_profile")" || return 1
 	user_password="$(prompt_password "User Password")" || return 1
 	root_password="$(prompt_password "Root Password")" || return 1
-	boot_mode="$(detect_boot_mode 2>/dev/null || printf 'uefi')"
+	boot_mode="$(state_or_default "BOOT_MODE" "$(detect_boot_mode 2>/dev/null || printf 'uefi')")"
+	secure_boot_state="$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")"
+	secure_boot_mode="$(select_secure_boot_mode "$(state_or_default "SECURE_BOOT_MODE" "disabled")" "$boot_mode" "$secure_boot_state")" || return 1
+
+	case $install_profile in
+		daily)
+			desktop_profile="kde"
+			display_mode="auto"
+			display_manager="sddm"
+			editor_choice="kate"
+			include_vscode="false"
+			custom_tools="git,base-devel,htop,tmux,curl,fastfetch"
+			;;
+		dev)
+			desktop_profile="$(select_desktop_profile)" || return 1
+			display_mode="$(select_display_mode "$desktop_profile" "$(state_or_default "DISPLAY_MODE" "auto")")" || return 1
+			display_manager="$(select_display_manager "$desktop_profile")" || return 1
+			editor_choice="$(select_editor_choice "$(state_or_default "EDITOR_CHOICE" "micro")")" || return 1
+			include_vscode="$(select_boolean_value "VS Code" "Include Visual Studio Code in the DEV profile?" "$(state_or_default "INCLUDE_VSCODE" "false")" "Install code" "Skip code")" || return 1
+			custom_tools="git,base-devel,htop,tmux,curl,fastfetch"
+			;;
+		custom)
+			desktop_profile="$(select_desktop_profile)" || return 1
+			display_mode="$(select_display_mode "$desktop_profile" "$(state_or_default "DISPLAY_MODE" "auto")")" || return 1
+			display_manager="$(select_display_manager "$desktop_profile")" || return 1
+			editor_choice="$(select_editor_choice "$(state_or_default "EDITOR_CHOICE" "nano")")" || return 1
+			include_vscode="$(select_boolean_value "VS Code" "Include Visual Studio Code in the CUSTOM profile?" "$(state_or_default "INCLUDE_VSCODE" "false")" "Install code" "Skip code")" || return 1
+			custom_tools="$(select_custom_tools)" || return 1
+			;;
+		*)
+			return 1
+			;;
+	esac
+
+	if [[ $desktop_profile == "none" ]]; then
+		display_mode="auto"
+		display_manager="none"
+	fi
 
 	set_state "HOSTNAME" "$hostname" || return 1
 	set_state "TIMEZONE" "$timezone" || return 1
 	set_state "LOCALE" "$locale" || return 1
 	set_state "KEYMAP" "$keymap" || return 1
 	set_state "USERNAME" "$username" || return 1
+	set_state "INSTALL_PROFILE" "$install_profile" || return 1
+	set_state "EDITOR_CHOICE" "$editor_choice" || return 1
+	set_state "INCLUDE_VSCODE" "$include_vscode" || return 1
+	set_state "CUSTOM_TOOLS" "$custom_tools" || return 1
+	set_state "SECURE_BOOT_MODE" "$secure_boot_mode" || return 1
 	set_state "FILESYSTEM" "$filesystem" || return 1
 	set_state "ENABLE_ZRAM" "$enable_zram" || return 1
 	set_state "DESKTOP_PROFILE" "$desktop_profile" || return 1
@@ -805,7 +951,7 @@ configure_install_profile() {
 	INSTALL_USER_PASSWORD="$user_password"
 	INSTALL_ROOT_PASSWORD="$root_password"
 
-	msg "Profile Saved" "Installation profile updated.\n\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nFilesystem: $filesystem\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay mode: $(display_mode_label "$display_mode")\nDisplay manager: $(display_manager_label "$display_manager")\nBoot mode: $boot_mode\nUser password: set\nRoot password: set"
+	msg "Profile Saved" "Installation profile updated.\n\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nInstall profile: $(install_profile_label "$install_profile")\nEditor: $(editor_choice_label "$editor_choice")\nVS Code: $include_vscode\nSecure Boot mode: $(secure_boot_mode_label "$secure_boot_mode")\nFilesystem: $filesystem\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay mode: $(display_mode_label "$display_mode")\nDisplay manager: $(display_manager_label "$display_manager")\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nUser password: set\nRoot password: set"
 }
 
 validate_install_profile() {
@@ -855,6 +1001,12 @@ show_state_summary() {
 	local resolved_display_mode
 	local display_manager
 	local disk_type
+	local install_scenario
+	local secure_boot_state
+	local secure_boot_mode
+	local environment_summary_value
+	local gpu_label_value
+	local install_profile_value
 	local user_password_state
 	local root_password_state
 
@@ -869,17 +1021,23 @@ show_state_summary() {
 	username="$(state_or_default "USERNAME" "Not configured")"
 	filesystem="$(state_or_default "FILESYSTEM" "ext4")"
 	disk_type="$(state_or_default "DISK_TYPE" "Unknown")"
+	install_scenario="$(state_or_default "INSTALL_SCENARIO" "wipe")"
 	enable_zram="$(state_or_default "ENABLE_ZRAM" "false")"
 	desktop_profile="$(state_or_default "DESKTOP_PROFILE" "none")"
 	display_mode="$(state_or_default "DISPLAY_MODE" "auto")"
 	resolved_display_mode="$(state_or_default "RESOLVED_DISPLAY_MODE" "auto")"
 	display_manager="$(state_or_default "DISPLAY_MANAGER" "none")"
+	secure_boot_state="$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")"
+	secure_boot_mode="$(state_or_default "SECURE_BOOT_MODE" "disabled")"
+	environment_summary_value="$(runtime_environment_summary)"
+	gpu_label_value="$(state_or_default "GPU_LABEL" "Unknown")"
+	install_profile_value="$(state_or_default "INSTALL_PROFILE" "daily")"
 	user_password_state="not set"
 	root_password_state="not set"
 	[[ -n $INSTALL_USER_PASSWORD ]] && user_password_state="set"
 	[[ -n $INSTALL_ROOT_PASSWORD ]] && root_password_state="set"
 
-	msg "Installer State" "Saved state:\n\nDisk: $disk\nDisk type: $disk_type\nBoot mode: $boot_mode\nEFI: $efi_partition\nRoot: $root_partition\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nFilesystem: $filesystem\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay mode: $(display_mode_label "$display_mode")\nResolved mode: $(display_mode_label "$resolved_display_mode")\nDisplay manager: $(display_manager_label "$display_manager")\nUser password: $user_password_state\nRoot password: $root_password_state\nDEV_MODE: $DEV_MODE\nUI mode: $INSTALL_UI_MODE" 24 76
+	msg "Installer State" "Saved state:\n\nEnvironment: $environment_summary_value\nGPU: $gpu_label_value\nDisk: $disk\nDisk type: $disk_type\nDisk strategy: $install_scenario\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nSecure Boot mode: $(secure_boot_mode_label "$secure_boot_mode")\nEFI: $efi_partition\nRoot: $root_partition\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nInstall profile: $(install_profile_label "$install_profile_value")\nFilesystem: $filesystem\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay mode: $(display_mode_label "$display_mode")\nResolved mode: $(display_mode_label "$resolved_display_mode")\nDisplay manager: $(display_manager_label "$display_manager")\nUser password: $user_password_state\nRoot password: $root_password_state\nDEV_MODE: $DEV_MODE\nUI mode: $INSTALL_UI_MODE" 27 82
 }
 
 confirm_installation() {
@@ -901,7 +1059,7 @@ confirm_installation() {
 
 	validate_install_profile || return 1
 
-	message="This will prepare a bootable Arch Linux system on:\n\n$disk\n\nDisk type: $(state_or_default "DISK_TYPE" "auto")\nBoot mode: $(state_or_default "BOOT_MODE" "auto")\nHostname: $(state_or_default "HOSTNAME" "archlinux")\nTimezone: $(state_or_default "TIMEZONE" "Europe/Istanbul")\nLocale: $(state_or_default "LOCALE" "en_US.UTF-8")\nKeyboard: $(state_or_default "KEYMAP" "us")\nUser: $(state_or_default "USERNAME" "archuser")\nFilesystem: $(state_or_default "FILESYSTEM" "ext4")\nZram: $(state_or_default "ENABLE_ZRAM" "false")\nDesktop: $(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")\nDisplay mode: $(display_mode_label "$(state_or_default "DISPLAY_MODE" "auto")")\nDisplay manager: $(display_manager_label "$(state_or_default "DISPLAY_MANAGER" "none")")\n\nDestructive steps may erase existing data."
+	message="$(installer_context_header)\n\nThis will prepare a bootable Arch Linux system on:\n\n$disk\n\nDisk type: $(state_or_default "DISK_TYPE" "auto")\nDisk strategy: $(state_or_default "INSTALL_SCENARIO" "wipe")\nBoot mode: $(boot_mode_status_label "$(state_or_default "BOOT_MODE" "auto")" "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")\nSecure Boot mode: $(secure_boot_mode_label "$(state_or_default "SECURE_BOOT_MODE" "disabled")")\nHostname: $(state_or_default "HOSTNAME" "archlinux")\nTimezone: $(state_or_default "TIMEZONE" "Europe/Istanbul")\nLocale: $(state_or_default "LOCALE" "en_US.UTF-8")\nKeyboard: $(state_or_default "KEYMAP" "us")\nUser: $(state_or_default "USERNAME" "archuser")\nInstall profile: $(install_profile_label "$(state_or_default "INSTALL_PROFILE" "daily")")\nFilesystem: $(state_or_default "FILESYSTEM" "ext4")\nZram: $(state_or_default "ENABLE_ZRAM" "false")\nDesktop: $(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")\nDisplay mode: $(display_mode_label "$(state_or_default "DISPLAY_MODE" "auto")")\nDisplay manager: $(display_manager_label "$(state_or_default "DISPLAY_MANAGER" "none")")\n\nDestructive steps may erase existing data."
 	if flag_enabled "$DEV_MODE"; then
 		message+="\n\nDev mode flags:\nSKIP_PARTITION=$SKIP_PARTITION\nSKIP_PACSTRAP=$SKIP_PACSTRAP\nSKIP_CHROOT=$SKIP_CHROOT\nINSTALL_UI_MODE=$INSTALL_UI_MODE"
 	fi
@@ -953,7 +1111,7 @@ show_disk_menu() {
 	local RETRY_COUNT=0
 
 	while (( RETRY_COUNT < MAX_RETRY )); do
-		menu "Disk Setup" "Current disk: $(current_disk_label)" 16 76 6 \
+		menu "Disk Setup" "$(installer_context_header)\n\nCurrent disk: $(current_disk_label)" 18 82 6 \
 			"select" "Discover disks and choose an install target" \
 			"clear" "Clear the saved disk selection" \
 			"back" "Return to the main menu"
@@ -984,6 +1142,9 @@ show_disk_menu() {
 				;;
 			clear)
 				unset_state "DISK"
+				unset_state "INSTALL_SCENARIO"
+				unset_state "FORMAT_ROOT"
+				unset_state "FORMAT_EFI"
 				unset_state "EFI_PART"
 				unset_state "ROOT_PART"
 				msg "Disk Cleared" "The saved disk and partition state were removed."
@@ -1005,7 +1166,7 @@ show_install_menu() {
 	local RETRY_COUNT=0
 
 	while (( RETRY_COUNT < MAX_RETRY )); do
-		menu "Install System" "Selected disk: $(current_disk_label)" 16 76 6 \
+		menu "Install System" "$(installer_context_header)\n\nSelected disk: $(current_disk_label)" 18 82 6 \
 			"start" "Partition disk and install the base Arch Linux system" \
 			"config" "Configure hostname, timezone, locale, keyboard, and passwords" \
 			"dev" "Toggle developer mode (current: $DEV_MODE / $INSTALL_UI_MODE)" \
@@ -1086,9 +1247,10 @@ main() {
 	fi
 	prepare_live_console || true
 	warn_if_low_live_iso_space || true
+	refresh_runtime_context || true
 
 	while (( RETRY_COUNT < MAX_RETRY )); do
-		menu "Main Menu" "Choose an installer action." 16 76 7 \
+		menu "Main Menu" "$(installer_context_header)\n\nChoose an installer action." 18 82 7 \
 			"disk" "Disk setup and target selection" \
 			"install" "Base system installation" \
 			"state" "Show saved installer state" \

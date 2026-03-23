@@ -21,10 +21,18 @@ source "$SCRIPT_DIR/ui.sh"
 source "$SCRIPT_DIR/state.sh"
 # shellcheck source=installer/modules/bootloader.sh
 source "$SCRIPT_DIR/modules/bootloader.sh"
+# shellcheck source=installer/modules/system.sh
+source "$SCRIPT_DIR/modules/system.sh"
 # shellcheck source=installer/modules/network.sh
 source "$SCRIPT_DIR/modules/network.sh"
+# shellcheck source=installer/modules/hardware.sh
+source "$SCRIPT_DIR/modules/hardware.sh"
 # shellcheck source=installer/modules/desktop.sh
 source "$SCRIPT_DIR/modules/desktop.sh"
+# shellcheck source=installer/modules/secureboot.sh
+source "$SCRIPT_DIR/modules/secureboot.sh"
+# shellcheck source=installer/modules/profiles.sh
+source "$SCRIPT_DIR/modules/profiles.sh"
 # shellcheck source=installer/modules/disk/layout.sh
 source "$SCRIPT_DIR/modules/disk/layout.sh"
 # shellcheck source=installer/modules/disk/space.sh
@@ -49,6 +57,28 @@ build_pacman_opts_array() {
 	local -n options_ref=${1:?options reference is required}
 
 	read -r -a options_ref <<< "${PACMAN_OPTS:---noconfirm --needed}"
+}
+
+append_unique_items() {
+	local -n target_ref=${1:?target reference is required}
+	local item=""
+	local existing=""
+	local is_duplicate="false"
+
+	shift
+	for item in "$@"; do
+		[[ -n $item ]] || continue
+		is_duplicate="false"
+		for existing in "${target_ref[@]}"; do
+			if [[ $existing == "$item" ]]; then
+				is_duplicate="true"
+				break
+			fi
+		done
+		if [[ $is_duplicate != "true" ]]; then
+			target_ref+=("$item")
+		fi
+	done
 }
 
 run_pacman_step_with_retry() {
@@ -163,7 +193,17 @@ build_pacstrap_package_list() {
 	local desktop_profile=${5:-none}
 	local display_manager=${6:-none}
 	local display_mode=${7:-auto}
+	local install_profile=${8:-daily}
+	local editor_choice=${9:-nano}
+	local include_vscode=${10:-false}
+	local custom_tools=${11:-}
+	local environment_vendor=${12:-baremetal}
+	local gpu_vendor=${13:-unknown}
+	local secure_boot_mode=${14:-disabled}
 	local -a desktop_packages=()
+	local -a install_profile_packages_ref=()
+	local -a hardware_packages_ref=()
+	local -a secure_boot_packages_ref=()
 
 	package_ref=(base base-devel linux linux-firmware sudo networkmanager iptables-nft mkinitcpio make git dialog)
 	if [[ $filesystem == "btrfs" ]]; then
@@ -175,9 +215,15 @@ build_pacstrap_package_list() {
 	if [[ $boot_mode == "bios" ]]; then
 		package_ref+=(grub)
 	fi
+	install_profile_packages "$install_profile" "$editor_choice" "$include_vscode" "$custom_tools" install_profile_packages_ref || return 1
+	hardware_profile_packages "$environment_vendor" "$gpu_vendor" "$desktop_profile" hardware_packages_ref || return 1
+	secure_boot_packages "$secure_boot_mode" "$boot_mode" secure_boot_packages_ref || return 1
+	append_unique_items package_ref "${install_profile_packages_ref[@]}"
+	append_unique_items package_ref "${hardware_packages_ref[@]}"
+	append_unique_items package_ref "${secure_boot_packages_ref[@]}"
 	if desktop_profile_packages "$desktop_profile" "$display_manager" "$display_mode" desktop_packages; then
 		if [[ ${#desktop_packages[@]} -gt 0 ]]; then
-			package_ref+=("${desktop_packages[@]}")
+			append_unique_items package_ref "${desktop_packages[@]}"
 		fi
 	fi
 }
@@ -676,12 +722,39 @@ build_chroot_script() {
 	local quoted_display_manager=""
 	local quoted_display_mode=""
 	local quoted_resolved_display_mode=""
+	local install_profile=""
+	local editor_choice=""
+	local include_vscode=""
+	local custom_tools=""
+	local secure_boot_mode=""
+	local current_secure_boot_state=""
+	local current_secure_boot_setup_mode=""
+	local environment_vendor=""
+	local gpu_vendor=""
+	local quoted_install_profile=""
+	local quoted_editor_choice=""
+	local quoted_include_vscode=""
+	local quoted_custom_tools=""
+	local quoted_secure_boot_mode=""
+	local quoted_current_secure_boot_state=""
+	local quoted_current_secure_boot_setup_mode=""
+	local quoted_environment_vendor=""
+	local quoted_gpu_vendor=""
 
 	hostname="$(get_state "HOSTNAME" 2>/dev/null || printf 'archlinux')"
 	timezone="$(get_state "TIMEZONE" 2>/dev/null || printf 'Europe/Istanbul')"
 	locale="$(get_state "LOCALE" 2>/dev/null || printf 'en_US.UTF-8')"
 	keymap="$(get_state "KEYMAP" 2>/dev/null || printf 'us')"
 	username="$(get_state "USERNAME" 2>/dev/null || printf 'archuser')"
+	install_profile="$(get_state "INSTALL_PROFILE" 2>/dev/null || printf 'daily')"
+	editor_choice="$(get_state "EDITOR_CHOICE" 2>/dev/null || printf 'nano')"
+	include_vscode="$(get_state "INCLUDE_VSCODE" 2>/dev/null || printf 'false')"
+	custom_tools="$(get_state "CUSTOM_TOOLS" 2>/dev/null || printf '')"
+	secure_boot_mode="$(get_state "SECURE_BOOT_MODE" 2>/dev/null || printf 'disabled')"
+	current_secure_boot_state="$(get_state "CURRENT_SECURE_BOOT_STATE" 2>/dev/null || printf 'unsupported')"
+	current_secure_boot_setup_mode="$(get_state "CURRENT_SECURE_BOOT_SETUP_MODE" 2>/dev/null || printf 'unknown')"
+	environment_vendor="$(get_state "ENVIRONMENT_VENDOR" 2>/dev/null || printf 'baremetal')"
+	gpu_vendor="$(get_state "GPU_VENDOR" 2>/dev/null || printf 'unknown')"
 
 	if [[ -z $user_password ]]; then
 		print_install_error "The installer user password is not set. Configure the install profile before starting."
@@ -709,6 +782,15 @@ build_chroot_script() {
 	printf -v quoted_display_manager '%q' "$display_manager"
 	printf -v quoted_display_mode '%q' "$display_mode"
 	printf -v quoted_resolved_display_mode '%q' "$resolved_display_mode"
+	printf -v quoted_install_profile '%q' "$install_profile"
+	printf -v quoted_editor_choice '%q' "$editor_choice"
+	printf -v quoted_include_vscode '%q' "$include_vscode"
+	printf -v quoted_custom_tools '%q' "$custom_tools"
+	printf -v quoted_secure_boot_mode '%q' "$secure_boot_mode"
+	printf -v quoted_current_secure_boot_state '%q' "$current_secure_boot_state"
+	printf -v quoted_current_secure_boot_setup_mode '%q' "$current_secure_boot_setup_mode"
+	printf -v quoted_environment_vendor '%q' "$environment_vendor"
+	printf -v quoted_gpu_vendor '%q' "$gpu_vendor"
 
 	cat <<EOF
 set -euo pipefail
@@ -730,6 +812,15 @@ TARGET_DESKTOP_PROFILE=$quoted_desktop_profile
 TARGET_DISPLAY_MANAGER=$quoted_display_manager
 TARGET_DISPLAY_MODE=$quoted_display_mode
 TARGET_RESOLVED_DISPLAY_MODE=$quoted_resolved_display_mode
+TARGET_INSTALL_PROFILE=$quoted_install_profile
+TARGET_EDITOR_CHOICE=$quoted_editor_choice
+TARGET_INCLUDE_VSCODE=$quoted_include_vscode
+TARGET_CUSTOM_TOOLS=$quoted_custom_tools
+TARGET_SECURE_BOOT_MODE=$quoted_secure_boot_mode
+TARGET_CURRENT_SECURE_BOOT_STATE=$quoted_current_secure_boot_state
+TARGET_SECURE_BOOT_SETUP_MODE=$quoted_current_secure_boot_setup_mode
+TARGET_ENVIRONMENT_VENDOR=$quoted_environment_vendor
+TARGET_GPU_VENDOR=$quoted_gpu_vendor
 export PACMAN_OPTS='${PACMAN_OPTS:---noconfirm --needed}'
 
 log_chroot_step() {
@@ -777,6 +868,84 @@ fi
 
 log_chroot_step "Enabling NetworkManager"
 systemctl enable NetworkManager
+
+enable_service_if_present() {
+	local service_name=
+	service_name=\${1:?service name is required}
+	if systemctl list-unit-files "\$service_name" >/dev/null 2>&1; then
+		systemctl enable "\$service_name" || true
+	else
+		echo "[WARN] Optional service not present: \$service_name"
+	fi
+}
+
+write_secure_boot_notice() {
+	install -d -m 0700 /root
+	cat > /root/ARCHINSTALL_SECURE_BOOT.txt <<EOT
+Secure Boot firmware state: \$TARGET_CURRENT_SECURE_BOOT_STATE
+Secure Boot mode: \$TARGET_SECURE_BOOT_MODE
+Firmware setup mode: \$TARGET_SECURE_BOOT_SETUP_MODE
+Install profile: \$TARGET_INSTALL_PROFILE
+Environment: \$TARGET_ENVIRONMENT_VENDOR
+GPU: \$TARGET_GPU_VENDOR
+
+Assisted mode installs sbctl and prepares the target for safe follow-up signing and enrollment.
+If firmware is already enforcing Secure Boot, keep a recovery path available until you validate the new boot chain.
+
+Recommended follow-up commands:
+  sbctl status
+  sbctl create-keys
+  sbctl enroll-keys -m
+  sbctl verify
+EOT
+}
+
+configure_vm_services() {
+	case \$TARGET_ENVIRONMENT_VENDOR in
+		vmware)
+			enable_service_if_present vmtoolsd.service
+			;;
+		virtualbox)
+			enable_service_if_present vboxservice.service
+			;;
+		qemu)
+			enable_service_if_present spice-vdagentd.service
+			enable_service_if_present qemu-guest-agent.service
+			;;
+		*)
+			;;
+	esac
+}
+
+configure_secure_boot_mode() {
+	if [[ \$BOOT_MODE != "uefi" ]]; then
+		return 0
+	fi
+
+	case \$TARGET_SECURE_BOOT_MODE in
+		disabled)
+			return 0
+			;;
+		assisted|advanced)
+			log_chroot_step "Preparing Secure Boot tooling"
+			if ! command -v sbctl >/dev/null 2>&1; then
+				echo "[WARN] sbctl is not installed in the target system."
+				write_secure_boot_notice
+				return 0
+			fi
+			sbctl status || true
+			if [[ ! -d /var/lib/sbctl/keys ]]; then
+				sbctl create-keys || true
+			fi
+			if [[ \$TARGET_SECURE_BOOT_MODE == "assisted" && \$TARGET_SECURE_BOOT_SETUP_MODE == "setup" ]]; then
+				sbctl enroll-keys -m || true
+			fi
+			write_secure_boot_notice
+			;;
+		*)
+			;;
+	esac
+}
 
 if [[ \$TARGET_ENABLE_ZRAM == "true" ]]; then
 	log_chroot_step "Configuring zram"
@@ -842,7 +1011,7 @@ mkinitcpio -P
 
 if [[ \$TARGET_DESKTOP_PROFILE == "kde" ]]; then
 	log_chroot_step "Configuring KDE services"
-	systemctl enable bluetooth
+	enable_service_if_present bluetooth.service
 	install -d -m 0755 /etc/systemd/user/default.target.wants
 	ln -sf /usr/lib/systemd/user/pipewire.service /etc/systemd/user/default.target.wants/pipewire.service
 	ln -sf /usr/lib/systemd/user/pipewire-pulse.service /etc/systemd/user/default.target.wants/pipewire-pulse.service
@@ -897,6 +1066,8 @@ EOT
 	esac
 fi
 
+configure_vm_services
+
 if [[ \$BOOT_MODE == "uefi" ]]; then
 	log_chroot_step "Installing systemd-boot"
 	bootctl install
@@ -941,6 +1112,8 @@ else
 	echo "[DEBUG] Generated grub.cfg linux lines"
 	grep -n 'linux.*/vmlinuz-linux' /boot/grub/grub.cfg || true
 fi
+
+configure_secure_boot_mode
 EOF
 }
 
@@ -987,6 +1160,17 @@ run_install() {
 	local disk_type=""
 	local filesystem=""
 	local enable_zram=""
+	local install_profile=""
+	local editor_choice=""
+	local include_vscode="false"
+	local custom_tools=""
+	local secure_boot_mode="disabled"
+	local current_secure_boot_state="unsupported"
+	local environment_vendor="baremetal"
+	local gpu_vendor="unknown"
+	local install_scenario="wipe"
+	local format_root="true"
+	local format_efi="true"
 	local desktop_profile=""
 	local display_manager=""
 	local display_mode=""
@@ -1008,10 +1192,27 @@ run_install() {
 	boot_mode="$(get_state "BOOT_MODE" 2>/dev/null || true)"
 	filesystem="$(normalize_filesystem "$(get_state "FILESYSTEM" 2>/dev/null || printf 'ext4')")"
 	enable_zram="$(get_state "ENABLE_ZRAM" 2>/dev/null || printf 'false')"
+	install_profile="$(get_state "INSTALL_PROFILE" 2>/dev/null || printf 'daily')"
+	editor_choice="$(get_state "EDITOR_CHOICE" 2>/dev/null || printf 'nano')"
+	include_vscode="$(get_state "INCLUDE_VSCODE" 2>/dev/null || printf 'false')"
+	custom_tools="$(get_state "CUSTOM_TOOLS" 2>/dev/null || printf '')"
+	secure_boot_mode="$(get_state "SECURE_BOOT_MODE" 2>/dev/null || printf 'disabled')"
+	install_scenario="$(get_state "INSTALL_SCENARIO" 2>/dev/null || printf 'wipe')"
+	format_root="$(get_state "FORMAT_ROOT" 2>/dev/null || printf 'true')"
+	format_efi="$(get_state "FORMAT_EFI" 2>/dev/null || printf 'true')"
 	desktop_profile="$(get_state "DESKTOP_PROFILE" 2>/dev/null || printf 'none')"
 	display_manager="$(get_state "DISPLAY_MANAGER" 2>/dev/null || printf 'none')"
 	display_mode="$(get_state "DISPLAY_MODE" 2>/dev/null || printf 'auto')"
 	[[ -n $boot_mode ]] || boot_mode="$(detect_boot_mode)"
+	current_secure_boot_state="$(detect_secure_boot_state "$boot_mode")"
+	environment_vendor="$(detect_virtualization_vendor)"
+	gpu_vendor="$(detect_gpu_vendor)"
+	set_state "CURRENT_SECURE_BOOT_STATE" "$current_secure_boot_state" || return 1
+	set_state "CURRENT_SECURE_BOOT_SETUP_MODE" "$(detect_secure_boot_setup_mode "$boot_mode")" || return 1
+	set_state "ENVIRONMENT_VENDOR" "$environment_vendor" || return 1
+	set_state "ENVIRONMENT_LABEL" "$(environment_label "$environment_vendor")" || return 1
+	set_state "GPU_VENDOR" "$gpu_vendor" || return 1
+	set_state "GPU_LABEL" "$(gpu_vendor_label "$gpu_vendor")" || return 1
 	case $boot_mode in
 		uefi|bios)
 			;;
@@ -1031,7 +1232,7 @@ run_install() {
 		return 1
 	fi
 
-	build_pacstrap_package_list "$boot_mode" "$filesystem" "$enable_zram" pacstrap_packages "$desktop_profile" "$display_manager" "$display_mode"
+	build_pacstrap_package_list "$boot_mode" "$filesystem" "$enable_zram" pacstrap_packages "$desktop_profile" "$display_manager" "$display_mode" "$install_profile" "$editor_choice" "$include_vscode" "$custom_tools" "$environment_vendor" "$gpu_vendor" "$secure_boot_mode"
 
 	: > "$ARCHINSTALL_LOG" || {
 		print_install_error "Could not write the install log: $ARCHINSTALL_LOG"
@@ -1046,11 +1247,17 @@ run_install() {
 
 		log_line "Starting installation on $disk"
 		log_line "Boot mode: $boot_mode"
+		log_line "Secure Boot firmware state: $current_secure_boot_state"
+		log_line "Secure Boot mode: $secure_boot_mode"
+		log_line "Environment: $(environment_label "$environment_vendor")"
+		log_line "GPU: $(gpu_vendor_label "$gpu_vendor")"
+		log_line "Install scenario: $install_scenario"
 		disk_type="$(detect_disk_type "$disk")"
 		log_line "Disk type: $disk_type"
 		set_state "DISK_TYPE" "$disk_type" || exit 1
 		log_line "Filesystem: $filesystem"
 		log_line "Zram: $enable_zram"
+		log_line "Install profile: $install_profile"
 		log_line "Desktop profile: $desktop_profile"
 		log_line "Display mode: $display_mode"
 		log_line "Display manager: $display_manager"
@@ -1074,7 +1281,7 @@ run_install() {
 					;;
 			esac
 
-			if command -v systemd-detect-virt >/dev/null 2>&1 && systemd-detect-virt --quiet; then
+			if [[ $environment_vendor != "baremetal" ]]; then
 				detected_virtualization="true"
 			fi
 			if compgen -G '/dev/dri/card*' >/dev/null 2>&1; then
@@ -1109,6 +1316,8 @@ run_install() {
 
 		if flag_enabled "$SKIP_PARTITION"; then
 			log_line "Skipping partitioning and formatting because SKIP_PARTITION=$SKIP_PARTITION"
+		elif [[ $install_scenario != "wipe" ]]; then
+			log_line "Reusing prepared partition layout because INSTALL_SCENARIO=$install_scenario"
 		else
 			run_step "Wiping existing signatures on $disk" wipefs -a "$disk" || exit 1
 			if [[ $boot_mode == "uefi" ]]; then
@@ -1154,10 +1363,14 @@ run_install() {
 		if flag_enabled "$SKIP_PARTITION"; then
 			log_line "Skipping filesystem creation because SKIP_PARTITION=$SKIP_PARTITION"
 		else
-			if [[ $boot_mode == "uefi" ]]; then
+			if [[ $boot_mode == "uefi" && $format_efi == "true" ]]; then
 				run_step "Formatting the EFI partition as FAT32" mkfs.fat -F32 "$efi_partition" || exit 1
 			fi
-			format_root_filesystem "$filesystem" "$root_partition" || exit 1
+			if [[ $format_root == "true" ]]; then
+				format_root_filesystem "$filesystem" "$root_partition" || exit 1
+			else
+				log_line "Skipping root filesystem creation because FORMAT_ROOT=$format_root"
+			fi
 		fi
 
 		mount_root_filesystem "$filesystem" "$disk_type" "$root_partition" || exit 1
