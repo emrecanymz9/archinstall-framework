@@ -21,6 +21,57 @@ cd archinstall-framework
 bash installer/install.sh
 ```
 
+### Full Install Command
+
+From the Arch ISO as `root`:
+
+```bash
+loadkeys us
+setfont ter-v16n
+pacman-key --init
+pacman-key --populate archlinux
+pacman -Sy archlinux-keyring --noconfirm
+pacman -Sy --noconfirm make git dialog reflector
+reflector --latest 10 --protocol https --sort rate --save /etc/pacman.d/mirrorlist
+git clone https://github.com/emrecanymz9/archinstall-framework.git
+cd archinstall-framework
+bash installer/install.sh
+```
+
+### Profile-Based Examples
+
+The installer is interactive. Start it, then choose the profile in `Install System -> Configure`.
+
+- `DAILY`: full workstation defaults with KDE and common tools
+- `DEV`: development-oriented toolset with a leaner package set
+- `CUSTOM`: choose editor, VS Code, tools, desktop, and display behavior manually
+
+Example launch for a `DAILY` install:
+
+```bash
+cd archinstall-framework
+bash installer/install.sh
+```
+
+Then select `Install System`, open `Configure`, and choose `DAILY`.
+
+Example launch for a `DEV` install:
+
+```bash
+cd archinstall-framework
+bash installer/install.sh
+```
+
+Then select `Install System`, open `Configure`, and choose `DEV`.
+
+### One-Line Curl Installer
+
+This downloads the repository archive, extracts it, and launches the installer:
+
+```bash
+curl -fsSL https://github.com/emrecanymz9/archinstall-framework/archive/refs/heads/main.tar.gz | tar -xz && cd archinstall-framework-main && bash installer/install.sh
+```
+
 The installer intentionally keeps the live ISO minimal. Heavy packages belong in the target system through `pacstrap`, not in the RAM-backed ISO environment.
 
 ## Features
@@ -38,6 +89,7 @@ The installer intentionally keeps the live ISO minimal. Heavy packages belong in
 - config-driven package tiers from `config/packages.conf`
 - KDE Plasma profile with both Wayland and X11 session support
 - install profiles: `DAILY`, `DEV`, `CUSTOM`
+- automatic `sudo` setup with `wheel` group support
 - display mode selection: `Auto`, `Wayland`, `X11`
 - `greetd` with `tuigreet` by default and optional `qtgreet`
 - plugin hooks for packages, chroot snippets, and menu extensions

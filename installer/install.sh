@@ -553,64 +553,84 @@ load_runtime_preferences() {
 	apply_runtime_mode
 }
 
-show_install_summary_dialog() {
+install_summary_text() {
 	local install_status=${1:-1}
-	local disk=""
-	local filesystem=""
-	local boot_mode=""
-	local desktop_profile=""
-	local display_mode=""
-	local resolved_display_mode=""
-	local enable_zram=""
-	local disk_type=""
-	local install_profile=""
-	local secure_boot_state=""
-	local secure_boot_mode=""
-	local environment_summary_value=""
-	local gpu_label_value=""
-	local status_label="FAILED"
-	local prompt=""
-	local choice=""
-
-	disk="$(state_or_default "DISK" "Not selected")"
-	filesystem="$(state_or_default "FILESYSTEM" "ext4")"
-	boot_mode="$(state_or_default "BOOT_MODE" "auto")"
-	disk_type="$(state_or_default "DISK_TYPE" "auto")"
-	desktop_profile="$(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")"
-	display_mode="$(display_mode_label "$(state_or_default "DISPLAY_MODE" "auto")")"
-	resolved_display_mode="$(display_mode_label "$(state_or_default "RESOLVED_DISPLAY_MODE" "auto")")"
-	enable_zram="$(state_or_default "ENABLE_ZRAM" "false")"
-	install_profile="$(install_profile_label "$(state_or_default "INSTALL_PROFILE" "daily")")"
-	secure_boot_state="$(secure_boot_state_label "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")"
-	secure_boot_mode="$(secure_boot_mode_label "$(state_or_default "SECURE_BOOT_MODE" "disabled")")"
-	environment_summary_value="$(safe_runtime_environment_summary)"
-	gpu_label_value="$(state_or_default "GPU_LABEL" "Generic")"
+	local disk="$(state_or_default "DISK" "Not selected")"
+	local filesystem="$(state_or_default "FILESYSTEM" "ext4")"
+	local boot_mode="$(state_or_default "BOOT_MODE" "auto")"
+	local disk_type="$(state_or_default "DISK_TYPE" "auto")"
+	local desktop_profile="$(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")"
+	local display_mode="$(display_mode_label "$(state_or_default "DISPLAY_MODE" "auto")")"
+	local resolved_display_mode="$(display_mode_label "$(state_or_default "RESOLVED_DISPLAY_MODE" "auto")")"
+	local enable_zram="$(state_or_default "ENABLE_ZRAM" "false")"
+	local install_profile="$(install_profile_label "$(state_or_default "INSTALL_PROFILE" "daily")")"
+	local secure_boot_mode="$(secure_boot_mode_label "$(state_or_default "SECURE_BOOT_MODE" "disabled")")"
+	local environment_summary_value="$(safe_runtime_environment_summary)"
+	local gpu_label_value="$(state_or_default "GPU_LABEL" "Generic")"
 	local keymap="$(state_or_default "KEYMAP" "us")"
+	local status_label="FAILED"
+
 	if [[ $install_status -eq 0 ]]; then
 		status_label="SUCCESS"
 	fi
 
-	prompt="Environment: $environment_summary_value\nGPU: $gpu_label_value\nDisk: $disk\nDisk type: $disk_type\nFilesystem: $filesystem\nBoot mode: $(boot_mode_status_label "$boot_mode" "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")\nSecure Boot mode: $secure_boot_mode\nKeyboard: $keymap\nInstall profile: $install_profile\nDesktop: $desktop_profile\nDisplay mode: $display_mode\nResolved mode: $resolved_display_mode\nZRAM: $enable_zram\nStatus: $status_label\n\nInstall log: ${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}"
+	printf 'Environment: %s\nGPU: %s\nDisk: %s\nDisk type: %s\nFilesystem: %s\nBoot mode: %s\nSecure Boot mode: %s\nKeyboard: %s\nInstall profile: %s\nDesktop: %s\nDisplay mode: %s\nResolved mode: %s\nZRAM: %s\nStatus: %s\n\nInstall log: %s' \
+		"$environment_summary_value" \
+		"$gpu_label_value" \
+		"$disk" \
+		"$disk_type" \
+		"$filesystem" \
+		"$(boot_mode_status_label "$boot_mode" "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")" \
+		"$secure_boot_mode" \
+		"$keymap" \
+		"$install_profile" \
+		"$desktop_profile" \
+		"$display_mode" \
+		"$resolved_display_mode" \
+		"$enable_zram" \
+		"$status_label" \
+		"${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}"
+}
+
+show_install_summary_fallback() {
+	local install_status=${1:-1}
+	local summary_text=""
+
+	summary_text="$(install_summary_text "$install_status")"
+	printf '\nInstallation Summary\n\n%s\n\n' "$summary_text"
+	if [[ $install_status -eq 0 ]]; then
+		printf 'Return to the installer menu, or run: reboot\n'
+	fi
+	printf 'Press Enter to continue... '
+	read -r _ || true
+	return 0
+}
+
+show_install_summary_dialog() {
+	local install_status=${1:-1}
+	local prompt=""
+	local choice=""
+	local dialog_status=0
+
+	prompt="$(install_summary_text "$install_status")"
 	log_info "Installer finished, launching summary dialog"
 
 	if [[ ${UI_MODE:-dialog} == "tty" ]]; then
-		printf 'Installation complete\n'
-		printf 'Disk: %s\n' "$disk"
-		printf 'Filesystem: %s\n' "$filesystem"
-		printf 'Boot mode: %s\n' "$(boot_mode_status_label "$boot_mode" "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")"
-		printf 'Environment: %s\n' "$environment_summary_value"
-		printf 'Desktop: %s\n' "$desktop_profile"
-		printf 'Status: %s\n' "$status_label"
-		printf 'Run: reboot\n'
+		show_install_summary_fallback "$install_status"
+		return 0
+	fi
+	if ! require_dialog >/dev/null 2>&1; then
+		show_install_summary_fallback "$install_status"
 		return 0
 	fi
 
-	menu "Installation Complete" "$prompt" 18 72 4 \
+	menu "Installation Complete" "$prompt" 20 78 4 \
 		"reboot" "Reboot system" \
 		"shutdown" "Shutdown system" \
 		"back" "Return to main menu"
 	choice="$DIALOG_RESULT"
-	case $DIALOG_STATUS in
+	dialog_status=$DIALOG_STATUS
+	case $dialog_status in
 		0)
 			case "$choice" in
 				reboot)
@@ -619,7 +639,7 @@ show_install_summary_dialog() {
 				shutdown)
 					poweroff
 					;;
-				back)
+				*)
 					return 0
 					;;
 			esac
@@ -628,7 +648,7 @@ show_install_summary_dialog() {
 			return 0
 			;;
 		*)
-			printf 'Installation complete\nRun: reboot\n' >&2
+			show_install_summary_fallback "$install_status"
 			return 0
 			;;
 	esac

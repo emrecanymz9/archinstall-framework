@@ -545,7 +545,7 @@ run_step_with_retry() {
 }
 
 run_pacstrap_install() {
-	local -a mandatory_packages=(base linux linux-firmware mkinitcpio)
+	local -a mandatory_packages=(base linux linux-firmware mkinitcpio sudo)
 	local -a packages=("$@")
 
 	append_unique_items packages "${mandatory_packages[@]}"
