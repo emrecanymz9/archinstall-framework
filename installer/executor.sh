@@ -389,6 +389,11 @@ run_logged_shell_command() {
 }
 
 cleanup_mounts() {
+	log_line "[DEBUG] cleanup_mounts requested"
+	if mountpoint -q /mnt 2>> "$ARCHINSTALL_LOG"; then
+		log_line "[DEBUG] Mount state before recursive unmount:"
+		findmnt -R /mnt >> "$ARCHINSTALL_LOG" 2>&1 || true
+	fi
 	umount -R /mnt >> "$ARCHINSTALL_LOG" 2>&1 || true
 
 	return 0
@@ -584,9 +589,10 @@ write_target_fstab() {
 	local filesystem=${1:?filesystem is required}
 	local disk_type=${2:?disk type is required}
 	local root_partition=${3:?root partition is required}
-	local efi_partition=${4-}
+	local expected_root_source=${4-}
+	local efi_partition=${5-}
 	local fstab_path=/mnt/etc/fstab
-	validate_target_mount "$root_partition" || return 1
+	validate_target_mount "$root_partition" "$expected_root_source" || return 1
 	case $filesystem in
 		ext4|btrfs)
 			;;
@@ -627,8 +633,17 @@ format_root_filesystem() {
 	esac
 }
 
+normalized_mount_source() {
+	local mountpoint_path=${1:?mountpoint path is required}
+	local mounted_source=""
+
+	mounted_source="$(findmnt -n -o SOURCE "$mountpoint_path" 2>> "$ARCHINSTALL_LOG" || true)"
+	printf '%s\n' "${mounted_source%%\[*}"
+}
+
 validate_target_mount() {
 	local root_partition=${1:-}
+	local expected_root_source=${2-}
 	local mounted_source=""
 	local mounted_fstype=""
 	local normalized_source=""
@@ -654,16 +669,21 @@ validate_target_mount() {
 	fi
 
 	normalized_source=${mounted_source%%\[*}
+	if [[ -n $expected_root_source && $normalized_source != "$expected_root_source" ]]; then
+		print_install_error "Target mount /mnt changed from expected source $expected_root_source to $mounted_source."
+		return 1
+	fi
 
 	if [[ -n $root_partition && $normalized_source != "$root_partition" ]]; then
-		log_line "[WARN] /mnt is mounted from $mounted_source instead of expected $root_partition"
+		print_install_error "Target mount /mnt does not match expected root partition $root_partition. Current source: $mounted_source"
+		return 1
 	fi
 
 	return 0
 }
 
 verify_target_system_present() {
-	validate_target_mount "$1" || return 1
+	validate_target_mount "$1" "$2" || return 1
 	if [[ ! -f /mnt/etc/arch-release ]]; then
 		print_install_error "Target system was not installed correctly: /mnt/etc/arch-release is missing."
 		return 1
@@ -677,6 +697,7 @@ log_mount_state() {
 }
 
 prepare_chroot_mounts() {
+	validate_target_mount "$1" "$2" || return 1
 	run_step "Creating API filesystem mount points" mkdir -p /mnt/dev /mnt/proc /mnt/sys || return 1
 	if ! mountpoint -q /mnt/dev 2>> "$ARCHINSTALL_LOG"; then
 		run_step "Bind mounting /dev into target" mount --bind /dev /mnt/dev || return 1
@@ -687,6 +708,7 @@ prepare_chroot_mounts() {
 	if ! mountpoint -q /mnt/sys 2>> "$ARCHINSTALL_LOG"; then
 		run_step "Bind mounting /sys into target" mount --bind /sys /mnt/sys || return 1
 	fi
+	validate_target_mount "$1" "$2" || return 1
 	log_mount_state
 	return 0
 }
@@ -717,6 +739,7 @@ mount_root_filesystem() {
 			else
 				log_line "[ OK ] Reusing existing btrfs home subvolume @home"
 			fi
+			log_line "[DEBUG] Unmounting temporary top-level btrfs mount before remounting subvolumes"
 			run_step "Unmounting temporary btrfs mount" umount /mnt || return 1
 			root_mount_options="$(btrfs_mount_options '@' "$disk_type")"
 			home_mount_options="$(btrfs_mount_options '@home' "$disk_type")"
@@ -909,6 +932,11 @@ log_chroot_step() {
 }
 
 log_chroot_step "Configuring mkinitcpio hooks"
+if [[ ! -f /etc/mkinitcpio.conf ]]; then
+	echo "[FAIL] /etc/mkinitcpio.conf is missing inside the target chroot"
+	exit 1
+fi
+echo "[DEBUG] Preparing to update /etc/mkinitcpio.conf inside chroot"
 echo "[DEBUG] Applying mkinitcpio hooks"
 sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect modconf block filesystems keyboard fsck)/' /etc/mkinitcpio.conf
 
@@ -1295,18 +1323,27 @@ run_chroot_configuration() {
 	local display_manager=${8:-none}
 	local display_mode=${9:-auto}
 	local resolved_display_mode=${10:-wayland}
+	local root_partition=${11:-}
+	local expected_root_source=${12:-}
 
 	install_ui_uses_dialog || print_install_info "Configuring the new system and installing the bootloader"
 	log_line "[STEP] Configuring the target system inside chroot"
+	validate_target_mount "$root_partition" "$expected_root_source" || return 1
+	if [[ ! -f /mnt/etc/arch-release ]]; then
+		print_install_error "Refusing to chroot because /mnt/etc/arch-release is missing."
+		return 1
+	fi
+	log_line "[DEBUG] Mount state immediately before arch-chroot"
+	log_mount_state
 
 	if install_ui_uses_dialog; then
-		if build_chroot_script "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_mode" "$resolved_display_mode" | arch-chroot /mnt /bin/bash 2>&1 | sanitize_stream | tee_install_logs >/dev/null
+		if build_chroot_script "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_mode" "$resolved_display_mode" | arch-chroot /mnt /bin/bash -s 2>&1 | sanitize_stream | tee_install_logs >/dev/null
 		then
 			log_line "[ OK ] Configuring the target system inside chroot"
 			return 0
 		fi
 	else
-		if build_chroot_script "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_mode" "$resolved_display_mode" | arch-chroot /mnt /bin/bash 2>&1 | sanitize_stream | tee_install_logs
+		if build_chroot_script "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_mode" "$resolved_display_mode" | arch-chroot /mnt /bin/bash -s 2>&1 | sanitize_stream | tee_install_logs
 		then
 			log_line "[ OK ] Configuring the target system inside chroot"
 			return 0
@@ -1345,6 +1382,7 @@ run_install() {
 	local resolved_display_mode=""
 	local required_space_mib=""
 	local root_mount_options=""
+	local expected_root_source=""
 	local install_status=0
 	local -a resolved_partitions=()
 	local -a pacstrap_packages=()
@@ -1549,40 +1587,56 @@ run_install() {
 
 		mount_root_filesystem "$filesystem" "$disk_type" "$root_partition" || exit 1
 		validate_target_mount "$root_partition" || exit 1
+		expected_root_source="$(normalized_mount_source /mnt)"
+		if [[ -z $expected_root_source ]]; then
+			print_install_error "Could not determine the expected source for /mnt after mounting."
+			exit 1
+		fi
+		log_line "[DEBUG] Locked /mnt to expected source: $expected_root_source"
+		log_line "[DEBUG] Mount state after root mount"
+		log_mount_state
 		if [[ $boot_mode == "uefi" ]]; then
+			validate_target_mount "$root_partition" "$expected_root_source" || exit 1
 			run_step "Creating the EFI mount point" mkdir -p /mnt/boot || exit 1
 			run_step "Mounting the EFI partition" mount "$efi_partition" /mnt/boot || exit 1
 		fi
+		validate_target_mount "$root_partition" "$expected_root_source" || exit 1
 		log_partition_metadata "$root_partition" "$efi_partition"
 		log_mounted_filesystems "$filesystem"
 		required_space_mib="$(estimate_target_required_space_mib "$desktop_profile" "$filesystem")"
+		validate_target_mount "$root_partition" "$expected_root_source" || exit 1
 		run_step "Checking target free space" ensure_target_has_space /mnt "$required_space_mib" || exit 1
 
 		if flag_enabled "$SKIP_PACSTRAP"; then
 			log_line "Skipping pacstrap because SKIP_PACSTRAP=$SKIP_PACSTRAP"
-			if ! verify_target_system_present "$root_partition"; then
+			if ! verify_target_system_present "$root_partition" "$expected_root_source"; then
 				print_install_error "SKIP_PACSTRAP=true requires an existing installed system mounted at /mnt."
 				exit 1
 			fi
 		else
-			validate_target_mount "$root_partition" || exit 1
+			validate_target_mount "$root_partition" "$expected_root_source" || exit 1
 			run_pacstrap_install "${pacstrap_packages[@]}" || exit 1
-			verify_target_system_present "$root_partition" || exit 1
+			log_line "[DEBUG] Mount state after pacstrap"
+			log_mount_state
+			validate_target_mount "$root_partition" "$expected_root_source" || exit 1
+			verify_target_system_present "$root_partition" "$expected_root_source" || exit 1
 		fi
 
-		write_target_fstab "$filesystem" "$disk_type" "$root_partition" "$efi_partition" || exit 1
+		validate_target_mount "$root_partition" "$expected_root_source" || exit 1
+		write_target_fstab "$filesystem" "$disk_type" "$root_partition" "$expected_root_source" "$efi_partition" || exit 1
 
 		if flag_enabled "$SKIP_CHROOT"; then
 			log_line "Skipping chroot configuration because SKIP_CHROOT=$SKIP_CHROOT"
 		else
+			validate_target_mount "$root_partition" "$expected_root_source" || exit 1
 			root_uuid="$(get_partition_uuid "$root_partition")" || exit 1
 			if [[ $filesystem == "btrfs" ]]; then
 				root_mount_options="$(btrfs_mount_options '@' "$disk_type")"
 			else
 				root_mount_options=""
 			fi
-			prepare_chroot_mounts || exit 1
-			run_chroot_configuration "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_mode" "$resolved_display_mode" || exit 1
+			prepare_chroot_mounts "$root_partition" "$expected_root_source" || exit 1
+			run_chroot_configuration "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_mode" "$resolved_display_mode" "$root_partition" "$expected_root_source" || exit 1
 			if type run_hooks >/dev/null 2>&1; then
 				run_hooks post_chroot "$disk" "$root_partition" || true
 			fi
