@@ -15,28 +15,45 @@ SKIP_PACSTRAP=${SKIP_PACSTRAP:-false}
 SKIP_CHROOT=${SKIP_CHROOT:-false}
 INSTALL_UI_MODE=${INSTALL_UI_MODE:-plain}
 
+safe_source_module() {
+	local module_path=${1:?module path is required}
+
+	if [[ ! -r $module_path ]]; then
+		printf '[WARN] Optional module missing: %s\n' "$module_path" >&2
+		return 1
+	fi
+
+	# shellcheck disable=SC1090
+	if source "$module_path"; then
+		return 0
+	fi
+
+	printf '[WARN] Failed to load optional module: %s\n' "$module_path" >&2
+	return 1
+}
+
 # shellcheck source=installer/ui.sh
 source "$SCRIPT_DIR/ui.sh"
 # shellcheck source=installer/state.sh
 source "$SCRIPT_DIR/state.sh"
-# shellcheck source=installer/modules/bootloader.sh
-source "$SCRIPT_DIR/modules/bootloader.sh"
-# shellcheck source=installer/modules/system.sh
-source "$SCRIPT_DIR/modules/system.sh"
-# shellcheck source=installer/modules/network.sh
-source "$SCRIPT_DIR/modules/network.sh"
+# shellcheck source=installer/modules/runtime.sh
+safe_source_module "$SCRIPT_DIR/modules/runtime.sh" || true
 # shellcheck source=installer/modules/hardware.sh
-source "$SCRIPT_DIR/modules/hardware.sh"
+safe_source_module "$SCRIPT_DIR/modules/hardware.sh" || true
+# shellcheck source=installer/modules/environment.sh
+safe_source_module "$SCRIPT_DIR/modules/environment.sh" || true
 # shellcheck source=installer/modules/desktop.sh
-source "$SCRIPT_DIR/modules/desktop.sh"
+safe_source_module "$SCRIPT_DIR/modules/desktop.sh" || true
 # shellcheck source=installer/modules/secureboot.sh
-source "$SCRIPT_DIR/modules/secureboot.sh"
+safe_source_module "$SCRIPT_DIR/modules/secureboot.sh" || true
 # shellcheck source=installer/modules/profiles.sh
-source "$SCRIPT_DIR/modules/profiles.sh"
+safe_source_module "$SCRIPT_DIR/modules/profiles.sh" || true
+# shellcheck source=installer/modules/network.sh
+safe_source_module "$SCRIPT_DIR/modules/network.sh" || true
 # shellcheck source=installer/modules/disk/layout.sh
-source "$SCRIPT_DIR/modules/disk/layout.sh"
+safe_source_module "$SCRIPT_DIR/modules/disk/layout.sh" || true
 # shellcheck source=installer/modules/disk/space.sh
-source "$SCRIPT_DIR/modules/disk/space.sh"
+safe_source_module "$SCRIPT_DIR/modules/disk/space.sh" || true
 
 flag_enabled() {
 	case ${1:-false} in

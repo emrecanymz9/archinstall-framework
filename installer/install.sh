@@ -4,33 +4,50 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
+safe_source_module() {
+	local module_path=${1:?module path is required}
+
+	if [[ ! -r $module_path ]]; then
+		printf '[WARN] Optional module missing: %s\n' "$module_path" >&2
+		return 1
+	fi
+
+	# shellcheck disable=SC1090
+	if source "$module_path"; then
+		return 0
+	fi
+
+	printf '[WARN] Failed to load optional module: %s\n' "$module_path" >&2
+	return 1
+}
+
 # shellcheck source=installer/ui.sh
 source "$SCRIPT_DIR/ui.sh"
 # shellcheck source=installer/state.sh
 source "$SCRIPT_DIR/state.sh"
-# shellcheck source=installer/disk.sh
-source "$SCRIPT_DIR/disk.sh"
-# shellcheck source=installer/modules/bootloader.sh
-source "$SCRIPT_DIR/modules/bootloader.sh"
-# shellcheck source=installer/modules/system.sh
-source "$SCRIPT_DIR/modules/system.sh"
-# shellcheck source=installer/modules/network.sh
-source "$SCRIPT_DIR/modules/network.sh"
+# shellcheck source=installer/modules/runtime.sh
+safe_source_module "$SCRIPT_DIR/modules/runtime.sh" || true
 # shellcheck source=installer/modules/hardware.sh
-source "$SCRIPT_DIR/modules/hardware.sh"
-# shellcheck source=installer/modules/desktop.sh
-source "$SCRIPT_DIR/modules/desktop.sh"
-# shellcheck source=installer/modules/secureboot.sh
-source "$SCRIPT_DIR/modules/secureboot.sh"
-# shellcheck source=installer/modules/profiles.sh
-source "$SCRIPT_DIR/modules/profiles.sh"
-# shellcheck source=installer/modules/profile.sh
-source "$SCRIPT_DIR/modules/profile.sh"
+safe_source_module "$SCRIPT_DIR/modules/hardware.sh" || true
+# shellcheck source=installer/modules/environment.sh
+safe_source_module "$SCRIPT_DIR/modules/environment.sh" || true
 # shellcheck source=installer/executor.sh
-source "$SCRIPT_DIR/executor.sh" || {
+safe_source_module "$SCRIPT_DIR/executor.sh" || {
 	printf 'failed to source %s/executor.sh\n' "$SCRIPT_DIR" >&2
 	exit 1
 }
+# shellcheck source=installer/disk.sh
+safe_source_module "$SCRIPT_DIR/disk.sh" || true
+# shellcheck source=installer/modules/network.sh
+safe_source_module "$SCRIPT_DIR/modules/network.sh" || true
+# shellcheck source=installer/modules/desktop.sh
+safe_source_module "$SCRIPT_DIR/modules/desktop.sh" || true
+# shellcheck source=installer/modules/secureboot.sh
+safe_source_module "$SCRIPT_DIR/modules/secureboot.sh" || true
+# shellcheck source=installer/modules/profiles.sh
+safe_source_module "$SCRIPT_DIR/modules/profiles.sh" || true
+# shellcheck source=installer/modules/profile.sh
+safe_source_module "$SCRIPT_DIR/modules/profile.sh" || true
 
 INSTALL_USER_PASSWORD=${INSTALL_USER_PASSWORD:-""}
 INSTALL_ROOT_PASSWORD=${INSTALL_ROOT_PASSWORD:-""}
@@ -47,11 +64,35 @@ log_debug() {
 	printf '[%s] %s\n' "$(date '+%F %T')" "$message" >> "$ARCHINSTALL_DEBUG_LOG" 2>/dev/null || true
 }
 
+if type refresh_runtime_system_state >/dev/null 2>&1 && type runtime_boot_summary >/dev/null 2>&1 && type runtime_environment_summary >/dev/null 2>&1; then
+	log_debug "Runtime module loaded successfully"
+else
+	log_debug "Runtime module compatibility mode enabled"
+fi
+
 log_info() {
 	local message=${1:-}
 
 	printf '[%s] %s\n' "$(date '+%F %T')" "$message" >> "${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}" 2>/dev/null || true
 	printf '[%s] %s\n' "$(date '+%F %T')" "$message" >> "$ARCHINSTALL_DEBUG_LOG" 2>/dev/null || true
+}
+
+safe_runtime_boot_summary() {
+	if type runtime_boot_summary >/dev/null 2>&1; then
+		runtime_boot_summary 2>/dev/null || printf 'Unknown\n'
+		return 0
+	fi
+
+	printf 'Unknown\n'
+}
+
+safe_runtime_environment_summary() {
+	if type runtime_environment_summary >/dev/null 2>&1; then
+		runtime_environment_summary 2>/dev/null || printf 'Unknown\n'
+		return 0
+	fi
+
+	printf 'Unknown\n'
 }
 
 sync_install_ui_mode() {
@@ -135,7 +176,7 @@ render_install_progress_text() {
 	local desktop_profile=${6:-none}
 	local display_mode=${7:-auto}
 	local secure_boot_state="$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")"
-	local environment_label_value="$(runtime_environment_summary)"
+	local environment_label_value="$(safe_runtime_environment_summary)"
 	local excerpt=""
 
 	excerpt="$(progress_log_excerpt "$progress_log")"
@@ -246,7 +287,7 @@ show_install_progress_tty() {
 	local progress_key=""
 	local excerpt=""
 	local secure_boot_state="$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")"
-	local environment_label_value="$(runtime_environment_summary)"
+	local environment_label_value="$(safe_runtime_environment_summary)"
 
 	progress_key="${percent}:${current_step}:${display_mode}"
 	if [[ ${ARCHINSTALL_LAST_TTY_PROGRESS_KEY:-} == "$progress_key" ]]; then
@@ -388,15 +429,23 @@ state_or_default() {
 }
 
 refresh_runtime_context() {
-	refresh_runtime_system_state || return 1
-	refresh_hardware_state || return 1
-	ARCHINSTALL_BACKTITLE="ArchInstall Framework | $(runtime_boot_summary | tr -d '\n') | $(runtime_environment_summary | tr -d '\n')"
+	if type refresh_runtime_system_state >/dev/null 2>&1; then
+		refresh_runtime_system_state >/dev/null 2>&1 || log_debug "Runtime detection failed: refresh_runtime_system_state"
+	else
+		log_debug "Runtime detection unavailable: refresh_runtime_system_state"
+	fi
+	if type refresh_hardware_state >/dev/null 2>&1; then
+		refresh_hardware_state >/dev/null 2>&1 || log_debug "Runtime detection failed: refresh_hardware_state"
+	else
+		log_debug "Runtime detection unavailable: refresh_hardware_state"
+	fi
+	ARCHINSTALL_BACKTITLE="ArchInstall Framework | $(safe_runtime_boot_summary | tr -d '\n') | $(safe_runtime_environment_summary | tr -d '\n')"
 	return 0
 }
 
 installer_context_header() {
-	local boot_summary="$(runtime_boot_summary)"
-	local environment_summary_value="$(runtime_environment_summary)"
+	local boot_summary="$(safe_runtime_boot_summary)"
+	local environment_summary_value="$(safe_runtime_environment_summary)"
 	local gpu_label_value="$(state_or_default "GPU_LABEL" "Unknown")"
 
 	printf 'Boot Mode: %s\nEnvironment: %s\nGPU: %s' "$boot_summary" "$environment_summary_value" "$gpu_label_value"
@@ -508,7 +557,7 @@ show_install_summary_dialog() {
 	install_profile="$(install_profile_label "$(state_or_default "INSTALL_PROFILE" "daily")")"
 	secure_boot_state="$(secure_boot_state_label "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")"
 	secure_boot_mode="$(secure_boot_mode_label "$(state_or_default "SECURE_BOOT_MODE" "disabled")")"
-	environment_summary_value="$(runtime_environment_summary)"
+	environment_summary_value="$(safe_runtime_environment_summary)"
 	gpu_label_value="$(state_or_default "GPU_LABEL" "Unknown")"
 	local keymap="$(state_or_default "KEYMAP" "us")"
 	if [[ $install_status -eq 0 ]]; then
@@ -882,7 +931,7 @@ configure_install_profile() {
 	local display_manager=""
 	local display_mode=""
 
-	refresh_runtime_context || return 1
+	refresh_runtime_context || true
 	hostname="$(prompt_required_input "Hostname" "Set the system hostname." "$(state_or_default "HOSTNAME" "archlinux")")" || return 1
 	timezone="$(select_timezone_value "$(state_or_default "TIMEZONE" "Europe/Istanbul")")" || return 1
 	locale="$(select_locale_value "$(state_or_default "LOCALE" "en_US.UTF-8")")" || return 1
@@ -1029,7 +1078,7 @@ show_state_summary() {
 	display_manager="$(state_or_default "DISPLAY_MANAGER" "none")"
 	secure_boot_state="$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")"
 	secure_boot_mode="$(state_or_default "SECURE_BOOT_MODE" "disabled")"
-	environment_summary_value="$(runtime_environment_summary)"
+	environment_summary_value="$(safe_runtime_environment_summary)"
 	gpu_label_value="$(state_or_default "GPU_LABEL" "Unknown")"
 	install_profile_value="$(state_or_default "INSTALL_PROFILE" "daily")"
 	user_password_state="not set"

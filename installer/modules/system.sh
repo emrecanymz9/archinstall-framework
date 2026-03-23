@@ -2,6 +2,22 @@
 
 ARCHINSTALL_EFI_GLOBAL_GUID=${ARCHINSTALL_EFI_GLOBAL_GUID:-8be4df61-93ca-11d2-aa0d-00e098032b8c}
 
+runtime_state_or_default() {
+	local key=${1:?state key is required}
+	local default_value=${2-}
+	local value=""
+
+	if type get_state >/dev/null 2>&1; then
+		value="$(get_state "$key" 2>/dev/null || true)"
+		if [[ -n $value ]]; then
+			printf '%s\n' "$value"
+			return 0
+		fi
+	fi
+
+	printf '%s\n' "$default_value"
+}
+
 read_efi_variable_flag() {
 	local variable_name=${1:?EFI variable name is required}
 	local variable_path="/sys/firmware/efi/efivars/${variable_name}-${ARCHINSTALL_EFI_GLOBAL_GUID}"
@@ -222,14 +238,14 @@ runtime_boot_summary() {
 	local boot_mode=""
 	local secure_boot_state=""
 
-	boot_mode="$(state_or_default "BOOT_MODE" "bios")"
-	secure_boot_state="$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")"
+	boot_mode="$(runtime_state_or_default "BOOT_MODE" "bios")"
+	secure_boot_state="$(runtime_state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")"
 	boot_mode_status_label "$boot_mode" "$secure_boot_state"
 }
 
 runtime_environment_summary() {
 	local environment_vendor=""
 
-	environment_vendor="$(state_or_default "ENVIRONMENT_VENDOR" "baremetal")"
+	environment_vendor="$(runtime_state_or_default "ENVIRONMENT_VENDOR" "baremetal")"
 	environment_label "$environment_vendor"
 }
