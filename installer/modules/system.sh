@@ -4,7 +4,7 @@ SYSTEM_MODULE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ -r "$SYSTEM_MODULE_DIR/detect.sh" ]]; then
 	# shellcheck source=installer/modules/detect.sh
-	source "$SYSTEM_MODULE_DIR/detect.sh"
+	source "$SYSTEM_MODULE_DIR/detect.sh" >/dev/null 2>&1
 fi
 
 ARCHINSTALL_EFI_GLOBAL_GUID=${ARCHINSTALL_EFI_GLOBAL_GUID:-8be4df61-93ca-11d2-aa0d-00e098032b8c}
@@ -116,11 +116,11 @@ normalize_virtualization_vendor() {
 
 detect_virtualization_vendor() {
 	if type detect_environment_vendor_safe >/dev/null 2>&1; then
-		detect_environment_vendor_safe
+		detect_environment_vendor_safe 2>/dev/null || printf 'unknown\n'
 		return 0
 	fi
 
-	printf 'baremetal\n'
+	printf 'unknown\n'
 }
 
 environment_label() {
@@ -131,7 +131,7 @@ environment_label() {
 		virtualbox)
 			printf 'VirtualBox Virtual Machine\n'
 			;;
-		qemu)
+		qemu|kvm)
 			printf 'QEMU/KVM Virtual Machine\n'
 			;;
 		hyperv)
@@ -142,6 +142,9 @@ environment_label() {
 			;;
 		baremetal)
 			printf 'Bare Metal\n'
+			;;
+		unknown)
+			printf 'Unknown\n'
 			;;
 		*)
 			printf '%s\n' "$1"
@@ -200,11 +203,11 @@ refresh_runtime_system_state() {
 	fi
 	secure_boot_state="$(detect_secure_boot_state "$boot_mode")"
 	secure_boot_setup_mode="$(detect_secure_boot_setup_mode "$boot_mode")"
-	environment_vendor="$(detect_virtualization_vendor)"
+	environment_vendor="$(detect_virtualization_vendor 2>/dev/null || printf 'unknown')"
 	if type detect_environment_type >/dev/null 2>&1; then
-		environment_type="$(detect_environment_type)"
+		environment_type="$(detect_environment_type 2>/dev/null || printf 'unknown')"
 	else
-		environment_type="desktop"
+		environment_type="unknown"
 	fi
 
 	set_state "BOOT_MODE" "$boot_mode" || return 1
@@ -228,6 +231,6 @@ runtime_boot_summary() {
 runtime_environment_summary() {
 	local environment_vendor=""
 
-	environment_vendor="$(runtime_state_or_default "ENVIRONMENT_VENDOR" "baremetal")"
+	environment_vendor="$(runtime_state_or_default "ENVIRONMENT_VENDOR" "unknown")"
 	environment_label "$environment_vendor"
 }

@@ -4,7 +4,7 @@ HARDWARE_MODULE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ -r "$HARDWARE_MODULE_DIR/detect.sh" ]]; then
 	# shellcheck source=installer/modules/detect.sh
-	source "$HARDWARE_MODULE_DIR/detect.sh"
+	source "$HARDWARE_MODULE_DIR/detect.sh" >/dev/null 2>&1
 fi
 
 gpu_vendor_label() {
@@ -18,7 +18,7 @@ gpu_vendor_label() {
 		nvidia)
 			printf 'NVIDIA\n'
 			;;
-		vmware|virtualbox|qemu|hyperv|xen)
+		vmware|virtualbox|qemu|kvm|hyperv|xen|vm)
 			printf 'VM\n'
 			;;
 		none)
@@ -38,7 +38,7 @@ gpu_vendor_label() {
 
 detect_gpu_vendor() {
 	if type detect_gpu_vendor_safe >/dev/null 2>&1; then
-		detect_gpu_vendor_safe
+		detect_gpu_vendor_safe 2>/dev/null || printf 'generic\n'
 		return 0
 	fi
 
@@ -48,7 +48,7 @@ detect_gpu_vendor() {
 refresh_hardware_state() {
 	local gpu_vendor=""
 
-	gpu_vendor="$(detect_gpu_vendor)"
+	gpu_vendor="$(detect_gpu_vendor 2>/dev/null || printf 'generic')"
 	set_state "GPU_VENDOR" "$gpu_vendor" || return 1
 	set_state "GPU_LABEL" "$(gpu_vendor_label "$gpu_vendor")" || return 1
 	return 0
@@ -69,7 +69,7 @@ hardware_profile_packages() {
 		virtualbox)
 			package_ref+=(virtualbox-guest-utils)
 			;;
-		qemu)
+		qemu|kvm)
 			package_ref+=(spice-vdagent qemu-guest-agent)
 			;;
 		*)
@@ -81,7 +81,7 @@ hardware_profile_packages() {
 			nvidia)
 				package_ref+=(nvidia nvidia-utils)
 				;;
-			intel|amd|generic|vmware|virtualbox|qemu|hyperv|xen)
+			intel|amd|generic|vm|vmware|virtualbox|qemu|kvm|hyperv|xen)
 				package_ref+=(mesa)
 				;;
 			*)
@@ -104,7 +104,7 @@ hardware_profile_services() {
 		virtualbox)
 			service_ref+=(vboxservice.service)
 			;;
-		qemu)
+		qemu|kvm)
 			service_ref+=(spice-vdagentd.service qemu-guest-agent.service)
 			;;
 		*)

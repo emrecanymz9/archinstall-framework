@@ -13,7 +13,11 @@ safe_source_module() {
 	fi
 
 	# shellcheck disable=SC1090
-	if source "$module_path"; then
+	if [[ ${UI_MODE:-dialog} == "dialog" && ${DEV_MODE:-false} != "true" ]]; then
+		if source "$module_path" >/dev/null 2>&1; then
+			return 0
+		fi
+	elif source "$module_path"; then
 		return 0
 	fi
 
@@ -97,11 +101,11 @@ safe_runtime_boot_summary() {
 
 safe_runtime_environment_summary() {
 	if type runtime_environment_summary >/dev/null 2>&1; then
-		runtime_environment_summary 2>/dev/null || printf 'Bare Metal\n'
+		runtime_environment_summary 2>/dev/null || printf 'Unknown\n'
 		return 0
 	fi
 
-	printf 'Bare Metal\n'
+	printf 'Unknown\n'
 }
 
 sync_install_ui_mode() {

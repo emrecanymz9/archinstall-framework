@@ -25,7 +25,11 @@ safe_source_module() {
 	fi
 
 	# shellcheck disable=SC1090
-	if source "$module_path"; then
+	if [[ ${UI_MODE:-dialog} == "dialog" && ${DEV_MODE:-false} != "true" ]]; then
+		if source "$module_path" >/dev/null 2>&1; then
+			return 0
+		fi
+	elif source "$module_path"; then
 		return 0
 	fi
 
@@ -294,7 +298,7 @@ require_commands() {
 	boot_mode="$(get_state "BOOT_MODE" 2>/dev/null || detect_boot_mode 2>/dev/null || printf 'uefi')"
 	filesystem="$(normalize_filesystem "$(get_state "FILESYSTEM" 2>/dev/null || printf 'ext4')")"
 
-	for cmd in lsblk wipefs parted partprobe mkfs.ext4 mount umount pacman pacstrap ping blkid arch-chroot tee tail findmnt; do
+	for cmd in lsblk wipefs parted partprobe mkfs.ext4 mount umount pacman pacstrap ping blkid arch-chroot tee tail findmnt genfstab; do
 		command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
 	done
 	if [[ ${UI_MODE:-dialog} == "dialog" ]]; then
@@ -581,46 +585,17 @@ write_target_fstab() {
 	local disk_type=${2:?disk type is required}
 	local root_partition=${3:?root partition is required}
 	local efi_partition=${4-}
-	local root_uuid=""
-	local efi_uuid=""
 	local fstab_path=/mnt/etc/fstab
-	local root_line=""
-	local home_line=""
-	local efi_line=""
-	local root_mount_options=""
-	local home_mount_options=""
-
-	root_uuid="$(get_partition_uuid "$root_partition")" || return 1
-	if [[ -n $efi_partition ]]; then
-		efi_uuid="$(get_partition_uuid "$efi_partition")" || return 1
-	fi
-
+	validate_target_mount "$root_partition" || return 1
 	case $filesystem in
-		ext4)
-			root_mount_options="$(ext4_mount_options "$disk_type")"
-			root_line="UUID=$root_uuid / ext4 $root_mount_options 0 1"
-			;;
-		btrfs)
-			root_mount_options="$(btrfs_mount_options '@' "$disk_type")"
-			home_mount_options="$(btrfs_mount_options '@home' "$disk_type")"
-			root_line="UUID=$root_uuid / btrfs $root_mount_options 0 0"
-			home_line="UUID=$root_uuid /home btrfs $home_mount_options 0 0"
+		ext4|btrfs)
 			;;
 		*)
 			print_install_error "Unsupported filesystem for fstab generation: $filesystem"
 			return 1
 			;;
 	esac
-
-	if [[ -n $efi_uuid ]]; then
-		efi_line="UUID=$efi_uuid /boot vfat umask=0077 0 2"
-	fi
-
-	run_shell_step "Generating fstab" "mkdir -p /mnt/etc && cat > '$fstab_path' <<'EOT'
-$root_line
-$home_line
-$efi_line
-EOT"
+	run_shell_step "Generating fstab" "mkdir -p /mnt/etc && genfstab -U /mnt > '$fstab_path'"
 	local fstab_status=$?
 	if [[ $fstab_status -ne 0 ]]; then
 		return "$fstab_status"
@@ -652,12 +627,43 @@ format_root_filesystem() {
 	esac
 }
 
+validate_target_mount() {
+	local root_partition=${1:-}
+	local mounted_source=""
+	local mount_contents=""
+
+	if [[ ! -d /mnt ]]; then
+		print_install_error "Target mount point /mnt does not exist."
+		return 1
+	fi
+
+	mounted_source="$(findmnt -n -o SOURCE /mnt 2>> "$ARCHINSTALL_LOG" || true)"
+	if [[ -z $mounted_source ]]; then
+		print_install_error "Target root filesystem is not mounted on /mnt."
+		return 1
+	fi
+
+	if [[ -n $root_partition && $mounted_source != "$root_partition" ]]; then
+		log_line "[WARN] /mnt is mounted from $mounted_source instead of expected $root_partition"
+	fi
+
+	mount_contents="$(ls -A /mnt 2>/dev/null || true)"
+	if [[ -z $mount_contents ]]; then
+		print_install_error "Target mount /mnt is empty after mounting. Aborting before pacstrap."
+		return 1
+	fi
+
+	return 0
+}
+
 mount_root_filesystem() {
 	local filesystem=${1:?filesystem is required}
 	local disk_type=${2:?disk type is required}
 	local root_partition=${3:?root partition is required}
 	local root_mount_options=""
 	local home_mount_options=""
+
+	run_step "Creating the target mount point" mkdir -p /mnt || return 1
 
 	case $filesystem in
 		ext4)
@@ -1507,6 +1513,7 @@ run_install() {
 		fi
 
 		mount_root_filesystem "$filesystem" "$disk_type" "$root_partition" || exit 1
+		validate_target_mount "$root_partition" || exit 1
 		if [[ $boot_mode == "uefi" ]]; then
 			run_step "Creating the EFI mount point" mkdir -p /mnt/boot || exit 1
 			run_step "Mounting the EFI partition" mount "$efi_partition" /mnt/boot || exit 1
@@ -1518,11 +1525,13 @@ run_install() {
 
 		if flag_enabled "$SKIP_PACSTRAP"; then
 			log_line "Skipping pacstrap because SKIP_PACSTRAP=$SKIP_PACSTRAP"
+			validate_target_mount "$root_partition" || exit 1
 			if [[ ! -d /mnt/etc ]]; then
 				print_install_error "SKIP_PACSTRAP=true requires an existing system mounted at /mnt."
 				exit 1
 			fi
 		else
+			validate_target_mount "$root_partition" || exit 1
 			run_pacstrap_install "${pacstrap_packages[@]}" || exit 1
 		fi
 

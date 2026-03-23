@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 
+detect_text_matches() {
+	local haystack=${1-}
+	local pattern=${2-}
+
+	[[ -n $haystack && -n $pattern ]] || return 1
+	printf '%s\n' "$haystack" | grep -qiE "$pattern" >/dev/null 2>&1
+}
+
 disk_model_value() {
 	local disk=${1:?disk is required}
 	local model=""
@@ -51,6 +59,7 @@ detect_environment_vendor_safe() {
 	local detected=""
 	local dmi_vendor=""
 	local dmi_product=""
+	local combined_text=""
 
 	if command -v systemd-detect-virt >/dev/null 2>&1; then
 		detected="$(systemd-detect-virt 2>/dev/null || true)"
@@ -61,49 +70,35 @@ detect_environment_vendor_safe() {
 	if [[ -r /sys/class/dmi/id/product_name ]]; then
 		read -r dmi_product < /sys/class/dmi/id/product_name || true
 	fi
+	combined_text="$(printf '%s\n%s\n%s\n' "$detected" "$dmi_vendor" "$dmi_product")"
 
-	case "${detected,,}:${dmi_vendor,,}:${dmi_product,,}" in
-		vmware*|*:vmware*|*:*:vmware*)
-			printf 'vmware\n'
-			;;
-		oracle*|virtualbox*|*:oracle*|*:innotek*|*:*:virtualbox*)
-			printf 'virtualbox\n'
-			;;
-		qemu*|kvm*|*:qemu*|*:*:kvm*|*:*:qemu*)
-			printf 'qemu\n'
-			;;
-		hyperv*|microsoft*|*:microsoft*|*:*:virtual machine*)
-			printf 'hyperv\n'
-			;;
-		xen*|*:xen*|*:*:xen*)
-			printf 'xen\n'
-			;;
-		:none:|baremetal:*|*:|*::)
-			printf 'baremetal\n'
-			;;
-		*)
-			case ${detected:-none} in
-				vmware)
-					printf 'vmware\n'
-					;;
-				oracle|virtualbox)
-					printf 'virtualbox\n'
-					;;
-				qemu|kvm)
-					printf 'qemu\n'
-					;;
-				hyperv|microsoft)
-					printf 'hyperv\n'
-					;;
-				xen)
-					printf 'xen\n'
-					;;
-				*)
-					printf 'baremetal\n'
-					;;
-			esac
-			;;
-	esac
+	if detect_text_matches "$combined_text" 'vmware'; then
+		printf 'vmware\n'
+		return 0
+	fi
+	if detect_text_matches "$combined_text" 'virtualbox|oracle|innotek'; then
+		printf 'virtualbox\n'
+		return 0
+	fi
+	if detect_text_matches "$combined_text" 'kvm|qemu'; then
+		printf 'kvm\n'
+		return 0
+	fi
+	if detect_text_matches "$combined_text" 'hyperv|hyper-v|microsoft|virtual machine'; then
+		printf 'hyperv\n'
+		return 0
+	fi
+	if detect_text_matches "$combined_text" 'xen'; then
+		printf 'xen\n'
+		return 0
+	fi
+
+	if [[ -n $detected || -n $dmi_vendor || -n $dmi_product ]]; then
+		printf 'baremetal\n'
+		return 0
+	fi
+
+	printf 'unknown\n'
 }
 
 detect_environment_type() {
@@ -112,8 +107,12 @@ detect_environment_type() {
 
 	environment_vendor="$(detect_environment_vendor_safe)"
 	case $environment_vendor in
-		vmware|virtualbox|qemu|hyperv|xen)
+		vmware|virtualbox|kvm|hyperv|xen)
 			printf 'vm\n'
+			return 0
+			;;
+		unknown)
+			printf 'unknown\n'
 			return 0
 			;;
 	esac
@@ -141,8 +140,8 @@ detect_gpu_vendor_safe() {
 
 	environment_vendor="$(detect_environment_vendor_safe)"
 	case $environment_vendor in
-		vmware|virtualbox|qemu|hyperv|xen)
-			printf '%s\n' "$environment_vendor"
+		vmware|virtualbox|kvm|hyperv|xen)
+			printf 'vm\n'
 			return 0
 			;;
 	esac
@@ -152,26 +151,26 @@ detect_gpu_vendor_safe() {
 		return 0
 	fi
 
-	lspci_output="$(lspci 2>/dev/null | grep -E 'VGA|3D' || true)"
+	lspci_output="$(lspci 2>/dev/null | grep -Ei 'VGA|3D|Display' || true)"
 	if [[ -z $lspci_output ]]; then
 		printf 'generic\n'
 		return 0
 	fi
 
-	case ${lspci_output,,} in
-		*"nvidia"*)
-			printf 'nvidia\n'
-			;;
-		*"amd"*|*"advanced micro devices"*|*"ati"*)
-			printf 'amd\n'
-			;;
-		*"intel"*)
-			printf 'intel\n'
-			;;
-		*)
-			printf 'generic\n'
-			;;
-	esac
+	if detect_text_matches "$lspci_output" 'nvidia'; then
+		printf 'nvidia\n'
+		return 0
+	fi
+	if detect_text_matches "$lspci_output" 'amd|advanced micro devices|ati'; then
+		printf 'amd\n'
+		return 0
+	fi
+	if detect_text_matches "$lspci_output" 'intel'; then
+		printf 'intel\n'
+		return 0
+	fi
+
+	printf 'generic\n'
 }
 
 detect_disk_os_presence() {

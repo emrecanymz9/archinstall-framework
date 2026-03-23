@@ -5,17 +5,17 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=installer/ui.sh
 source "$SCRIPT_DIR/ui.sh"
 # shellcheck source=installer/state.sh
-source "$SCRIPT_DIR/state.sh"
+source "$SCRIPT_DIR/state.sh" >/dev/null 2>&1
 # shellcheck source=installer/modules/system.sh
-source "$SCRIPT_DIR/modules/system.sh"
+source "$SCRIPT_DIR/modules/system.sh" >/dev/null 2>&1
 # shellcheck source=installer/modules/detect.sh
-source "$SCRIPT_DIR/modules/detect.sh"
+source "$SCRIPT_DIR/modules/detect.sh" >/dev/null 2>&1
 # shellcheck source=installer/modules/disk/layout.sh
-source "$SCRIPT_DIR/modules/disk/layout.sh"
+source "$SCRIPT_DIR/modules/disk/layout.sh" >/dev/null 2>&1
 # shellcheck source=installer/modules/disk/space.sh
-source "$SCRIPT_DIR/modules/disk/space.sh"
+source "$SCRIPT_DIR/modules/disk/space.sh" >/dev/null 2>&1
 # shellcheck source=installer/modules/disk/manager.sh
-source "$SCRIPT_DIR/modules/disk/manager.sh"
+source "$SCRIPT_DIR/modules/disk/manager.sh" >/dev/null 2>&1
 
 get_archiso_boot_disk() {
 	local boot_source
