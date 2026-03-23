@@ -545,9 +545,13 @@ run_step_with_retry() {
 }
 
 run_pacstrap_install() {
+	local -a mandatory_packages=(base linux linux-firmware mkinitcpio)
 	local -a packages=("$@")
 
-	run_step_with_retry "Installing the base Arch Linux packages" 3 pacstrap -K /mnt --noconfirm --needed --overwrite='*' "${packages[@]}"
+	append_unique_items packages "${mandatory_packages[@]}"
+	log_line "[DEBUG] Mandatory pacstrap packages: ${mandatory_packages[*]}"
+	log_line "[DEBUG] Final pacstrap package list: ${packages[*]}"
+	run_step_with_retry "Installing the base Arch Linux packages" 3 pacstrap /mnt base linux linux-firmware mkinitcpio "${packages[@]}" --noconfirm
 }
 
 get_partition_uuid() {
@@ -688,6 +692,25 @@ verify_target_system_present() {
 		print_install_error "Target system was not installed correctly: /mnt/etc/arch-release is missing."
 		return 1
 	fi
+	return 0
+}
+
+verify_base_system_files() {
+	validate_target_mount "$1" "$2" || return 1
+	if [[ ! -f /mnt/etc/mkinitcpio.conf ]]; then
+		print_install_error "Base system is incomplete: /mnt/etc/mkinitcpio.conf is missing."
+		return 1
+	fi
+	if [[ ! -f /mnt/boot/vmlinuz-linux ]]; then
+		print_install_error "Base system is incomplete: /mnt/boot/vmlinuz-linux is missing."
+		return 1
+	fi
+	return 0
+}
+
+log_installed_target_packages() {
+	validate_target_mount "$1" "$2" || return 1
+	run_optional_step "Recording installed target packages" arch-chroot /mnt pacman -Q
 	return 0
 }
 
@@ -1613,6 +1636,8 @@ run_install() {
 				print_install_error "SKIP_PACSTRAP=true requires an existing installed system mounted at /mnt."
 				exit 1
 			fi
+			verify_base_system_files "$root_partition" "$expected_root_source" || exit 1
+			log_installed_target_packages "$root_partition" "$expected_root_source" || exit 1
 		else
 			validate_target_mount "$root_partition" "$expected_root_source" || exit 1
 			run_pacstrap_install "${pacstrap_packages[@]}" || exit 1
@@ -1620,6 +1645,9 @@ run_install() {
 			log_mount_state
 			validate_target_mount "$root_partition" "$expected_root_source" || exit 1
 			verify_target_system_present "$root_partition" "$expected_root_source" || exit 1
+			verify_base_system_files "$root_partition" "$expected_root_source" || exit 1
+			log_line "[DEBUG] Verified required base system files after pacstrap"
+			log_installed_target_packages "$root_partition" "$expected_root_source" || exit 1
 		fi
 
 		validate_target_mount "$root_partition" "$expected_root_source" || exit 1
