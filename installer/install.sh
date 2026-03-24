@@ -554,7 +554,14 @@ load_runtime_preferences() {
 }
 
 post_install_kernel_label() {
-	printf '%s\n' "$(state_or_default "KERNEL_PACKAGE" "linux")"
+	case "$(state_or_default "KERNEL_PACKAGE" "linux")" in
+		linux)
+			printf 'Linux\n'
+			;;
+		*)
+			printf '%s\n' "$(state_or_default "KERNEL_PACKAGE" "linux")"
+			;;
+	esac
 }
 
 post_install_bootloader_label() {
@@ -565,7 +572,38 @@ post_install_bootloader_label() {
 			printf 'systemd-boot\n'
 			;;
 		*)
-			printf 'grub\n'
+			printf 'GRUB\n'
+			;;
+	esac
+}
+
+post_install_filesystem_label() {
+	case "$(state_or_default "FILESYSTEM" "ext4")" in
+		btrfs)
+			printf 'Btrfs\n'
+			;;
+		ext4)
+			printf 'Ext4\n'
+			;;
+		*)
+			printf '%s\n' "$(state_or_default "FILESYSTEM" "ext4")"
+			;;
+	esac
+}
+
+post_install_disk_type_label() {
+	case "$(state_or_default "DISK_TYPE" "auto")" in
+		hdd)
+			printf 'HDD\n'
+			;;
+		ssd)
+			printf 'SSD\n'
+			;;
+		nvme)
+			printf 'NVMe\n'
+			;;
+		*)
+			printf '\n'
 			;;
 	esac
 }
@@ -573,32 +611,39 @@ post_install_bootloader_label() {
 install_summary_text() {
 	local install_status=${1:-1}
 	local disk="$(state_or_default "DISK" "Not selected")"
-	local disk_type="$(state_or_default "DISK_TYPE" "auto")"
-	local filesystem="$(state_or_default "FILESYSTEM" "ext4")"
+	local disk_type="$(post_install_disk_type_label)"
+	local disk_display="$disk"
+	local filesystem="$(post_install_filesystem_label)"
 	local boot_mode="$(state_or_default "BOOT_MODE" "auto")"
 	local kernel="$(post_install_kernel_label)"
 	local desktop_profile="$(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")"
 	local install_profile="$(install_profile_label "$(state_or_default "INSTALL_PROFILE" "daily")")"
 	local display_manager="$(display_manager_label "$(state_or_default "DISPLAY_MANAGER" "none")")"
 	local bootloader="$(post_install_bootloader_label)"
-	local status_label="FAILED"
+	local boot_label="BIOS"
 
-	if [[ $install_status -eq 0 ]]; then
-		status_label="SUCCESS"
+	if [[ $boot_mode == "uefi" ]]; then
+		boot_label="UEFI"
 	fi
 
-	printf 'Disk: %s\nDisk type: %s\nFilesystem: %s\nBoot mode: %s\nKernel: %s\nProfile: %s\nDesktop: %s\nDisplay manager: %s\nBootloader: %s\nStatus: %s\n\nInstall log: %s' \
-		"$disk" \
-		"$disk_type" \
+	if [[ -n $disk_type ]]; then
+		disk_display="$disk ($disk_type)"
+	fi
+
+	if [[ $install_status -ne 0 ]]; then
+		printf 'Installation failed.\n'
+		return 0
+	fi
+
+	printf '✔ Installation Complete\nDisk       : %s\nFilesystem : %s\nBoot Mode  : %s\nKernel     : %s\nProfile    : %s\nDesktop    : %s\nDisplay    : %s\nBootloader : %s\n----------------------------' \
+		"$disk_display" \
 		"$filesystem" \
-		"$(boot_mode_status_label "$boot_mode" "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")" \
+		"$boot_label" \
 		"$kernel" \
 		"$install_profile" \
 		"$desktop_profile" \
 		"$display_manager" \
-		"$bootloader" \
-		"$status_label" \
-		"${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}"
+		"$bootloader"
 }
 
 show_post_install_screen() {
@@ -630,22 +675,11 @@ show_post_install_screen() {
 				--clear \
 				--backtitle "$ARCHINSTALL_BACKTITLE" \
 				--title "$(sanitize_dialog_text "Installation Complete")" \
-				--msgbox "$(sanitize_dialog_text "$summary_text")" \
-				20 70
-			dialog_status=$DIALOG_STATUS
-			if [[ $dialog_status -ne 0 && ${ARCHINSTALL_LAST_UI_FAILURE:-false} == true ]]; then
-				break
-			fi
-
-			safe_dialog \
-				--clear \
-				--backtitle "$ARCHINSTALL_BACKTITLE" \
-				--title "$(sanitize_dialog_text "Installation Complete")" \
 				--cancel-label "Return to Menu" \
-				--menu "$(sanitize_dialog_text "Select action")" \
-				14 60 3 \
-				"1" "Reboot" \
-				"2" "Shutdown" \
+				--menu "$(sanitize_dialog_text "$summary_text")" \
+				18 72 3 \
+				"1" "Reboot system" \
+				"2" "Shutdown system" \
 				"3" "Return to Menu" \
 				3>&1 1>&2 2>&3
 			choice="$DIALOG_RESULT"
