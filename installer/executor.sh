@@ -1673,7 +1673,7 @@ run_install() {
 		ARCHINSTALL_INSTALL_SUCCESS=true
 		ARCHINSTALL_CLEANUP_ACTIVE=false
 		log_line "[ OK ] Installation completed successfully"
-		log_line "Close the log view to continue to the final menu."
+		log_line "Handing control back to the installer UI."
 		if type run_hooks >/dev/null 2>&1; then
 			run_hooks post_install "$disk" || true
 		fi

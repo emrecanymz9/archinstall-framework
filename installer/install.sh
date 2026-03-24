@@ -573,49 +573,38 @@ post_install_bootloader_label() {
 install_summary_text() {
 	local install_status=${1:-1}
 	local disk="$(state_or_default "DISK" "Not selected")"
+	local disk_type="$(state_or_default "DISK_TYPE" "auto")"
 	local filesystem="$(state_or_default "FILESYSTEM" "ext4")"
 	local boot_mode="$(state_or_default "BOOT_MODE" "auto")"
 	local kernel="$(post_install_kernel_label)"
-	local bootloader="$(post_install_bootloader_label)"
-	local disk_type="$(state_or_default "DISK_TYPE" "auto")"
 	local desktop_profile="$(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")"
-	local display_mode="$(display_mode_label "$(state_or_default "DISPLAY_MODE" "auto")")"
-	local resolved_display_mode="$(display_mode_label "$(state_or_default "RESOLVED_DISPLAY_MODE" "auto")")"
-	local enable_zram="$(state_or_default "ENABLE_ZRAM" "false")"
 	local install_profile="$(install_profile_label "$(state_or_default "INSTALL_PROFILE" "daily")")"
-	local secure_boot_mode="$(secure_boot_mode_label "$(state_or_default "SECURE_BOOT_MODE" "disabled")")"
-	local environment_summary_value="$(safe_runtime_environment_summary)"
-	local gpu_label_value="$(state_or_default "GPU_LABEL" "Generic")"
-	local keymap="$(state_or_default "KEYMAP" "us")"
+	local display_manager="$(display_manager_label "$(state_or_default "DISPLAY_MANAGER" "none")")"
+	local bootloader="$(post_install_bootloader_label)"
 	local status_label="FAILED"
 
 	if [[ $install_status -eq 0 ]]; then
 		status_label="SUCCESS"
 	fi
 
-	printf 'Environment: %s\nGPU: %s\nDisk: %s\nDisk type: %s\nFilesystem: %s\nBoot mode: %s\nKernel: %s\nBootloader: %s\nSecure Boot mode: %s\nKeyboard: %s\nInstall profile: %s\nDesktop: %s\nDisplay mode: %s\nResolved mode: %s\nZRAM: %s\nStatus: %s\n\nInstall log: %s' \
-		"$environment_summary_value" \
-		"$gpu_label_value" \
+	printf 'Disk: %s\nDisk type: %s\nFilesystem: %s\nBoot mode: %s\nKernel: %s\nProfile: %s\nDesktop: %s\nDisplay manager: %s\nBootloader: %s\nStatus: %s\n\nInstall log: %s' \
 		"$disk" \
 		"$disk_type" \
 		"$filesystem" \
 		"$(boot_mode_status_label "$boot_mode" "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")" \
 		"$kernel" \
-		"$bootloader" \
-		"$secure_boot_mode" \
-		"$keymap" \
 		"$install_profile" \
 		"$desktop_profile" \
-		"$display_mode" \
-		"$resolved_display_mode" \
-		"$enable_zram" \
+		"$display_manager" \
+		"$bootloader" \
 		"$status_label" \
 		"${ARCHINSTALL_LOG:-/tmp/archinstall_install.log}"
 }
 
 show_post_install_screen() {
 	local install_status=${1:-1}
-	local prompt=""
+	local summary_text=""
+	local dialog_enabled=false
 	local choice=""
 	local dialog_status=0
 
@@ -623,20 +612,47 @@ show_post_install_screen() {
 		return 0
 	fi
 
-	prompt="$(install_summary_text "$install_status")"
-	log_info "Showing post-install screen"
-
+	summary_text="$(install_summary_text "$install_status")"
 	if [[ ${UI_MODE:-dialog} != "tty" ]] && require_dialog >/dev/null 2>&1; then
+		dialog_enabled=true
+	fi
+
+	log_debug "[DEBUG] Showing post-install screen"
+	if [[ $dialog_enabled == true ]]; then
+		log_debug "[DEBUG] Dialog mode: yes"
+	else
+		log_debug "[DEBUG] Dialog mode: no"
+	fi
+
+	if [[ $dialog_enabled == true ]]; then
 		while true; do
-			menu "Installation Complete" "$prompt" 22 82 3 \
+			safe_dialog \
+				--clear \
+				--backtitle "$ARCHINSTALL_BACKTITLE" \
+				--title "$(sanitize_dialog_text "Installation Complete")" \
+				--msgbox "$(sanitize_dialog_text "$summary_text")" \
+				20 70
+			dialog_status=$DIALOG_STATUS
+			if [[ $dialog_status -ne 0 && ${ARCHINSTALL_LAST_UI_FAILURE:-false} == true ]]; then
+				break
+			fi
+
+			safe_dialog \
+				--clear \
+				--backtitle "$ARCHINSTALL_BACKTITLE" \
+				--title "$(sanitize_dialog_text "Installation Complete")" \
+				--cancel-label "Return to Menu" \
+				--menu "$(sanitize_dialog_text "Select action")" \
+				14 60 3 \
 				"1" "Reboot" \
 				"2" "Shutdown" \
-				"3" "Return to Menu"
+				"3" "Return to Menu" \
+				3>&1 1>&2 2>&3
 			choice="$DIALOG_RESULT"
 			dialog_status=$DIALOG_STATUS
 			case $dialog_status in
 				0)
-					log_info "User selected action: $choice"
+					log_debug "[DEBUG] User selected: $choice"
 					case "$choice" in
 						1)
 							reboot
@@ -652,37 +668,39 @@ show_post_install_screen() {
 					esac
 					;;
 				1|255)
-					log_info "User selected action: 3"
+					log_debug "[DEBUG] User selected: 3"
 					return 0
 					;;
 				*)
-					break
+					if [[ ${ARCHINSTALL_LAST_UI_FAILURE:-false} == true ]]; then
+						break
+					fi
 					;;
 			esac
 		done
 	fi
 
 	while true; do
-		printf '\nInstallation Complete\n\n%s\n\n' "$prompt" >/dev/tty
-		printf '1) Reboot\n2) Shutdown\n3) Return to Menu\n\nSelect an action [1-3]: ' >/dev/tty
+		printf '\nInstallation Complete\n\n%s\n\n' "$summary_text" >/dev/tty
+		printf '1) Reboot system\n2) Shutdown system\n3) Return to menu\n\nSelect an action [1-3]: ' >/dev/tty
 		if ! IFS= read -r choice </dev/tty; then
-			log_info "User selected action: 3"
+			log_debug "[DEBUG] User selected: 3"
 			return 0
 		fi
 
 		case "$choice" in
 			1)
-				log_info "User selected action: 1"
+				log_debug "[DEBUG] User selected: 1"
 				reboot
 				return 0
 				;;
 			2)
-				log_info "User selected action: 2"
+				log_debug "[DEBUG] User selected: 2"
 				poweroff
 				return 0
 				;;
 			3)
-				log_info "User selected action: 3"
+				log_debug "[DEBUG] User selected: 3"
 				return 0
 				;;
 			*)
