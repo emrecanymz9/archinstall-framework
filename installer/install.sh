@@ -635,7 +635,7 @@ install_summary_text() {
 		return 0
 	fi
 
-	printf '✔ Installation Complete\nDisk       : %s\nFilesystem : %s\nBoot Mode  : %s\nKernel     : %s\nProfile    : %s\nDesktop    : %s\nDisplay    : %s\nBootloader : %s\n----------------------------' \
+	printf 'Disk       : %s\nFilesystem : %s\nBoot Mode  : %s\nKernel     : %s\nProfile    : %s\nDesktop    : %s\nDisplay    : %s\nBootloader : %s\n\n----------------------------\n\nSelect action:' \
 		"$disk_display" \
 		"$filesystem" \
 		"$boot_label" \
@@ -675,9 +675,10 @@ show_post_install_screen() {
 				--clear \
 				--backtitle "$ARCHINSTALL_BACKTITLE" \
 				--title "$(sanitize_dialog_text "Installation Complete")" \
-				--cancel-label "Return to Menu" \
+				--no-ok \
+				--no-cancel \
 				--menu "$(sanitize_dialog_text "$summary_text")" \
-				18 72 3 \
+				22 72 3 \
 				"1" "Reboot system" \
 				"2" "Shutdown system" \
 				"3" "Return to Menu" \
