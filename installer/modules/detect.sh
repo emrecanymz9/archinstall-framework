@@ -173,6 +173,33 @@ detect_gpu_vendor_safe() {
 	printf 'generic\n'
 }
 
+detect_cpu_vendor_safe() {
+	local cpuinfo=""
+
+	if [[ -r /proc/cpuinfo ]]; then
+		cpuinfo="$(grep -m1 'vendor_id\|model name' /proc/cpuinfo 2>/dev/null || true)"
+	fi
+
+	if detect_text_matches "$cpuinfo" 'genuineintel|intel'; then
+		printf 'intel\n'
+		return 0
+	fi
+	if detect_text_matches "$cpuinfo" 'authenticamd|amd'; then
+		printf 'amd\n'
+		return 0
+	fi
+
+	printf 'unknown\n'
+}
+
+detect_hardware_profile_json() {
+	local cpu_vendor="$(detect_cpu_vendor_safe)"
+	local gpu_vendor="$(detect_gpu_vendor_safe)"
+	local environment_type="$(detect_environment_type)"
+
+	printf '{"cpu":"%s","gpu":"%s","type":"%s"}\n' "$cpu_vendor" "$gpu_vendor" "$environment_type"
+}
+
 detect_disk_os_presence() {
 	local disk=${1:?disk is required}
 	local has_windows="false"

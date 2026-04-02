@@ -41,6 +41,9 @@ set_state() {
 	}
 
 	mv "$temp_file" "$ARCHINSTALL_STATE_FILE"
+	if declare -F sync_install_config_json >/dev/null 2>&1; then
+		sync_install_config_json >/dev/null 2>&1 || true
+	fi
 }
 
 get_state() {
@@ -76,6 +79,9 @@ unset_state() {
 	}
 
 	mv "$temp_file" "$ARCHINSTALL_STATE_FILE"
+	if declare -F sync_install_config_json >/dev/null 2>&1; then
+		sync_install_config_json >/dev/null 2>&1 || true
+	fi
 }
 
 has_state() {
@@ -86,6 +92,9 @@ has_state() {
 
 clear_state() {
 	: > "$ARCHINSTALL_STATE_FILE"
+	if declare -F sync_install_config_json >/dev/null 2>&1; then
+		sync_install_config_json >/dev/null 2>&1 || true
+	fi
 }
 
 state_get_or_default() {

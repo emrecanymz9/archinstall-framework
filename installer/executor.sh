@@ -43,8 +43,12 @@ source "$SCRIPT_DIR/ui.sh"
 source "$SCRIPT_DIR/state.sh"
 # shellcheck source=installer/core/hooks.sh
 safe_source_module "$SCRIPT_DIR/core/hooks.sh" || true
+# shellcheck source=installer/core/module-registry.sh
+safe_source_module "$SCRIPT_DIR/core/module-registry.sh" || true
 # shellcheck source=installer/core/plugin-loader.sh
 safe_source_module "$SCRIPT_DIR/core/plugin-loader.sh" || true
+# shellcheck source=installer/modules/config.sh
+safe_source_module "$SCRIPT_DIR/modules/config.sh" || true
 # shellcheck source=installer/modules/runtime.sh
 safe_source_module "$SCRIPT_DIR/modules/runtime.sh" || true
 # shellcheck source=installer/modules/hardware.sh
@@ -59,13 +63,31 @@ safe_source_module "$SCRIPT_DIR/modules/secureboot.sh" || true
 safe_source_module "$SCRIPT_DIR/modules/profiles.sh" || true
 # shellcheck source=installer/modules/network.sh
 safe_source_module "$SCRIPT_DIR/modules/network.sh" || true
+# shellcheck source=installer/modules/packages.sh
+safe_source_module "$SCRIPT_DIR/modules/packages.sh" || true
+# shellcheck source=installer/modules/luks.sh
+safe_source_module "$SCRIPT_DIR/modules/luks.sh" || true
+# shellcheck source=installer/modules/snapshots.sh
+safe_source_module "$SCRIPT_DIR/modules/snapshots.sh" || true
 # shellcheck source=installer/modules/disk/layout.sh
 safe_source_module "$SCRIPT_DIR/modules/disk/layout.sh" || true
 # shellcheck source=installer/modules/disk/space.sh
 safe_source_module "$SCRIPT_DIR/modules/disk/space.sh" || true
+# shellcheck source=installer/modules/system/network.sh
+safe_source_module "$SCRIPT_DIR/modules/system/network.sh" || true
+# shellcheck source=installer/modules/system/audio.sh
+safe_source_module "$SCRIPT_DIR/modules/system/audio.sh" || true
+# shellcheck source=installer/modules/system/bluetooth.sh
+safe_source_module "$SCRIPT_DIR/modules/system/bluetooth.sh" || true
 
 if type load_installer_plugins >/dev/null 2>&1; then
 	load_installer_plugins || true
+fi
+if type archinstall_register_builtin_modules >/dev/null 2>&1; then
+	archinstall_register_builtin_modules || true
+fi
+if type sync_install_config_json >/dev/null 2>&1; then
+	sync_install_config_json >/dev/null 2>&1 || true
 fi
 
 flag_enabled() {
@@ -231,40 +253,16 @@ build_pacstrap_package_list() {
 	local gpu_vendor=${13:-generic}
 	local secure_boot_mode=${14:-disabled}
 	local greeter_frontend=${15:-tuigreet}
-	local -a desktop_packages=()
-	local -a install_profile_packages_ref=()
-	local -a hardware_packages_ref=()
-	local -a secure_boot_packages_ref=()
+	local snapshot_provider="$(get_state "SNAPSHOT_PROVIDER" 2>/dev/null || printf 'none')"
+	local enable_luks="$(get_state "ENABLE_LUKS" 2>/dev/null || printf 'false')"
 
 	package_ref=()
+	if declare -F resolve_package_strategy >/dev/null 2>&1; then
+		resolve_package_strategy "$boot_mode" "$filesystem" "$enable_zram" "$install_profile" "$editor_choice" "$include_vscode" "$custom_tools" "$desktop_profile" "$display_manager" "$display_mode" "$environment_vendor" "$gpu_vendor" "$secure_boot_mode" "$greeter_frontend" "$snapshot_provider" "$enable_luks" package_ref || return 1
+		return 0
+	fi
+
 	get_final_packages "$install_profile" "$editor_choice" "$include_vscode" "$custom_tools" package_ref || return 1
-	if [[ $filesystem == "btrfs" ]]; then
-		package_ref+=(btrfs-progs)
-	fi
-	if flag_enabled "$enable_zram"; then
-		package_ref+=(zram-generator)
-	fi
-	if [[ $boot_mode == "bios" ]]; then
-		package_ref+=(grub)
-	fi
-	install_profile_packages "$install_profile" "$editor_choice" "$include_vscode" "$custom_tools" install_profile_packages_ref || return 1
-	hardware_profile_packages "$environment_vendor" "$gpu_vendor" "$desktop_profile" hardware_packages_ref || return 1
-	secure_boot_packages "$secure_boot_mode" "$boot_mode" secure_boot_packages_ref || return 1
-	append_unique_items package_ref "${install_profile_packages_ref[@]}"
-	append_unique_items package_ref "${hardware_packages_ref[@]}"
-	append_unique_items package_ref "${secure_boot_packages_ref[@]}"
-	if type list_plugin_packages >/dev/null 2>&1; then
-		mapfile -t install_profile_packages_ref < <(list_plugin_packages)
-		append_unique_items package_ref "${install_profile_packages_ref[@]}"
-	fi
-	if desktop_profile_packages "$desktop_profile" "$display_manager" "$display_mode" desktop_packages "$greeter_frontend"; then
-		if [[ ${#desktop_packages[@]} -gt 0 ]]; then
-			append_unique_items package_ref "${desktop_packages[@]}"
-		fi
-	fi
-	if type expand_package_dependencies >/dev/null 2>&1; then
-		expand_package_dependencies package_ref || true
-	fi
 }
 
 normalize_filesystem() {
@@ -294,9 +292,11 @@ require_commands() {
 	local missing=()
 	local boot_mode=""
 	local filesystem=""
+	local enable_luks=""
 
 	boot_mode="$(get_state "BOOT_MODE" 2>/dev/null || detect_boot_mode 2>/dev/null || printf 'uefi')"
 	filesystem="$(normalize_filesystem "$(get_state "FILESYSTEM" 2>/dev/null || printf 'ext4')")"
+	enable_luks="$(get_state "ENABLE_LUKS" 2>/dev/null || printf 'false')"
 
 	for cmd in lsblk wipefs parted partprobe mkfs.ext4 mount umount pacman pacstrap ping blkid arch-chroot tee tail findmnt genfstab mountpoint; do
 		command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
@@ -319,6 +319,9 @@ require_commands() {
 		for cmd in mkfs.btrfs btrfs; do
 			command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
 		done
+	fi
+	if flag_enabled "$enable_luks"; then
+		command -v cryptsetup >/dev/null 2>&1 || missing+=("cryptsetup")
 	fi
 
 	if [[ ${#missing[@]} -eq 0 ]]; then
@@ -395,6 +398,9 @@ cleanup_mounts() {
 		findmnt -R /mnt >> "$ARCHINSTALL_LOG" 2>&1 || true
 	fi
 	umount -R /mnt >> "$ARCHINSTALL_LOG" 2>&1 || true
+	if declare -F close_luks_root_device >/dev/null 2>&1; then
+		close_luks_root_device "$(get_state "LUKS_MAPPER_NAME" 2>/dev/null || printf 'cryptroot')" >> "$ARCHINSTALL_LOG" 2>&1 || true
+	fi
 
 	return 0
 }
@@ -417,7 +423,7 @@ show_install_error() {
 	local step=${1:-"Unknown step"}
 	local excerpt
 
-	excerpt="$(tail -n 20 "$ARCHINSTALL_LOG" 2>/dev/null || true)"
+	excerpt="$(tail -n 50 "$ARCHINSTALL_LOG" 2>/dev/null || true)"
 	print_install_error "Installation failed during: $step"
 	if [[ -n $excerpt ]]; then
 		printf '%s\n' "$excerpt" >&2
@@ -586,6 +592,8 @@ log_mounted_filesystems() {
 	run_optional_step "Recording root mount details" findmnt -no TARGET,SOURCE,OPTIONS /mnt
 	if [[ $filesystem == "btrfs" ]]; then
 		run_optional_step "Recording home mount details" findmnt -no TARGET,SOURCE,OPTIONS /mnt/home
+		run_optional_step "Recording var mount details" findmnt -no TARGET,SOURCE,OPTIONS /mnt/var
+		run_optional_step "Recording snapshots mount details" findmnt -no TARGET,SOURCE,OPTIONS /mnt/.snapshots
 	fi
 }
 
@@ -762,6 +770,16 @@ mount_root_filesystem() {
 			else
 				log_line "[ OK ] Reusing existing btrfs home subvolume @home"
 			fi
+			if [[ ! -d /mnt/@var ]]; then
+				run_step "Creating btrfs var subvolume" btrfs subvolume create /mnt/@var || return 1
+			else
+				log_line "[ OK ] Reusing existing btrfs var subvolume @var"
+			fi
+			if [[ ! -d /mnt/@snapshots ]]; then
+				run_step "Creating btrfs snapshots subvolume" btrfs subvolume create /mnt/@snapshots || return 1
+			else
+				log_line "[ OK ] Reusing existing btrfs snapshots subvolume @snapshots"
+			fi
 			log_line "[DEBUG] Unmounting temporary top-level btrfs mount before remounting subvolumes"
 			run_step "Unmounting temporary btrfs mount" umount /mnt || return 1
 			root_mount_options="$(btrfs_mount_options '@' "$disk_type")"
@@ -769,8 +787,16 @@ mount_root_filesystem() {
 			run_step "Mounting the btrfs root subvolume" mount -o "$root_mount_options" "$root_partition" /mnt || return 1
 			run_step "Creating the home mount point" mkdir -p /mnt/home || return 1
 			run_step "Mounting the btrfs home subvolume" mount -o "$home_mount_options" "$root_partition" /mnt/home || return 1
+			var_mount_options="$(btrfs_mount_options '@var' "$disk_type")"
+			snapshots_mount_options="$(btrfs_mount_options '@snapshots' "$disk_type")"
+			run_step "Creating the var mount point" mkdir -p /mnt/var || return 1
+			run_step "Mounting the btrfs var subvolume" mount -o "$var_mount_options" "$root_partition" /mnt/var || return 1
+			run_step "Creating the snapshots mount point" mkdir -p /mnt/.snapshots || return 1
+			run_step "Mounting the btrfs snapshots subvolume" mount -o "$snapshots_mount_options" "$root_partition" /mnt/.snapshots || return 1
 			run_optional_step "Recording mounted btrfs root subvolume" findmnt -no TARGET,SOURCE,OPTIONS /mnt
 			run_optional_step "Recording mounted btrfs home subvolume" findmnt -no TARGET,SOURCE,OPTIONS /mnt/home
+			run_optional_step "Recording mounted btrfs var subvolume" findmnt -no TARGET,SOURCE,OPTIONS /mnt/var
+			run_optional_step "Recording mounted btrfs snapshots subvolume" findmnt -no TARGET,SOURCE,OPTIONS /mnt/.snapshots
 			;;
 		*)
 			print_install_error "Unsupported filesystem: $filesystem"
@@ -855,6 +881,11 @@ build_chroot_script() {
 	local current_secure_boot_setup_mode=""
 	local environment_vendor=""
 	local gpu_vendor=""
+	local snapshot_provider=""
+	local enable_luks=""
+	local luks_mapper_name=""
+	local luks_partition_uuid=""
+	local mkinitcpio_hooks=""
 	local quoted_install_profile=""
 	local quoted_editor_choice=""
 	local quoted_include_vscode=""
@@ -864,6 +895,11 @@ build_chroot_script() {
 	local quoted_current_secure_boot_setup_mode=""
 	local quoted_environment_vendor=""
 	local quoted_gpu_vendor=""
+	local quoted_snapshot_provider=""
+	local quoted_enable_luks=""
+	local quoted_luks_mapper_name=""
+	local quoted_luks_partition_uuid=""
+	local quoted_mkinitcpio_hooks=""
 
 	hostname="$(get_state "HOSTNAME" 2>/dev/null || printf 'archlinux')"
 	timezone="$(get_state "TIMEZONE" 2>/dev/null || printf 'Europe/Istanbul')"
@@ -879,6 +915,11 @@ build_chroot_script() {
 	current_secure_boot_setup_mode="$(get_state "CURRENT_SECURE_BOOT_SETUP_MODE" 2>/dev/null || printf 'unknown')"
 	environment_vendor="$(get_state "ENVIRONMENT_VENDOR" 2>/dev/null || printf 'baremetal')"
 	gpu_vendor="$(get_state "GPU_VENDOR" 2>/dev/null || printf 'generic')"
+	snapshot_provider="$(get_state "SNAPSHOT_PROVIDER" 2>/dev/null || printf 'none')"
+	enable_luks="$(get_state "ENABLE_LUKS" 2>/dev/null || printf 'false')"
+	luks_mapper_name="$(get_state "LUKS_MAPPER_NAME" 2>/dev/null || printf 'cryptroot')"
+	luks_partition_uuid="$(get_state "LUKS_PART_UUID" 2>/dev/null || printf '')"
+	mkinitcpio_hooks="$(luks_mkinitcpio_hooks 2>/dev/null || printf 'base udev autodetect modconf block filesystems keyboard fsck')"
 	greeter_frontend="$(get_state "GREETER_FRONTEND" 2>/dev/null || printf 'tuigreet')"
 
 	if [[ -z $user_password ]]; then
@@ -917,6 +958,11 @@ build_chroot_script() {
 	printf -v quoted_current_secure_boot_setup_mode '%q' "$current_secure_boot_setup_mode"
 	printf -v quoted_environment_vendor '%q' "$environment_vendor"
 	printf -v quoted_gpu_vendor '%q' "$gpu_vendor"
+	printf -v quoted_snapshot_provider '%q' "$snapshot_provider"
+	printf -v quoted_enable_luks '%q' "$enable_luks"
+	printf -v quoted_luks_mapper_name '%q' "$luks_mapper_name"
+	printf -v quoted_luks_partition_uuid '%q' "$luks_partition_uuid"
+	printf -v quoted_mkinitcpio_hooks '%q' "$mkinitcpio_hooks"
 
 	cat <<EOF
 set -euo pipefail
@@ -948,6 +994,11 @@ TARGET_CURRENT_SECURE_BOOT_STATE=$quoted_current_secure_boot_state
 TARGET_SECURE_BOOT_SETUP_MODE=$quoted_current_secure_boot_setup_mode
 TARGET_ENVIRONMENT_VENDOR=$quoted_environment_vendor
 TARGET_GPU_VENDOR=$quoted_gpu_vendor
+TARGET_SNAPSHOT_PROVIDER=$quoted_snapshot_provider
+TARGET_LUKS_ENABLED=$quoted_enable_luks
+TARGET_LUKS_MAPPER_NAME=$quoted_luks_mapper_name
+LUKS_UUID=$quoted_luks_partition_uuid
+TARGET_MKINITCPIO_HOOKS=$quoted_mkinitcpio_hooks
 export PACMAN_OPTS='${PACMAN_OPTS:---noconfirm --needed}'
 
 log_chroot_step() {
@@ -961,7 +1012,7 @@ if [[ ! -f /etc/mkinitcpio.conf ]]; then
 fi
 echo "[DEBUG] Preparing to update /etc/mkinitcpio.conf inside chroot"
 echo "[DEBUG] Applying mkinitcpio hooks"
-sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect modconf block filesystems keyboard fsck)/' /etc/mkinitcpio.conf
+sed -i "s/^HOOKS=.*/HOOKS=(\$TARGET_MKINITCPIO_HOOKS)/" /etc/mkinitcpio.conf
 
 log_chroot_step "Configuring timezone"
 ln -sf "/usr/share/zoneinfo/\$TARGET_TIMEZONE" /etc/localtime
@@ -1036,7 +1087,13 @@ EOT
 }
 
 build_kernel_cmdline() {
-	local kernel_cmdline="root=UUID=\$ROOT_UUID rw"
+	local kernel_cmdline=""
+
+	if [[ \$TARGET_LUKS_ENABLED == "true" && -n \${LUKS_UUID:-} ]]; then
+		kernel_cmdline="cryptdevice=UUID=\$LUKS_UUID:\$TARGET_LUKS_MAPPER_NAME root=UUID=\$ROOT_UUID rw"
+	else
+		kernel_cmdline="root=UUID=\$ROOT_UUID rw"
+	fi
 
 	if [[ \$TARGET_FILESYSTEM == "btrfs" ]]; then
 		kernel_cmdline="\$kernel_cmdline rootfstype=btrfs rootflags=\$TARGET_ROOT_MOUNT_OPTIONS"
@@ -1099,7 +1156,7 @@ configure_vm_services() {
 		virtualbox)
 			enable_service_if_present vboxservice.service
 			;;
-		qemu)
+		kvm|qemu)
 			enable_service_if_present spice-vdagentd.service
 			enable_service_if_present qemu-guest-agent.service
 			;;
@@ -1167,6 +1224,8 @@ zram-size = ram / 2
 compression-algorithm = zstd
 EOT
 fi
+
+$(snapshot_chroot_setup_snippet "$(get_state "SNAPSHOT_PROVIDER" 2>/dev/null || printf 'none')" "$filesystem")
 
 write_display_manager_fallback_notice() {
 	local fallback_command=\${1:-startplasma-wayland}
@@ -1276,37 +1335,68 @@ if type emit_chroot_snippets >/dev/null 2>&1; then
 fi
 
 configure_vm_services
+enable_service_if_present bluetooth.service
 
 if [[ \$BOOT_MODE == "uefi" ]]; then
 	log_chroot_step "Installing systemd-boot"
 	bootctl install
 	mkdir -p /boot/loader/entries
+
+	# Detect installed microcode image for early CPU microcode loading
+	MICROCODE_INITRD_LINE=""
+	if [[ -f /boot/intel-ucode.img ]]; then
+		MICROCODE_INITRD_LINE="initrd /intel-ucode.img"
+	elif [[ -f /boot/amd-ucode.img ]]; then
+		MICROCODE_INITRD_LINE="initrd /amd-ucode.img"
+	fi
+
+	# Write loader.conf. For Secure Boot mode, use @saved so sd-boot defaults to
+	# the last successfully booted entry (the signed UKI from /boot/EFI/Linux/).
 	if [[ \$TARGET_SECURE_BOOT_MODE == "disabled" ]]; then
-		cat > /boot/loader/loader.conf <<'EOT'
+		cat > /boot/loader/loader.conf <<'LOADERCONF'
 default arch
 timeout 3
 editor no
-EOT
-
-		cat > /boot/loader/entries/arch.conf <<EOT
-title Arch Linux
-linux /vmlinuz-linux
-initrd /initramfs-linux.img
-options \$(build_kernel_cmdline)
-EOT
-
-		echo "[DEBUG] systemd-boot entry"
-		cat /boot/loader/entries/arch.conf
+LOADERCONF
 	else
-		cat > /boot/loader/loader.conf <<'EOT'
+		cat > /boot/loader/loader.conf <<'LOADERCONF'
 default @saved
 timeout 3
 editor no
-EOT
-		rm -f /boot/loader/entries/arch.conf
+LOADERCONF
 	fi
+
+	# Always write arch.conf. This is the permanent unsigned fallback entry.
+	# Removing it would leave no viable boot path if UKI signing or enrollment fails.
+	# When Secure Boot is active, sd-boot auto-discovers signed UKIs from /boot/EFI/Linux/
+	# and they take default priority via @saved; arch.conf stays selectable manually.
+	{
+		echo "title Arch Linux"
+		echo "linux /vmlinuz-linux"
+		[[ -n "\$MICROCODE_INITRD_LINE" ]] && echo "\$MICROCODE_INITRD_LINE"
+		echo "initrd /initramfs-linux.img"
+		echo "options \$(build_kernel_cmdline)"
+	} > /boot/loader/entries/arch.conf
+
+	echo "[DEBUG] systemd-boot arch.conf:"
+	cat /boot/loader/entries/arch.conf
 else
 	log_chroot_step "Installing GRUB"
+
+	# BIOS+GPT safety guard: grub-install --target=i386-pc cannot embed on a GPT
+	# disk unless a dedicated 1 MiB bios_grub partition exists.
+	if [[ \$BOOT_MODE == "bios" ]]; then
+		GRUB_DISK_LABEL="\$(parted -s "\$TARGET_DISK" print 2>/dev/null | awk '/Partition Table:/ {print \$3}' || true)"
+		if [[ "\$GRUB_DISK_LABEL" == "gpt" ]]; then
+			if ! parted -s "\$TARGET_DISK" print 2>/dev/null | grep -qi 'bios_grub'; then
+				echo "[FAIL] BIOS install on GPT disk requires a bios_grub partition. None found on \$TARGET_DISK."
+				echo "[FAIL] Create a 1 MiB unformatted partition with the bios_grub flag and retry."
+				exit 1
+			fi
+			echo "[INFO] bios_grub partition confirmed on GPT disk - proceeding with GRUB embed."
+		fi
+	fi
+
 	grub_cmdline="root=UUID=\$ROOT_UUID"
 	if [[ \$TARGET_FILESYSTEM == "btrfs" ]]; then
 		grub_cmdline="\$grub_cmdline rootfstype=btrfs rootflags=\$TARGET_ROOT_MOUNT_OPTIONS"
@@ -1382,7 +1472,9 @@ run_install() {
 	local disk=""
 	local efi_partition=""
 	local root_partition=""
+	local root_mount_device=""
 	local root_uuid=""
+	local luks_partition_uuid=""
 	local boot_mode=""
 	local disk_type=""
 	local filesystem=""
@@ -1403,6 +1495,9 @@ run_install() {
 	local greeter_frontend="tuigreet"
 	local display_mode=""
 	local resolved_display_mode=""
+	local enable_luks="false"
+	local luks_mapper_name="cryptroot"
+	local snapshot_provider="none"
 	local required_space_mib=""
 	local root_mount_options=""
 	local expected_root_source=""
@@ -1433,16 +1528,22 @@ run_install() {
 	display_manager="$(get_state "DISPLAY_MANAGER" 2>/dev/null || printf 'none')"
 	greeter_frontend="$(get_state "GREETER_FRONTEND" 2>/dev/null || printf 'tuigreet')"
 	display_mode="$(get_state "DISPLAY_MODE" 2>/dev/null || printf 'auto')"
+	enable_luks="$(get_state "ENABLE_LUKS" 2>/dev/null || printf 'false')"
+	luks_mapper_name="$(get_state "LUKS_MAPPER_NAME" 2>/dev/null || printf 'cryptroot')"
+	snapshot_provider="$(get_state "SNAPSHOT_PROVIDER" 2>/dev/null || printf 'none')"
 	[[ -n $boot_mode ]] || boot_mode="$(detect_boot_mode)"
 	current_secure_boot_state="$(detect_secure_boot_state "$boot_mode")"
 	environment_vendor="$(detect_virtualization_vendor)"
 	gpu_vendor="$(detect_gpu_vendor)"
+	local cpu_vendor
+	cpu_vendor="$(detect_cpu_vendor_safe 2>/dev/null || printf 'unknown')"
 	set_state "CURRENT_SECURE_BOOT_STATE" "$current_secure_boot_state" || return 1
 	set_state "CURRENT_SECURE_BOOT_SETUP_MODE" "$(detect_secure_boot_setup_mode "$boot_mode")" || return 1
 	set_state "ENVIRONMENT_VENDOR" "$environment_vendor" || return 1
 	set_state "ENVIRONMENT_LABEL" "$(environment_label "$environment_vendor")" || return 1
 	set_state "GPU_VENDOR" "$gpu_vendor" || return 1
 	set_state "GPU_LABEL" "$(gpu_vendor_label "$gpu_vendor")" || return 1
+	set_state "CPU_VENDOR" "$cpu_vendor" || return 1
 	case $boot_mode in
 		uefi|bios)
 			;;
@@ -1495,6 +1596,8 @@ run_install() {
 		log_line "Display mode: $display_mode"
 		log_line "Display manager: $display_manager"
 		log_line "Greeter frontend: $greeter_frontend"
+		log_line "Encryption: $enable_luks"
+		log_line "Snapshot provider: $snapshot_provider"
 		log_line "Safe mode: $INSTALL_SAFE_MODE"
 
 		resolve_display_mode() {
@@ -1557,10 +1660,10 @@ run_install() {
 			run_step "Wiping existing signatures on $disk" wipefs -a "$disk" || exit 1
 			if [[ $boot_mode == "uefi" ]]; then
 				run_step "Creating a GPT partition table" parted -s "$disk" mklabel gpt || exit 1
-				run_step "Creating the EFI system partition" parted -s "$disk" mkpart ESP fat32 1MiB 513MiB || exit 1
+				run_step "Creating the EFI system partition" parted -s "$disk" mkpart ESP fat32 1MiB 1025MiB || exit 1
 				run_step "Setting the EFI boot flag" parted -s "$disk" set 1 boot on || exit 1
 				run_step "Setting the EFI ESP flag" parted -s "$disk" set 1 esp on || exit 1
-				run_step "Creating the root partition" parted -s "$disk" mkpart ROOT ext4 513MiB 100% || exit 1
+				run_step "Creating the root partition" parted -s "$disk" mkpart ROOT ext4 1025MiB 100% || exit 1
 			else
 				run_step "Creating an MBR partition table" parted -s "$disk" mklabel msdos || exit 1
 				run_step "Creating the root partition" parted -s "$disk" mkpart primary ext4 1MiB 100% || exit 1
@@ -1594,6 +1697,9 @@ run_install() {
 		fi
 		set_state "BOOT_MODE" "$boot_mode" || exit 1
 		set_state "ROOT_PART" "$root_partition" || exit 1
+		set_state "ENABLE_LUKS" "$enable_luks" || exit 1
+		set_state "LUKS_MAPPER_NAME" "$luks_mapper_name" || exit 1
+		set_state "SNAPSHOT_PROVIDER" "$snapshot_provider" || exit 1
 
 		if flag_enabled "$SKIP_PARTITION"; then
 			log_line "Skipping filesystem creation because SKIP_PARTITION=$SKIP_PARTITION"
@@ -1602,14 +1708,36 @@ run_install() {
 				run_step "Formatting the EFI partition as FAT32" mkfs.fat -F32 "$efi_partition" || exit 1
 			fi
 			if [[ $format_root == "true" ]]; then
-				format_root_filesystem "$filesystem" "$root_partition" || exit 1
+				if flag_enabled "$enable_luks"; then
+					root_mount_device="$(prepare_luks_root_device "$root_partition" "$luks_mapper_name" "${INSTALL_LUKS_PASSWORD:-}")" || exit 1
+					set_state "ROOT_MAPPER" "$root_mount_device" || exit 1
+					luks_partition_uuid="$(get_partition_uuid "$root_partition")" || exit 1
+					set_state "LUKS_PART_UUID" "$luks_partition_uuid" || exit 1
+					format_root_filesystem "$filesystem" "$root_mount_device" || exit 1
+				else
+					root_mount_device="$root_partition"
+					format_root_filesystem "$filesystem" "$root_partition" || exit 1
+				fi
 			else
 				log_line "Skipping root filesystem creation because FORMAT_ROOT=$format_root"
 			fi
 		fi
 
-		mount_root_filesystem "$filesystem" "$disk_type" "$root_partition" || exit 1
-		validate_target_mount "$root_partition" || exit 1
+		if [[ -z $root_mount_device ]]; then
+			if flag_enabled "$enable_luks"; then
+				root_mount_device="$(open_luks_root_device "$root_partition" "$luks_mapper_name" "${INSTALL_LUKS_PASSWORD:-}")" || exit 1
+				set_state "ROOT_MAPPER" "$root_mount_device" || exit 1
+				if [[ -z ${luks_partition_uuid:-} ]]; then
+					luks_partition_uuid="$(get_partition_uuid "$root_partition")" || exit 1
+					set_state "LUKS_PART_UUID" "$luks_partition_uuid" || exit 1
+				fi
+			else
+				root_mount_device="$root_partition"
+			fi
+		fi
+
+		mount_root_filesystem "$filesystem" "$disk_type" "$root_mount_device" || exit 1
+		validate_target_mount "$root_mount_device" || exit 1
 		expected_root_source="$(normalized_mount_source /mnt)"
 		if [[ -z $expected_root_source ]]; then
 			print_install_error "Could not determine the expected source for /mnt after mounting."
@@ -1619,55 +1747,63 @@ run_install() {
 		log_line "[DEBUG] Mount state after root mount"
 		log_mount_state
 		if [[ $boot_mode == "uefi" ]]; then
-			validate_target_mount "$root_partition" "$expected_root_source" || exit 1
+			validate_target_mount "$root_mount_device" "$expected_root_source" || exit 1
 			run_step "Creating the EFI mount point" mkdir -p /mnt/boot || exit 1
 			run_step "Mounting the EFI partition" mount "$efi_partition" /mnt/boot || exit 1
 		fi
-		validate_target_mount "$root_partition" "$expected_root_source" || exit 1
+		validate_target_mount "$root_mount_device" "$expected_root_source" || exit 1
 		log_partition_metadata "$root_partition" "$efi_partition"
 		log_mounted_filesystems "$filesystem"
 		required_space_mib="$(estimate_target_required_space_mib "$desktop_profile" "$filesystem")"
-		validate_target_mount "$root_partition" "$expected_root_source" || exit 1
+		validate_target_mount "$root_mount_device" "$expected_root_source" || exit 1
 		run_step "Checking target free space" ensure_target_has_space /mnt "$required_space_mib" || exit 1
 
 		if flag_enabled "$SKIP_PACSTRAP"; then
 			log_line "Skipping pacstrap because SKIP_PACSTRAP=$SKIP_PACSTRAP"
-			if ! verify_target_system_present "$root_partition" "$expected_root_source"; then
+			if ! verify_target_system_present "$root_mount_device" "$expected_root_source"; then
 				print_install_error "SKIP_PACSTRAP=true requires an existing installed system mounted at /mnt."
 				exit 1
 			fi
-			verify_base_system_files "$root_partition" "$expected_root_source" || exit 1
-			log_installed_target_packages "$root_partition" "$expected_root_source" || exit 1
+			verify_base_system_files "$root_mount_device" "$expected_root_source" || exit 1
+			log_installed_target_packages "$root_mount_device" "$expected_root_source" || exit 1
 		else
-			validate_target_mount "$root_partition" "$expected_root_source" || exit 1
+			validate_target_mount "$root_mount_device" "$expected_root_source" || exit 1
 			run_pacstrap_install "${pacstrap_packages[@]}" || exit 1
 			log_line "[DEBUG] Mount state after pacstrap"
 			log_mount_state
-			validate_target_mount "$root_partition" "$expected_root_source" || exit 1
-			verify_target_system_present "$root_partition" "$expected_root_source" || exit 1
-			verify_base_system_files "$root_partition" "$expected_root_source" || exit 1
+			validate_target_mount "$root_mount_device" "$expected_root_source" || exit 1
+			verify_target_system_present "$root_mount_device" "$expected_root_source" || exit 1
+			verify_base_system_files "$root_mount_device" "$expected_root_source" || exit 1
 			log_line "[DEBUG] Verified required base system files after pacstrap"
-			log_installed_target_packages "$root_partition" "$expected_root_source" || exit 1
+			log_installed_target_packages "$root_mount_device" "$expected_root_source" || exit 1
 		fi
 
-		validate_target_mount "$root_partition" "$expected_root_source" || exit 1
-		write_target_fstab "$filesystem" "$disk_type" "$root_partition" "$expected_root_source" "$efi_partition" || exit 1
+		validate_target_mount "$root_mount_device" "$expected_root_source" || exit 1
+		write_target_fstab "$filesystem" "$disk_type" "$root_mount_device" "$expected_root_source" "$efi_partition" || exit 1
 
 		if flag_enabled "$SKIP_CHROOT"; then
 			log_line "Skipping chroot configuration because SKIP_CHROOT=$SKIP_CHROOT"
 		else
-			validate_target_mount "$root_partition" "$expected_root_source" || exit 1
-			root_uuid="$(get_partition_uuid "$root_partition")" || exit 1
+			validate_target_mount "$root_mount_device" "$expected_root_source" || exit 1
+			root_uuid="$(get_partition_uuid "$root_mount_device")" || exit 1
 			if [[ $filesystem == "btrfs" ]]; then
 				root_mount_options="$(btrfs_mount_options '@' "$disk_type")"
 			else
 				root_mount_options=""
 			fi
-			prepare_chroot_mounts "$root_partition" "$expected_root_source" || exit 1
-			run_chroot_configuration "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_mode" "$resolved_display_mode" "$root_partition" "$expected_root_source" || exit 1
+			prepare_chroot_mounts "$root_mount_device" "$expected_root_source" || exit 1
+			run_chroot_configuration "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_mode" "$resolved_display_mode" "$root_mount_device" "$expected_root_source" || exit 1
 			if type run_hooks >/dev/null 2>&1; then
 				run_hooks post_chroot "$disk" "$root_partition" || true
 			fi
+		fi
+
+		# Copy install log to the new user's home directory for post-install reference
+		local log_username
+		log_username="$(get_state "USERNAME" 2>/dev/null || printf 'archuser')"
+		if [[ -n $log_username && -d "/mnt/home/$log_username" ]]; then
+			install -m 644 "$ARCHINSTALL_LOG" "/mnt/home/$log_username/archinstall.log" 2>>"$ARCHINSTALL_LOG" || true
+			log_line "Install log saved to /mnt/home/$log_username/archinstall.log"
 		fi
 
 		ARCHINSTALL_INSTALL_SUCCESS=true

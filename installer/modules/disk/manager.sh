@@ -379,6 +379,64 @@ validate_disk_layout_access() {
 	esac
 }
 
+validate_existing_efi_partition() {
+	local part=${1:?partition is required}
+	local size_bytes
+	local size_mib=0
+	local fstype
+	local -a warnings=()
+
+	fstype="$(lsblk -dnro FSTYPE "$part" 2>/dev/null | head -n 1 || blkid -o value -s TYPE "$part" 2>/dev/null || true)"
+	case ${fstype,,} in
+		vfat|fat32|fat16)
+			;;
+		"")
+			warnings+=("Filesystem type could not be detected on $part — expected vfat/FAT32")
+			;;
+		*)
+			warnings+=("Unexpected filesystem '$fstype' on $part — EFI System Partitions must be FAT32/vfat")
+			;;
+	esac
+
+	size_bytes="$(lsblk -dnbo SIZE "$part" 2>/dev/null || true)"
+	if [[ $size_bytes =~ ^[0-9]+$ ]]; then
+		size_mib=$((size_bytes / 1024 / 1024))
+		if (( size_mib < 256 )); then
+			warnings+=("EFI partition $part is only ${size_mib} MiB — dangerously small; UKI generation will likely fail")
+		elif (( size_mib < 512 )); then
+			warnings+=("EFI partition $part is ${size_mib} MiB — minimum recommended is 512 MiB; 1024 MiB for Secure Boot / UKI")
+		fi
+	fi
+
+	if [[ ${#warnings[@]} -eq 0 ]]; then
+		return 0
+	fi
+
+	local warning_text
+	printf -v warning_text '%s\n' "${warnings[@]}"
+	warning_box "EFI Partition Warning" "Potential issues detected on $part:\n\n${warning_text}\nThe installer will attempt to reuse this partition. If the system does not boot, reconsider the EFI partition layout before retrying."
+	return 0
+}
+
+check_bios_gpt_safety() {
+	local disk=${1:?disk is required}
+	local boot_mode=${2:-bios}
+
+	[[ $boot_mode == "bios" ]] || return 0
+
+	local disk_label
+	disk_label="$(parted -s "$disk" print 2>/dev/null | awk '/Partition Table:/ {print $3}' || true)"
+	[[ $disk_label == "gpt" ]] || return 0
+
+	if parted -s "$disk" print 2>/dev/null | grep -qi 'bios_grub'; then
+		return 0
+	fi
+
+	error_box "BIOS + GPT Incompatibility" \
+		"Disk: $disk\nPartition table: GPT\n\nA BIOS install on a GPT disk requires a 1 MiB unformatted partition with the bios_grub flag. No such partition was found.\n\nOptions:\n  1. Use the full wipe path (creates MBR automatically for BIOS)\n  2. Open the manual editor, create a 1 MiB partition, then run:\n     parted $disk set N bios_grub on\n  3. Switch to UEFI boot mode if the firmware supports it\n\nNo changes were made."
+	return 1
+}
+
 initialize_disk_dialog() {
 	local disk=${1:?disk is required}
 	local layout_message=""
@@ -427,7 +485,7 @@ disk_preview_operations() {
 		wipe)
 			lines+=("- Remove every existing partition from $disk")
 			if [[ $boot_mode == "uefi" ]]; then
-				lines+=("- Create partition 1: EFI System Partition, 512 MiB, FAT32")
+				lines+=("- Create partition 1: EFI System Partition, 1024 MiB, FAT32")
 				lines+=("- Mount partition 1 at /boot")
 			fi
 			if [[ $boot_mode == "uefi" ]]; then
@@ -444,7 +502,7 @@ disk_preview_operations() {
 				if [[ -n $efi_partition ]]; then
 					lines+=("- Reuse EFI partition $efi_partition and mount it at /boot")
 				else
-					lines+=("- Create a new EFI partition in free space: 512 MiB, FAT32")
+					lines+=("- Create a new EFI partition in free space: 1024 MiB, FAT32")
 					lines+=("- Mount the new EFI partition at /boot")
 				fi
 			fi
@@ -467,8 +525,11 @@ disk_preview_operations() {
 	esac
 
 	if [[ $filesystem == "btrfs" ]]; then
-		lines+=("- Create btrfs subvolume @ and mount it at /")
-		lines+=("- Create btrfs subvolume @home and mount it at /home")
+		lines+=("- Create btrfs subvolumes: @, @home, @var, @snapshots")
+		lines+=("- Mount @ at / (compress=zstd,noatime)")
+		lines+=("- Mount @home at /home")
+		lines+=("- Mount @var at /var")
+		lines+=("- Mount @snapshots at /.snapshots")
 	fi
 	if [[ $boot_mode == "uefi" ]]; then
 		lines+=("- Install systemd-boot to the EFI partition")
@@ -606,7 +667,7 @@ prepare_free_space_install() {
 	existing_efi="$(find_existing_efi_partition "$disk" || true)"
 	required_total_mib=$required_root_mib
 	if [[ $boot_mode == "uefi" && -z $existing_efi ]]; then
-		required_total_mib=$((required_total_mib + 512))
+		required_total_mib=$((required_total_mib + 1024))
 	fi
 
 	largest_region="$(largest_free_region "$disk")"
@@ -632,6 +693,10 @@ prepare_free_space_install() {
 		warning_box "Mounted Partitions Detected" "One or more partitions on $disk are currently mounted. Unmount them before modifying free space on this disk."
 		return 1
 	fi
+	check_bios_gpt_safety "$disk" "$boot_mode" || return 1
+	if [[ $boot_mode == "uefi" && -n $existing_efi ]]; then
+		validate_existing_efi_partition "$existing_efi" || true
+	fi
 
 	show_disk_operation_preview "$scenario" "$disk" "$boot_mode" "$filesystem" "" "$existing_efi" "$size_mib"
 
@@ -646,7 +711,7 @@ prepare_free_space_install() {
 	before_partitions="$(partition_name_list "$disk")"
 	if [[ $boot_mode == "uefi" && -z $existing_efi ]]; then
 		efi_start_mib=$start_mib
-		efi_end_mib=$((start_mib + 512))
+		efi_end_mib=$((start_mib + 1024))
 		root_start_mib=$efi_end_mib
 		parted -s "$disk" mkpart ARCH_EFI fat32 "${efi_start_mib}MiB" "${efi_end_mib}MiB" || return 1
 	else
@@ -697,6 +762,7 @@ manual_partition_editor() {
 		warning_box "Initialize Disk First" "The partition table could not be read safely. Initialize the disk first, then reopen the manual editor."
 		return 1
 	fi
+	check_bios_gpt_safety "$disk" "$boot_mode" || return 1
 
 	clear_screen
 	if command -v cfdisk >/dev/null 2>&1; then
@@ -738,6 +804,10 @@ manual_partition_editor() {
 				;;
 		esac
 		format_efi="$(select_boolean_value "EFI Formatting" "Format the selected EFI partition? Choose false when reusing a Windows or existing EFI partition." "false" "Format EFI" "Keep EFI contents")" || return 1
+		# Validate size and fstype of the chosen EFI partition
+		if [[ -n $efi_partition ]]; then
+			validate_existing_efi_partition "$efi_partition" || true
+		fi
 	fi
 
 	show_disk_operation_preview "manual" "$disk" "$boot_mode" "$filesystem" "$root_partition" "$efi_partition" 0 "$format_efi"

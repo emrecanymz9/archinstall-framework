@@ -31,8 +31,12 @@ source "$SCRIPT_DIR/ui.sh"
 source "$SCRIPT_DIR/state.sh"
 # shellcheck source=installer/core/hooks.sh
 safe_source_module "$SCRIPT_DIR/core/hooks.sh" || true
+# shellcheck source=installer/core/module-registry.sh
+safe_source_module "$SCRIPT_DIR/core/module-registry.sh" || true
 # shellcheck source=installer/core/plugin-loader.sh
 safe_source_module "$SCRIPT_DIR/core/plugin-loader.sh" || true
+# shellcheck source=installer/modules/config.sh
+safe_source_module "$SCRIPT_DIR/modules/config.sh" || true
 # shellcheck source=installer/modules/runtime.sh
 safe_source_module "$SCRIPT_DIR/modules/runtime.sh" || true
 # shellcheck source=installer/modules/hardware.sh
@@ -56,6 +60,12 @@ safe_source_module "$SCRIPT_DIR/modules/secureboot.sh" || true
 safe_source_module "$SCRIPT_DIR/modules/profiles.sh" || true
 # shellcheck source=installer/modules/profile.sh
 safe_source_module "$SCRIPT_DIR/modules/profile.sh" || true
+# shellcheck source=installer/modules/packages.sh
+safe_source_module "$SCRIPT_DIR/modules/packages.sh" || true
+# shellcheck source=installer/modules/luks.sh
+safe_source_module "$SCRIPT_DIR/modules/luks.sh" || true
+# shellcheck source=installer/modules/snapshots.sh
+safe_source_module "$SCRIPT_DIR/modules/snapshots.sh" || true
 
 INSTALL_USER_PASSWORD=${INSTALL_USER_PASSWORD:-""}
 INSTALL_ROOT_PASSWORD=${INSTALL_ROOT_PASSWORD:-""}
@@ -81,6 +91,12 @@ fi
 
 if type load_installer_plugins >/dev/null 2>&1; then
 	load_installer_plugins || true
+fi
+if type archinstall_register_builtin_modules >/dev/null 2>&1; then
+	archinstall_register_builtin_modules || true
+fi
+if type sync_install_config_json >/dev/null 2>&1; then
+	sync_install_config_json >/dev/null 2>&1 || true
 fi
 
 log_info() {
@@ -325,7 +341,7 @@ show_install_failure_dialog() {
 	local log_file=${1:?log file is required}
 	local excerpt=""
 
-	excerpt="$(tail -n 20 "$log_file" 2>/dev/null | sed 's/"/'"'"'/g' | tr -cd '\11\12\15\40-\176' || true)"
+	excerpt="$(tail -n 50 "$log_file" 2>/dev/null | sed 's/"/'"'"'/g' | tr -cd '\11\12\15\40-\176' || true)"
 	if [[ -z $excerpt ]]; then
 		excerpt='No log output captured.'
 	fi
@@ -354,11 +370,13 @@ select_startup_keymap() {
 	local choice=""
 	local custom_keymap=""
 
-	menu "Console Keyboard" "Choose the live ISO console keymap.\n\nCurrent: $current_keymap" 14 70 5 \
-		"us" "US English" \
-		"trq" "Turkish Q" \
-		"de" "German" \
-		"custom" "Enter a custom keymap"
+	menu "Console Keyboard" "Choose the keyboard layout for the live ISO console.\n\nThis only affects the console during installation.\n\nCurrent: $current_keymap" 18 76 6 \
+		"us"     "US English (ANSI QWERTY)" \
+		"uk"     "UK English (ISO QWERTY with £)" \
+		"de"     "German (ISO QWERTZ)" \
+		"fr"     "French (AZERTY)" \
+		"trq"    "Turkish Q (ISO Q layout)" \
+		"custom" "Enter a custom keymap code (loadkeys compatible)"
 	choice="$DIALOG_RESULT"
 	case $DIALOG_STATUS in
 		0)
@@ -474,6 +492,32 @@ select_boolean_value() {
 	menu "$title" "$prompt\n\nCurrent: $current_value" 14 70 3 \
 		"true" "$enable_label" \
 		"false" "$disable_label"
+
+	case $DIALOG_STATUS in
+		0)
+			printf '%s\n' "$DIALOG_RESULT"
+			return 0
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+select_snapshot_provider() {
+	local filesystem=${1:-ext4}
+	local install_profile=${2:-daily}
+	local current_provider=${3:-}
+
+	if [[ -z $current_provider ]] && declare -F snapshot_default_provider >/dev/null 2>&1; then
+		current_provider="$(snapshot_default_provider "$filesystem" "$install_profile")"
+	fi
+	current_provider=${current_provider:-none}
+
+	menu "Snapshots" "Choose an optional snapshot engine.\n\nCurrent: $(snapshot_provider_label "$current_provider")\nFilesystem: $filesystem" 16 72 4 \
+		"none" "No snapshot integration" \
+		"snapper" "Btrfs snapshots with timeline cleanup" \
+		"timeshift" "Timeshift snapshots"
 
 	case $DIALOG_STATUS in
 		0)
@@ -894,7 +938,7 @@ select_filesystem() {
 
 	menu "Filesystem" "Choose the root filesystem." 14 70 4 \
 		"ext4" "Default fallback filesystem" \
-		"btrfs" "Create @ and @home subvolumes with zstd compression"
+		"btrfs" "Create @, @home, @var, @snapshots subvolumes with zstd compression"
 	selected="$DIALOG_RESULT"
 	case $DIALOG_STATUS in
 		0)
@@ -1068,6 +1112,9 @@ configure_install_profile() {
 	local display_manager=""
 	local greeter_frontend="tuigreet"
 	local display_mode=""
+	local enable_luks="false"
+	local luks_password=""
+	local snapshot_provider="none"
 	local package_config_warning=""
 
 	refresh_runtime_context || true
@@ -1084,6 +1131,11 @@ configure_install_profile() {
 	username="$(prompt_required_input "Username" "Create the primary user account." "$(state_or_default "USERNAME" "archuser")")" || return 1
 	install_profile="$(select_install_profile "$(state_or_default "INSTALL_PROFILE" "daily")")" || return 1
 	filesystem="$(select_filesystem "$(state_or_default "FILESYSTEM" "ext4")")" || return 1
+	enable_luks="$(select_boolean_value "Encryption" "Enable LUKS2 full-disk encryption for the root filesystem?" "$(state_or_default "ENABLE_LUKS" "false")" "Enable LUKS2" "Disable encryption")" || return 1
+	if [[ $enable_luks == "true" ]]; then
+		luks_password="$(prompt_password "LUKS Password")" || return 1
+	fi
+	snapshot_provider="$(select_snapshot_provider "$filesystem" "$install_profile" "$(state_or_default "SNAPSHOT_PROVIDER" "")")" || return 1
 	enable_zram="$(select_zram_preference "$(state_or_default "ENABLE_ZRAM" "$ZRAM")")" || return 1
 	user_password="$(prompt_password "User Password")" || return 1
 	root_password="$(prompt_password "Root Password")" || return 1
@@ -1141,6 +1193,9 @@ configure_install_profile() {
 	set_state "CUSTOM_TOOLS" "$custom_tools" || return 1
 	set_state "SECURE_BOOT_MODE" "$secure_boot_mode" || return 1
 	set_state "FILESYSTEM" "$filesystem" || return 1
+	set_state "ENABLE_LUKS" "$enable_luks" || return 1
+	set_state "LUKS_MAPPER_NAME" "cryptroot" || return 1
+	set_state "SNAPSHOT_PROVIDER" "$snapshot_provider" || return 1
 	set_state "ENABLE_ZRAM" "$enable_zram" || return 1
 	set_state "DESKTOP_PROFILE" "$desktop_profile" || return 1
 	set_state "DISPLAY_MODE" "$display_mode" || return 1
@@ -1149,8 +1204,12 @@ configure_install_profile() {
 	set_state "BOOT_MODE" "$boot_mode" || return 1
 	INSTALL_USER_PASSWORD="$user_password"
 	INSTALL_ROOT_PASSWORD="$root_password"
+	INSTALL_LUKS_PASSWORD="$luks_password"
+	if type sync_install_config_json >/dev/null 2>&1; then
+		sync_install_config_json >/dev/null 2>&1 || true
+	fi
 
-	msg "Profile Saved" "Installation profile updated.\n\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nInstall profile: $(install_profile_label "$install_profile")\nEditor: $(editor_choice_label "$editor_choice")\nVS Code: $include_vscode\nSecure Boot mode: $(secure_boot_mode_label "$secure_boot_mode")\nFilesystem: $filesystem\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay mode: $(display_mode_label "$display_mode")\nDisplay manager: $(display_manager_label "$display_manager")\nGreeter frontend: $(greeter_frontend_label "$greeter_frontend")\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nUser password: set\nRoot password: set"
+	msg "Profile Saved" "Installation profile updated.\n\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nInstall profile: $(install_profile_label "$install_profile")\nEditor: $(editor_choice_label "$editor_choice")\nVS Code: $include_vscode\nSecure Boot mode: $(secure_boot_mode_label "$secure_boot_mode")\nFilesystem: $filesystem\nEncryption: $enable_luks\nSnapshots: $(snapshot_provider_label "$snapshot_provider")\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay mode: $(display_mode_label "$display_mode")\nDisplay manager: $(display_manager_label "$display_manager")\nGreeter frontend: $(greeter_frontend_label "$greeter_frontend")\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nUser password: set\nRoot password: set"
 }
 
 validate_install_profile() {
@@ -1163,6 +1222,9 @@ validate_install_profile() {
 	has_state "USERNAME" || missing+=("user")
 	[[ -n $INSTALL_USER_PASSWORD ]] || missing+=("user password")
 	[[ -n $INSTALL_ROOT_PASSWORD ]] || missing+=("root password")
+	if [[ $(state_or_default "ENABLE_LUKS" "false") == "true" && -z ${INSTALL_LUKS_PASSWORD:-} ]]; then
+		missing+=("LUKS password")
+	fi
 
 	if [[ ${#missing[@]} -eq 0 ]]; then
 		return 0
@@ -1202,6 +1264,8 @@ show_state_summary() {
 	local greeter_frontend
 	local disk_type
 	local install_scenario
+	local enable_luks
+	local snapshot_provider
 	local secure_boot_state
 	local secure_boot_mode
 	local environment_summary_value
@@ -1222,6 +1286,8 @@ show_state_summary() {
 	filesystem="$(state_or_default "FILESYSTEM" "ext4")"
 	disk_type="$(state_or_default "DISK_TYPE" "auto")"
 	install_scenario="$(state_or_default "INSTALL_SCENARIO" "wipe")"
+	enable_luks="$(state_or_default "ENABLE_LUKS" "false")"
+	snapshot_provider="$(state_or_default "SNAPSHOT_PROVIDER" "none")"
 	enable_zram="$(state_or_default "ENABLE_ZRAM" "false")"
 	desktop_profile="$(state_or_default "DESKTOP_PROFILE" "none")"
 	display_mode="$(state_or_default "DISPLAY_MODE" "auto")"
@@ -1238,7 +1304,7 @@ show_state_summary() {
 	[[ -n $INSTALL_USER_PASSWORD ]] && user_password_state="set"
 	[[ -n $INSTALL_ROOT_PASSWORD ]] && root_password_state="set"
 
-	msg "Installer State" "Saved state:\n\nEnvironment: $environment_summary_value\nGPU: $gpu_label_value\nDisk: $disk\nDisk type: $disk_type\nDisk strategy: $install_scenario\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nSecure Boot mode: $(secure_boot_mode_label "$secure_boot_mode")\nEFI: $efi_partition\nRoot: $root_partition\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nInstall profile: $(install_profile_label "$install_profile_value")\nFilesystem: $filesystem\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay mode: $(display_mode_label "$display_mode")\nResolved mode: $(display_mode_label "$resolved_display_mode")\nDisplay manager: $(display_manager_label "$display_manager")\nGreeter frontend: $(greeter_frontend_label "$greeter_frontend")\nSafe mode: $INSTALL_SAFE_MODE\nUser password: $user_password_state\nRoot password: $root_password_state\nDEV_MODE: $DEV_MODE\nUI mode: $INSTALL_UI_MODE" 27 82
+	msg "Installer State" "Saved state:\n\nEnvironment: $environment_summary_value\nGPU: $gpu_label_value\nDisk: $disk\nDisk type: $disk_type\nDisk strategy: $install_scenario\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nSecure Boot mode: $(secure_boot_mode_label "$secure_boot_mode")\nEFI: $efi_partition\nRoot: $root_partition\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nInstall profile: $(install_profile_label "$install_profile_value")\nFilesystem: $filesystem\nEncryption: $enable_luks\nSnapshots: $(snapshot_provider_label "$snapshot_provider")\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay mode: $(display_mode_label "$display_mode")\nResolved mode: $(display_mode_label "$resolved_display_mode")\nDisplay manager: $(display_manager_label "$display_manager")\nGreeter frontend: $(greeter_frontend_label "$greeter_frontend")\nSafe mode: $INSTALL_SAFE_MODE\nUser password: $user_password_state\nRoot password: $root_password_state\nDEV_MODE: $DEV_MODE\nUI mode: $INSTALL_UI_MODE" 29 82
 }
 
 confirm_installation() {
@@ -1260,7 +1326,7 @@ confirm_installation() {
 
 	validate_install_profile || return 1
 
-	message="$(installer_context_header)\n\nThis will prepare a bootable Arch Linux system on:\n\n$disk\n\nDisk type: $(state_or_default "DISK_TYPE" "auto")\nDisk strategy: $(state_or_default "INSTALL_SCENARIO" "wipe")\nBoot mode: $(boot_mode_status_label "$(state_or_default "BOOT_MODE" "bios")" "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")\nSecure Boot mode: $(secure_boot_mode_label "$(state_or_default "SECURE_BOOT_MODE" "disabled")")\nHostname: $(state_or_default "HOSTNAME" "archlinux")\nTimezone: $(state_or_default "TIMEZONE" "Europe/Istanbul")\nLocale: $(state_or_default "LOCALE" "en_US.UTF-8")\nKeyboard: $(state_or_default "KEYMAP" "us")\nUser: $(state_or_default "USERNAME" "archuser")\nInstall profile: $(install_profile_label "$(state_or_default "INSTALL_PROFILE" "daily")")\nFilesystem: $(state_or_default "FILESYSTEM" "ext4")\nZram: $(state_or_default "ENABLE_ZRAM" "false")\nDesktop: $(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")\nDisplay mode: $(display_mode_label "$(state_or_default "DISPLAY_MODE" "auto")")\nDisplay manager: $(display_manager_label "$(state_or_default "DISPLAY_MANAGER" "none")")\nGreeter frontend: $(greeter_frontend_label "$(state_or_default "GREETER_FRONTEND" "tuigreet")")\nSafe mode: $(state_or_default "INSTALL_SAFE_MODE" "$INSTALL_SAFE_MODE")\n\nDestructive steps may erase existing data."
+	message="$(installer_context_header)\n\nThis will prepare a bootable Arch Linux system on:\n\n$disk\n\nDisk type: $(state_or_default "DISK_TYPE" "auto")\nDisk strategy: $(state_or_default "INSTALL_SCENARIO" "wipe")\nBoot mode: $(boot_mode_status_label "$(state_or_default "BOOT_MODE" "bios")" "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")\nSecure Boot mode: $(secure_boot_mode_label "$(state_or_default "SECURE_BOOT_MODE" "disabled")")\nHostname: $(state_or_default "HOSTNAME" "archlinux")\nTimezone: $(state_or_default "TIMEZONE" "Europe/Istanbul")\nLocale: $(state_or_default "LOCALE" "en_US.UTF-8")\nKeyboard: $(state_or_default "KEYMAP" "us")\nUser: $(state_or_default "USERNAME" "archuser")\nInstall profile: $(install_profile_label "$(state_or_default "INSTALL_PROFILE" "daily")")\nFilesystem: $(state_or_default "FILESYSTEM" "ext4")\nEncryption: $(state_or_default "ENABLE_LUKS" "false")\nSnapshots: $(snapshot_provider_label "$(state_or_default "SNAPSHOT_PROVIDER" "none")")\nZram: $(state_or_default "ENABLE_ZRAM" "false")\nDesktop: $(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")\nDisplay mode: $(display_mode_label "$(state_or_default "DISPLAY_MODE" "auto")")\nDisplay manager: $(display_manager_label "$(state_or_default "DISPLAY_MANAGER" "none")")\nGreeter frontend: $(greeter_frontend_label "$(state_or_default "GREETER_FRONTEND" "tuigreet")")\nSafe mode: $(state_or_default "INSTALL_SAFE_MODE" "$INSTALL_SAFE_MODE")\n\nDestructive steps may erase existing data."
 	if flag_enabled "$DEV_MODE"; then
 		message+="\n\nDev mode flags:\nSKIP_PARTITION=$SKIP_PARTITION\nSKIP_PACSTRAP=$SKIP_PACSTRAP\nSKIP_CHROOT=$SKIP_CHROOT\nINSTALL_UI_MODE=$INSTALL_UI_MODE"
 	fi

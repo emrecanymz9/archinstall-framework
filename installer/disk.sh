@@ -107,15 +107,15 @@ select_disk() {
 			show_disk_analysis "$selected_disk"
 			layout_state="$(disk_layout_state "$selected_disk")"
 			strategy_args=(
-				"wipe" "Full disk wipe and automatic partitioning"
+				"wipe" "Auto partition (recommended): full disk wipe and guided layout"
 			)
 			if [[ $layout_state == "empty" || $layout_state == "corrupt" || $layout_state == "unreadable" ]]; then
 				strategy_args+=("initialize" "Initialize disk (create GPT)")
 			fi
 			strategy_args+=(
-				"free-space" "Create Linux partitions in the largest free-space region"
-				"dual-boot" "Use free space while preserving detected Windows partitions"
-				"manual" "Open the manual partition editor and select partitions"
+				"free-space" "Auto partition free space on the selected disk"
+				"dual-boot" "Auto partition free space while preserving detected Windows partitions"
+				"manual" "Manual partition (basic): choose and reuse prepared partitions"
 				"back" "Return to disk selection"
 			)
 			menu "Disk Strategy" "Choose how to use $selected_disk.\n\nBoot mode: $boot_mode\nStatus: $(disk_layout_message "$selected_disk")\nAlerts: $(disk_alerts "$selected_disk")" 20 90 10 "${strategy_args[@]}"
