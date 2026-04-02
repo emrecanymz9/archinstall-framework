@@ -354,11 +354,11 @@ get_user_packages() {
 
 	case $install_profile in
 		daily)
-			append_csv_packages "$(profile_config_csv "ARCHINSTALL_USER_PACKAGES" "daily" "kate,git,curl,wget,htop,tmux,unzip,p7zip,rsync,man-db,man-pages,less,fastfetch")" package_ref
+			append_csv_packages "$(profile_config_csv "ARCHINSTALL_USER_PACKAGES" "daily" "kate,git,curl,wget,unzip,p7zip,rsync,man-db,man-pages,less,fastfetch")" package_ref
 			;;
 		dev)
 			append_csv_packages "$(editor_packages_csv "$editor_choice")" package_ref
-			append_csv_packages "$(profile_config_csv "ARCHINSTALL_USER_PACKAGES" "dev" "git,htop,tmux,curl,wget,fastfetch,ripgrep,fd,less,man-db,man-pages")" package_ref
+			append_csv_packages "$(profile_config_csv "ARCHINSTALL_USER_PACKAGES" "dev" "git,curl,wget,fastfetch,ripgrep,fd,less,man-db,man-pages")" package_ref
 			if [[ $include_vscode == "true" ]]; then
 				append_csv_packages "$(config_csv_or_default "ARCHINSTALL_VSCODE_PACKAGES" "code")" package_ref
 			fi

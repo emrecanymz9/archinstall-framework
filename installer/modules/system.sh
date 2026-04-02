@@ -102,9 +102,6 @@ normalize_virtualization_vendor() {
 		hyperv|microsoft)
 			printf 'hyperv\n'
 			;;
-		xen)
-			printf 'xen\n'
-			;;
 		none|""|baremetal)
 			printf 'baremetal\n'
 			;;
@@ -136,9 +133,6 @@ environment_label() {
 			;;
 		hyperv)
 			printf 'Microsoft Hyper-V Virtual Machine\n'
-			;;
-		xen)
-			printf 'Xen Virtual Machine\n'
 			;;
 		baremetal)
 			printf 'Bare Metal\n'

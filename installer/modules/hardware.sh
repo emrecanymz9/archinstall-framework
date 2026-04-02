@@ -18,7 +18,7 @@ gpu_vendor_label() {
 		nvidia)
 			printf 'NVIDIA\n'
 			;;
-		vmware|virtualbox|qemu|kvm|hyperv|xen|vm)
+		vmware|virtualbox|qemu|kvm|hyperv|vm)
 			printf 'VM\n'
 			;;
 		none)
@@ -93,16 +93,26 @@ hardware_profile_packages() {
 		qemu|kvm)
 			package_ref+=(spice-vdagent qemu-guest-agent)
 			;;
+		hyperv)
+			package_ref+=(hyperv)
+			;;
 		*)
 			;;
 	esac
+
+	# Laptop-specific optimisation packages
+	local environment_type=""
+	environment_type="$(get_state "ENVIRONMENT_TYPE" 2>/dev/null || printf 'unknown')"
+	if [[ $environment_type == "laptop" ]]; then
+		package_ref+=(tlp acpi)
+	fi
 
 	if [[ $desktop_profile != "none" ]]; then
 		case $gpu_vendor in
 			nvidia)
 				package_ref+=(nvidia nvidia-utils)
 				;;
-			intel|amd|generic|vm|vmware|virtualbox|qemu|kvm|hyperv|xen)
+			intel|amd|generic|vm|vmware|virtualbox|qemu|kvm|hyperv)
 				package_ref+=(mesa)
 				;;
 			*)
@@ -128,9 +138,18 @@ hardware_profile_services() {
 		qemu|kvm)
 			service_ref+=(spice-vdagentd.service qemu-guest-agent.service)
 			;;
+		hyperv)
+			service_ref+=(hv_fcopy_daemon.service hv_kvp_daemon.service hv_vss_daemon.service)
+			;;
 		*)
 			;;
 	esac
+
+	local environment_type=""
+	environment_type="$(get_state "ENVIRONMENT_TYPE" 2>/dev/null || printf 'unknown')"
+	if [[ $environment_type == "laptop" ]]; then
+		service_ref+=(tlp.service acpid.service)
+	fi
 
 	if [[ $desktop_profile != "none" ]]; then
 		service_ref+=(bluetooth.service)

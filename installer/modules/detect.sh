@@ -88,10 +88,6 @@ detect_environment_vendor_safe() {
 		printf 'hyperv\n'
 		return 0
 	fi
-	if detect_text_matches "$combined_text" 'xen'; then
-		printf 'xen\n'
-		return 0
-	fi
 
 	if [[ -n $detected || -n $dmi_vendor || -n $dmi_product ]]; then
 		printf 'baremetal\n'
@@ -107,7 +103,7 @@ detect_environment_type() {
 
 	environment_vendor="$(detect_environment_vendor_safe)"
 	case $environment_vendor in
-		vmware|virtualbox|kvm|hyperv|xen)
+		vmware|virtualbox|kvm|hyperv)
 			printf 'vm\n'
 			return 0
 			;;
@@ -140,7 +136,7 @@ detect_gpu_vendor_safe() {
 
 	environment_vendor="$(detect_environment_vendor_safe)"
 	case $environment_vendor in
-		vmware|virtualbox|kvm|hyperv|xen)
+		vmware|virtualbox|kvm|hyperv)
 			printf 'vm\n'
 			return 0
 			;;

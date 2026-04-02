@@ -185,7 +185,7 @@ detect_disk_type() {
 
 	disk_name="$(basename "$disk")"
 	if [[ $disk_name == nvme* ]]; then
-		printf 'ssd\n'
+		printf 'nvme\n'
 		return 0
 	fi
 
@@ -218,7 +218,7 @@ ext4_mount_options() {
 	local disk_type=${1:-unknown}
 	local -a options=(defaults noatime)
 
-	if [[ $disk_type == "ssd" ]]; then
+	if [[ $disk_type == "ssd" || $disk_type == "nvme" ]]; then
 		options+=(discard=async)
 	fi
 
@@ -230,7 +230,7 @@ btrfs_mount_options() {
 	local disk_type=${2:-unknown}
 	local -a options=("subvol=$subvolume" compress=zstd noatime)
 
-	if [[ $disk_type == "ssd" ]]; then
+	if [[ $disk_type == "ssd" || $disk_type == "nvme" ]]; then
 		options+=(discard=async)
 	fi
 
@@ -417,17 +417,20 @@ cleanup_mounts() {
 }
 
 cleanup_install() {
-	local reason=${1:-EXIT}
-
 	if [[ ${ARCHINSTALL_CLEANUP_ACTIVE:-false} == true && ${ARCHINSTALL_INSTALL_SUCCESS:-false} != true ]]; then
-		log_line "Cleanup triggered by $reason"
+		log_line "Running post-install cleanup (unmounting)"
 		cleanup_mounts || true
 		ARCHINSTALL_CLEANUP_ACTIVE=false
 	fi
+}
 
-	if [[ $reason == "INT" ]]; then
-		exit 130
+on_install_sigint() {
+	# Called only on genuine Ctrl-C / SIGINT.  Set flag then exit so the
+	# EXIT trap (cleanup_install) handles the actual umount cleanup once.
+	if [[ ${ARCHINSTALL_CLEANUP_ACTIVE:-false} == true ]]; then
+		log_line "[WARN] Installation interrupted by user"
 	fi
+	exit 130
 }
 
 show_install_error() {
@@ -561,17 +564,39 @@ run_step_with_retry() {
 	done
 }
 
+filter_valid_packages() {
+	# Remove packages that are not resolvable in the current pacman DB.
+	# pacman -Sp resolves a package name against sync DBs without downloading.
+	# Unknown/typo'd names are logged as warnings and skipped.
+	local -n _fvp_in=${1:?input ref required}
+	local -n _fvp_out=${2:?output ref required}
+	local pkg=""
+
+	_fvp_out=()
+	for pkg in "${_fvp_in[@]}"; do
+		[[ -n $pkg ]] || continue
+		if pacman -Sp "$pkg" >/dev/null 2>&1; then
+			_fvp_out+=("$pkg")
+		else
+			log_line "[WARN] Package not found in repos, skipping: $pkg"
+		fi
+	done
+}
+
 run_pacstrap_install() {
 	local -a mandatory_packages=(base linux linux-firmware mkinitcpio sudo)
 	local -a packages=("$@")
+	local -a validated_packages=()
 
 	append_unique_items packages "${mandatory_packages[@]}"
 	log_line "[DEBUG] Mandatory pacstrap packages: ${mandatory_packages[*]}"
-	log_line "[DEBUG] Final pacstrap package list: ${packages[*]}"
+	log_line "[DEBUG] Pre-validation pacstrap package list: ${packages[*]}"
+	filter_valid_packages packages validated_packages
+	log_line "[DEBUG] Final pacstrap package list: ${validated_packages[*]}"
 	# -K initialises an empty pacman keyring inside the new root so the installed
 	# system is not dependent on the live-ISO keyring state.
 	run_step_with_retry "Installing the base Arch Linux packages" 3 \
-		pacstrap -K /mnt "${packages[@]}" --noconfirm
+		pacstrap -K /mnt "${validated_packages[@]}" --noconfirm
 }
 
 get_partition_uuid() {
@@ -928,6 +953,8 @@ build_chroot_script() {
 	current_secure_boot_state="$(get_state "CURRENT_SECURE_BOOT_STATE" 2>/dev/null || printf 'unsupported')"
 	current_secure_boot_setup_mode="$(get_state "CURRENT_SECURE_BOOT_SETUP_MODE" 2>/dev/null || printf 'unknown')"
 	environment_vendor="$(get_state "ENVIRONMENT_VENDOR" 2>/dev/null || printf 'baremetal')"
+	local environment_type=""
+	environment_type="$(get_state "ENVIRONMENT_TYPE" 2>/dev/null || printf 'unknown')"
 	gpu_vendor="$(get_state "GPU_VENDOR" 2>/dev/null || printf 'generic')"
 	snapshot_provider="$(get_state "SNAPSHOT_PROVIDER" 2>/dev/null || printf 'none')"
 	enable_luks="$(get_state "ENABLE_LUKS" 2>/dev/null || printf 'false')"
@@ -971,6 +998,8 @@ build_chroot_script() {
 	printf -v quoted_current_secure_boot_state '%q' "$current_secure_boot_state"
 	printf -v quoted_current_secure_boot_setup_mode '%q' "$current_secure_boot_setup_mode"
 	printf -v quoted_environment_vendor '%q' "$environment_vendor"
+	local quoted_environment_type=""
+	printf -v quoted_environment_type '%q' "$environment_type"
 	printf -v quoted_gpu_vendor '%q' "$gpu_vendor"
 	printf -v quoted_snapshot_provider '%q' "$snapshot_provider"
 	printf -v quoted_enable_luks '%q' "$enable_luks"
@@ -1007,6 +1036,7 @@ TARGET_SECURE_BOOT_MODE=$quoted_secure_boot_mode
 TARGET_CURRENT_SECURE_BOOT_STATE=$quoted_current_secure_boot_state
 TARGET_SECURE_BOOT_SETUP_MODE=$quoted_current_secure_boot_setup_mode
 TARGET_ENVIRONMENT_VENDOR=$quoted_environment_vendor
+TARGET_ENVIRONMENT_TYPE=$quoted_environment_type
 TARGET_GPU_VENDOR=$quoted_gpu_vendor
 TARGET_SNAPSHOT_PROVIDER=$quoted_snapshot_provider
 TARGET_LUKS_ENABLED=$quoted_enable_luks
@@ -1186,9 +1216,18 @@ configure_vm_services() {
 			enable_service_if_present spice-vdagentd.service
 			enable_service_if_present qemu-guest-agent.service
 			;;
+		hyperv)
+			enable_service_if_present hv_fcopy_daemon.service
+			enable_service_if_present hv_kvp_daemon.service
+			enable_service_if_present hv_vss_daemon.service
+			;;
 		*)
 			;;
 	esac
+	if [[ \$TARGET_ENVIRONMENT_TYPE == "laptop" ]]; then
+		enable_service_if_present tlp.service
+		enable_service_if_present acpid.service
+	fi
 }
 
 configure_secure_boot_mode() {
@@ -1638,8 +1677,8 @@ run_install() {
 	if (
 		ARCHINSTALL_INSTALL_SUCCESS=false
 		ARCHINSTALL_CLEANUP_ACTIVE=true
-		trap 'cleanup_install EXIT' EXIT
-		trap 'cleanup_install INT' INT
+		trap 'cleanup_install' EXIT
+		trap 'on_install_sigint' INT
 
 		log_line "Starting installation on $disk"
 		log_line "Boot mode: $boot_mode"
