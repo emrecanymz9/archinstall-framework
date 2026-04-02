@@ -85,13 +85,23 @@ The installer intentionally keeps the live ISO minimal. Heavy packages belong in
 - UEFI with systemd-boot or BIOS with GRUB
 - Secure Boot modes: `Disabled`, `Assisted`, `Advanced`
 - hardware abstraction for VMware, VirtualBox, QEMU/KVM, and common GPU vendors
+- CPU microcode auto-detected and installed (`intel-ucode` or `amd-ucode`)
 - optional zram via `zram-generator`
 - config-driven package tiers from `config/packages.conf`
 - KDE Plasma profile with both Wayland and X11 session support
 - install profiles: `DAILY`, `DEV`, `CUSTOM`
 - automatic `sudo` setup with `wheel` group support
 - display mode selection: `Auto`, `Wayland`, `X11`
-- `greetd` with `tuigreet` by default and optional `qtgreet`
+- display managers: `greetd`/`tuigreet`, optional `qtgreet`, or `sddm` (recommended for KDE)
+- `iwd` Wi-Fi backend configured automatically when installed
+- btrfs four-subvolume layout: `@`, `@home`, `@var`, `@snapshots`
+- snapper timeline snapshots with automatic cleanup timers
+- `grub-btrfs` included only for BIOS/GRUB installs
+- 1 GiB EFI partition enforced on new wipe/free-space installs
+- EFI validation on manual partition reuse (size and filesystem warnings)
+- BIOS + GPT safety check blocks unsafe grub-install scenarios
+- pacstrap run with `-K` (target keyring initialisation)
+- install manifest written to user home after successful install
 - plugin hooks for packages, chroot snippets, and menu extensions
 - pacman-key and mirror bootstrap hardening
 - install log at `/tmp/archinstall_install.log`
@@ -213,10 +223,11 @@ Display mode choices:
 
 Current display-manager behavior:
 
-- `greetd`: default display manager for Plasma installs
-- `tuigreet`: default frontend and always supported by the built-in package set
-- `qtgreet`: optional frontend for KDE-oriented deployments when a plugin or custom package source provides it
-- greetd always launches Plasma on Wayland and leaves X11 available as a manual fallback helper
+- `greetd`: GTK-based display manager; `tuigreet` is the default frontend
+- `tuigreet`: TUI frontend for greetd, always supported by the built-in package set
+- `qtgreet`: optional Qt/QML frontend for greetd when a plugin or custom package source provides it
+- `sddm`: Qt-based display manager, recommended for KDE; installs `sddm` and `sddm-kcm`; writes `/etc/sddm.conf.d/kde_settings.conf` with Breeze theme defaults
+- greetd launches Plasma on Wayland and leaves X11 available as a manual fallback
 - invalid or missing display-manager binaries leave the system on TTY with a manual start hint
 
 ## Package Set
@@ -235,6 +246,17 @@ The target install always includes the base packages requested in this hardening
 
 The KDE profile additionally installs Plasma, PipeWire, Bluetooth, and the selected display manager.
 
+Required packages are resolved in layers:
+
+1. Required base: `sudo`, `networkmanager`, `iwd`, `iptables-nft`, `dialog`, `make`
+2. Filesystem: `btrfs-progs` (btrfs) or nothing extra (ext4)
+3. Profile packages from `DAILY`, `DEV`, or `CUSTOM`
+4. Hardware: CPU microcode (`intel-ucode` or `amd-ucode`), GPU drivers, VM guest tools
+5. Desktop profile: Plasma, PipeWire stack, Bluetooth, display manager
+6. Snapshot tools: `snapper`, `snap-pac`, `grub-btrfs` (BIOS only)
+7. Optional: `zram-generator`, LUKS2 tools, Secure Boot tools
+8. Plugin-contributed packages from the plugin loader
+
 ## Filesystem Notes
 
 ### ext4
@@ -246,11 +268,15 @@ The KDE profile additionally installs Plasma, PipeWire, Bluetooth, and the selec
 
 ### btrfs
 
-- creates `@` and `@home`
-- mounts `/` with `subvol=@,compress=zstd`
-- mounts `/home` with `subvol=@home,compress=zstd`
-- writes explicit UUID-based `fstab` entries
+- creates four subvolumes: `@`, `@home`, `@var`, `@snapshots`
+- mounts `/` from `@` with `subvol=@,compress=zstd,noatime`
+- mounts `/home` from `@home` with `subvol=@home,compress=zstd`
+- mounts `/var` from `@var` with `subvol=@var,compress=zstd,noatime`
+- mounts `/.snapshots` from `@snapshots` with `subvol=@snapshots,compress=zstd,noatime`
+- writes explicit UUID-based `fstab` entries for all four mount points
 - uses matching `rootflags=` in the bootloader entry
+- installs `snapper` with timeline and cleanup timers enabled
+- `grub-btrfs` is added only on BIOS/GRUB installs (not systemd-boot)
 
 ## Bootloader Notes
 
@@ -290,6 +316,13 @@ Primary log file:
 /tmp/archinstall_install.log
 ```
 
+Post-install files written to the new user's home directory:
+
+```text
+~/archinstall.log          full install log copy
+~/archinstall-manifest.txt structured install manifest
+```
+
 Useful checks:
 
 ```bash
@@ -297,7 +330,13 @@ less /tmp/archinstall_install.log
 grep -n "\[FAIL\]\|\[WARN\]\|\[DEBUG\]" /tmp/archinstall_install.log
 df -h /
 df -h /mnt
+
+# After rebooting into the new system:
+cat ~/archinstall-manifest.txt
+cat ~/archinstall.log
 ```
+
+The manifest includes hostname, timezone, locale, filesystem, boot mode, disk layout, package list, and environment details.
 
 ## Troubleshooting
 
@@ -317,6 +356,8 @@ df -h /mnt
 
 - inspect `/tmp/archinstall_install.log`
 - verify the selected display manager exists in the target system
+- for SDDM: `systemctl status sddm` and check `/etc/sddm.conf.d/kde_settings.conf`
+- for greetd: `systemctl status greetd` and check `/etc/greetd/config.toml`
 - start Plasma manually with the command shown on login
 
 ### greetd works but the wrong session starts
@@ -334,15 +375,29 @@ installer/
   install.sh     Main dialog UI entry point
   modules/
     bootloader.sh   Boot mode helpers
-    desktop.sh      Desktop profile helpers
+    desktop.sh      Desktop profile helpers (display manager, DM packages)
+    hardware.sh     CPU microcode, GPU driver, and VM guest tools detection
     network.sh      Live ISO pacman bootstrap helpers
+    packages.sh     Full package strategy resolution and deduplication
     profile.sh      Timezone, locale, and keymap selection helpers
+    profiles.sh     Install profile definitions (DAILY, DEV, CUSTOM)
+    snapshots.sh    Snapper configuration and snapshot package resolution
+    system/
+      network.sh    Network package and service helpers
+      audio.sh      PipeWire/WirePlumber package and user-unit helpers
+      bluetooth.sh  BlueZ package and service helpers
     disk/
-      layout.sh     Partition-path helpers for future disk layout expansion
+      layout.sh     Partition-path helpers
+      manager.sh    Disk workflow: wipe, free-space, dual-boot, manual
       space.sh      Target free-space estimation and checks
   postinstall.sh Placeholder for future post-install hooks
   state.sh       Shared installer state helpers
   ui.sh          Reusable dialog wrappers
+config/
+  packages.conf  Package policy: required, base-devel, aur-helper tiers
+  system.conf    Compatibility fallback for older callers
+plugins/
+  example/       Reference plugin showing package + chroot hook pattern
 ```
 
 ## Makefile

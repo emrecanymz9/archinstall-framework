@@ -55,7 +55,7 @@ resolve_package_strategy() {
 		append_unique_packages package_ref "${encryption_packages[@]}"
 	fi
 	if declare -F snapshot_required_packages >/dev/null 2>&1; then
-		snapshot_required_packages "$snapshot_provider" "$filesystem" snapshot_packages || return 1
+		snapshot_required_packages "$snapshot_provider" "$filesystem" "$boot_mode" snapshot_packages || return 1
 		append_unique_packages package_ref "${snapshot_packages[@]}"
 	fi
 	if type list_plugin_packages >/dev/null 2>&1; then

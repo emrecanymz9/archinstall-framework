@@ -557,7 +557,10 @@ run_pacstrap_install() {
 	append_unique_items packages "${mandatory_packages[@]}"
 	log_line "[DEBUG] Mandatory pacstrap packages: ${mandatory_packages[*]}"
 	log_line "[DEBUG] Final pacstrap package list: ${packages[*]}"
-	run_step_with_retry "Installing the base Arch Linux packages" 3 pacstrap /mnt base linux linux-firmware mkinitcpio "${packages[@]}" --noconfirm
+	# -K initialises an empty pacman keyring inside the new root so the installed
+	# system is not dependent on the live-ISO keyring state.
+	run_step_with_retry "Installing the base Arch Linux packages" 3 \
+		pacstrap -K /mnt "${packages[@]}" --noconfirm
 }
 
 get_partition_uuid() {
@@ -1052,6 +1055,18 @@ fi
 log_chroot_step "Enabling NetworkManager"
 systemctl enable NetworkManager
 
+# When iwd is installed, use it as the Wi-Fi backend for NetworkManager.
+# This provides better security and WPA3 support over wpa_supplicant.
+if command -v iwctl >/dev/null 2>&1; then
+	log_chroot_step "Configuring iwd as NetworkManager Wi-Fi backend"
+	install -d -m 755 /etc/NetworkManager/conf.d
+	cat > /etc/NetworkManager/conf.d/wifi_backend.conf <<'NMCONFIGEOF'
+[device]
+wifi.backend=iwd
+NMCONFIGEOF
+	systemctl enable iwd.service
+fi
+
 enable_service_if_present() {
 	local service_name=
 	service_name=\${1:?service name is required}
@@ -1321,6 +1336,35 @@ EOT
 				write_display_manager_fallback_notice "archinstall-startplasma-x11"
 			else
 				echo "[WARN] No supported greetd frontend is installed in the target system. Leaving the system on TTY."
+				write_display_manager_fallback_notice "archinstall-startplasma-x11"
+			fi
+			;;
+		sddm)
+			log_chroot_step "Configuring SDDM"
+			if command -v sddm >/dev/null 2>&1; then
+				# Create SDDM configuration directory and set a sane default theme
+				install -d -m 0755 /etc/sddm.conf.d
+				cat > /etc/sddm.conf.d/kde_settings.conf <<'SDDMCONF'
+[Autologin]
+Relogin=false
+Session=
+User=
+
+[General]
+HaltCommand=/usr/bin/systemctl poweroff
+RebootCommand=/usr/bin/systemctl reboot
+
+[Theme]
+Current=breeze
+
+[Users]
+MaximumUid=60000
+MinimumUid=1000
+SDDMCONF
+				systemctl enable sddm.service
+				write_display_manager_fallback_notice "\$PLASMA_SESSION_COMMAND"
+			else
+				echo "[WARN] sddm binary not found in target system. Skipping SDDM configuration."
 				write_display_manager_fallback_notice "archinstall-startplasma-x11"
 			fi
 			;;
@@ -1804,6 +1848,52 @@ run_install() {
 		if [[ -n $log_username && -d "/mnt/home/$log_username" ]]; then
 			install -m 644 "$ARCHINSTALL_LOG" "/mnt/home/$log_username/archinstall.log" 2>>"$ARCHINSTALL_LOG" || true
 			log_line "Install log saved to /mnt/home/$log_username/archinstall.log"
+		fi
+
+		# Generate install manifest for post-install reference
+		local manifest_path="/mnt/home/$log_username/archinstall-manifest.txt"
+		if [[ -n $log_username && -d "/mnt/home/$log_username" ]]; then
+			{
+				printf 'ArchInstall Framework — Install Manifest\n'
+				printf 'Generated: %s\n' "$(date '+%F %T')"
+				printf '========================================\n\n'
+				printf 'CONFIGURATION\n'
+				printf '-------------\n'
+				printf 'Hostname    : %s\n' "$(get_state "HOSTNAME" 2>/dev/null || printf 'unknown')"
+				printf 'Timezone    : %s\n' "$(get_state "TIMEZONE" 2>/dev/null || printf 'unknown')"
+				printf 'Locale      : %s\n' "$(get_state "LOCALE" 2>/dev/null || printf 'unknown')"
+				printf 'Keymap      : %s\n' "$(get_state "KEYMAP" 2>/dev/null || printf 'unknown')"
+				printf 'User        : %s\n' "$log_username"
+				printf 'Profile     : %s\n' "$(get_state "INSTALL_PROFILE" 2>/dev/null || printf 'unknown')"
+				printf 'Desktop     : %s\n' "$(get_state "DESKTOP_PROFILE" 2>/dev/null || printf 'none')"
+				printf 'Display Mgr : %s\n' "$(get_state "DISPLAY_MANAGER" 2>/dev/null || printf 'none')"
+				printf 'Filesystem  : %s\n' "$filesystem"
+				printf 'Encryption  : %s\n' "$enable_luks"
+				printf 'Snapshots   : %s\n' "$snapshot_provider"
+				printf 'Zram        : %s\n' "$enable_zram"
+				printf 'Boot Mode   : %s\n' "$boot_mode"
+				printf 'Secure Boot : %s\n' "$secure_boot_mode"
+				printf 'CPU Vendor  : %s\n' "$(get_state "CPU_VENDOR" 2>/dev/null || printf 'unknown')"
+				printf 'GPU Vendor  : %s\n' "$(get_state "GPU_VENDOR" 2>/dev/null || printf 'unknown')"
+				printf 'Environment : %s\n' "$(get_state "ENVIRONMENT_VENDOR" 2>/dev/null || printf 'unknown')"
+				printf '\nDISK LAYOUT\n'
+				printf '-----------\n'
+				printf 'Device      : %s\n' "$disk"
+				printf 'Disk Type   : %s\n' "$disk_type"
+				printf 'Scenario    : %s\n' "$(get_state "INSTALL_SCENARIO" 2>/dev/null || printf 'wipe')"
+				printf 'EFI         : %s\n' "${efi_partition:-not required}"
+				printf 'Root        : %s\n' "$root_partition"
+				printf '\nPartition table:\n'
+				lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS "$disk" 2>/dev/null || printf '  (lsblk unavailable)\n'
+				printf '\nMOUNT POINTS\n'
+				printf '------------\n'
+				findmnt -R /mnt 2>/dev/null || printf '  (findmnt unavailable)\n'
+				printf '\nPACKAGES INSTALLED\n'
+				printf '------------------\n'
+				arch-chroot /mnt pacman -Q 2>/dev/null || printf '  (unavailable)\n'
+			} > "$manifest_path" 2>/dev/null || true
+			chmod 644 "$manifest_path" 2>/dev/null || true
+			log_line "Install manifest saved to $manifest_path"
 		fi
 
 		ARCHINSTALL_INSTALL_SUCCESS=true

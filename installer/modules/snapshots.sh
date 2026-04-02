@@ -32,13 +32,20 @@ snapshot_default_provider() {
 snapshot_required_packages() {
 	local provider=${1:-none}
 	local filesystem=${2:-ext4}
-	local -n package_ref=${3:?package reference is required}
+	local boot_mode=${3:-uefi}
+	local -n package_ref=${4:?package reference is required}
 
 	package_ref=()
 	case $provider in
 		snapper)
 			if [[ $filesystem == "btrfs" ]]; then
-				package_ref=(snapper snap-pac grub-btrfs)
+				package_ref=(snapper snap-pac)
+				# grub-btrfs provides btrfs snapshot entries in the GRUB menu.
+				# It is only meaningful when GRUB is the bootloader (BIOS installs).
+				# For systemd-boot (UEFI), btrfs snapshots are navigated differently.
+				if [[ $boot_mode == "bios" ]]; then
+					package_ref+=(grub-btrfs)
+				fi
 			fi
 			;;
 		timeshift)

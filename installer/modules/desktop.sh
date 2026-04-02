@@ -39,6 +39,9 @@ display_manager_label() {
 		greetd)
 			printf 'greetd\n'
 			;;
+		sddm)
+			printf 'SDDM\n'
+			;;
 		*)
 			printf '%s\n' "$1"
 			;;
@@ -89,8 +92,9 @@ select_display_manager() {
 		return 0
 	fi
 
-	menu "Display Manager" "Choose the display manager for KDE Plasma." 14 76 4 \
-		"greetd" "Wayland-first greetd stack"
+	menu "Display Manager" "Choose the display manager for KDE Plasma." 16 76 4 \
+		"greetd" "greetd — minimal Wayland-first display manager" \
+		"sddm"   "SDDM — Qt-based display manager, recommended for KDE"
 	selected="$DIALOG_RESULT"
 	case $DIALOG_STATUS in
 		0)
@@ -213,6 +217,9 @@ desktop_profile_packages() {
 			case $display_manager in
 				greetd)
 					package_ref+=(greetd greetd-tuigreet)
+					;;
+				sddm)
+					package_ref+=(sddm sddm-kcm)
 					;;
 			esac
 			;;
