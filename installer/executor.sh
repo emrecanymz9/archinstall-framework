@@ -341,6 +341,17 @@ log_line() {
 	fi
 }
 
+log_stage() {
+	local percent=${1:?percent required}
+	local label=${2:?label required}
+	local ts
+	ts="$(date '+%F %T')"
+	printf '[%s] [STAGE:%s] %s\n' "$ts" "$percent" "$label" >> "$ARCHINSTALL_LOG"
+	if [[ -n ${ARCHINSTALL_PROGRESS_LOG:-} && ${ARCHINSTALL_PROGRESS_LOG:-} != "$ARCHINSTALL_LOG" ]]; then
+		printf '[STAGE:%s] %s\n' "$percent" "$label" >> "$ARCHINSTALL_PROGRESS_LOG" 2>/dev/null || true
+	fi
+}
+
 tee_install_logs() {
 	if [[ -n ${ARCHINSTALL_PROGRESS_LOG:-} && ${ARCHINSTALL_PROGRESS_LOG:-} != "$ARCHINSTALL_LOG" ]]; then
 		tee -a "$ARCHINSTALL_LOG" "$ARCHINSTALL_PROGRESS_LOG"
@@ -1303,6 +1314,13 @@ if [[ \$TARGET_DESKTOP_PROFILE == "kde" ]]; then
 	ln -sf /usr/lib/systemd/user/pipewire-pulse.service /etc/systemd/user/default.target.wants/pipewire-pulse.service
 	ln -sf /usr/lib/systemd/user/wireplumber.service /etc/systemd/user/default.target.wants/wireplumber.service
 
+	# Disable all known display managers before enabling the selected one.
+	# This prevents conflicts if the user re-runs install or changes DM selection.
+	log_chroot_step "Disabling any previously enabled display managers"
+	for _dm_svc in sddm.service greetd.service lightdm.service gdm.service lxdm.service; do
+		systemctl disable "\$_dm_svc" 2>/dev/null || true
+	done
+
 	case \$TARGET_DISPLAY_MANAGER in
 		greetd)
 			log_chroot_step "Configuring greetd"
@@ -1693,6 +1711,7 @@ run_install() {
 		fi
 
 		run_step "Unmounting any previous install target" cleanup_mounts || exit 1
+		log_stage 5 "Checking prerequisites"
 		run_optional_step "Checking internet connectivity" ping -c 1 archlinux.org
 		initialize_pacman_environment || exit 1
 
@@ -1745,6 +1764,7 @@ run_install() {
 		set_state "LUKS_MAPPER_NAME" "$luks_mapper_name" || exit 1
 		set_state "SNAPSHOT_PROVIDER" "$snapshot_provider" || exit 1
 
+		log_stage 15 "Partitioning disk"
 		if flag_enabled "$SKIP_PARTITION"; then
 			log_line "Skipping filesystem creation because SKIP_PARTITION=$SKIP_PARTITION"
 		else
@@ -1780,6 +1800,7 @@ run_install() {
 			fi
 		fi
 
+		log_stage 25 "Mounting filesystems"
 		mount_root_filesystem "$filesystem" "$disk_type" "$root_mount_device" || exit 1
 		validate_target_mount "$root_mount_device" || exit 1
 		expected_root_source="$(normalized_mount_source /mnt)"
@@ -1812,6 +1833,10 @@ run_install() {
 			log_installed_target_packages "$root_mount_device" "$expected_root_source" || exit 1
 		else
 			validate_target_mount "$root_mount_device" "$expected_root_source" || exit 1
+			log_stage 35 "Downloading and installing packages (this may take several minutes)"
+			# Remove legacy iptables if present to prevent pacman conflict with iptables-nft
+			run_optional_step "Removing legacy iptables to prevent conflict" \
+				pacman -Rdd iptables --noconfirm
 			run_pacstrap_install "${pacstrap_packages[@]}" || exit 1
 			log_line "[DEBUG] Mount state after pacstrap"
 			log_mount_state
@@ -1822,8 +1847,10 @@ run_install() {
 			log_installed_target_packages "$root_mount_device" "$expected_root_source" || exit 1
 		fi
 
+		log_stage 75 "Configuring system"
 		validate_target_mount "$root_mount_device" "$expected_root_source" || exit 1
 		write_target_fstab "$filesystem" "$disk_type" "$root_mount_device" "$expected_root_source" "$efi_partition" || exit 1
+		log_stage 82 "Generating fstab"
 
 		if flag_enabled "$SKIP_CHROOT"; then
 			log_line "Skipping chroot configuration because SKIP_CHROOT=$SKIP_CHROOT"
@@ -1836,7 +1863,9 @@ run_install() {
 				root_mount_options=""
 			fi
 			prepare_chroot_mounts "$root_mount_device" "$expected_root_source" || exit 1
+			log_stage 88 "Running chroot configuration"
 			run_chroot_configuration "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_mode" "$resolved_display_mode" "$root_mount_device" "$expected_root_source" || exit 1
+			log_stage 95 "Finalizing installation"
 			if type run_hooks >/dev/null 2>&1; then
 				run_hooks post_chroot "$disk" "$root_partition" || true
 			fi

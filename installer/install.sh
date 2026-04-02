@@ -76,6 +76,10 @@ ARCHINSTALL_DEBUG_LOG=${ARCHINSTALL_DEBUG_LOG:-/tmp/archinstall_debug.log}
 ARCHINSTALL_PROGRESS_DIALOG_PID=${ARCHINSTALL_PROGRESS_DIALOG_PID:-0}
 ARCHINSTALL_PROGRESS_KEEPALIVE_FD=${ARCHINSTALL_PROGRESS_KEEPALIVE_FD:-}
 ARCHINSTALL_PROGRESS_WRITER_FD=${ARCHINSTALL_PROGRESS_WRITER_FD:-}
+ARCHINSTALL_BOOT_SUMMARY=${ARCHINSTALL_BOOT_SUMMARY:-}
+ARCHINSTALL_ENV_SUMMARY=${ARCHINSTALL_ENV_SUMMARY:-}
+ARCHINSTALL_GPU_LABEL_CACHED=${ARCHINSTALL_GPU_LABEL_CACHED:-}
+ARCHINSTALL_NETWORK_STATUS=${ARCHINSTALL_NETWORK_STATUS:-}
 
 log_debug() {
 	local message=${1:-}
@@ -166,34 +170,38 @@ progress_log_excerpt() {
 		return 0
 	fi
 
-	tail -n 5 "$log_file" 2>/dev/null | sed 's/"/'"'"'/g' | tr -cd '\11\12\15\40-\176'
+	tail -n 8 "$log_file" 2>/dev/null | sed 's/"/'"'"'/g' | tr -cd '\11\12\15\40-\176'
 }
 
 install_progress_percent() {
 	local log_file=${1:?log file is required}
-	local expected_steps=${2:?expected steps is required}
-	local started_steps=0
+	local _unused=${2:-}
 	local percent=0
+	local last_stage_line=""
 
 	if [[ -f $log_file ]]; then
-		started_steps="$(grep -c '^\[[0-9-]\{10\} [0-9:]\{8\}\] \[STEP\]' "$log_file" 2>/dev/null || printf '0')"
+		last_stage_line="$(grep -o '\[STAGE:[0-9]*\]' "$log_file" 2>/dev/null | tail -n1 || true)"
+		if [[ $last_stage_line =~ \[STAGE:([0-9]+)\] ]]; then
+			percent="${BASH_REMATCH[1]}"
+		fi
 	fi
 
-	if [[ ! ${started_steps:-0} =~ ^[0-9]+$ ]]; then
-		started_steps=0
-	fi
-
-	if (( expected_steps <= 0 )); then
-		printf '0\n'
-		return 0
-	fi
-
-	percent=$(( started_steps * 100 / expected_steps ))
 	if (( percent > 95 )); then
 		percent=95
 	fi
 
 	printf '%s\n' "$percent"
+}
+
+install_current_stage_label() {
+	local log_file=${1:?log file is required}
+	local last_stage=""
+
+	if [[ -f $log_file ]]; then
+		last_stage="$(grep -o '\[STAGE:[0-9]*\] [^\n]*' "$log_file" 2>/dev/null | tail -n1 | sed 's/^\[STAGE:[0-9]*\] //' || true)"
+	fi
+
+	printf '%s\n' "${last_stage:-Preparing installer}"
 }
 
 render_install_progress_text() {
@@ -205,7 +213,7 @@ render_install_progress_text() {
 	local desktop_profile=${6:-none}
 	local display_mode=${7:-auto}
 	local secure_boot_state="$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")"
-	local environment_label_value="$(safe_runtime_environment_summary)"
+	local environment_label_value="${ARCHINSTALL_ENV_SUMMARY:-$(safe_runtime_environment_summary)}"
 	local excerpt=""
 
 	excerpt="$(progress_log_excerpt "$progress_log")"
@@ -470,16 +478,27 @@ refresh_runtime_context() {
 	else
 		log_debug "Runtime detection unavailable: refresh_hardware_state"
 	fi
-	ARCHINSTALL_BACKTITLE="ArchInstall Framework | $(safe_runtime_boot_summary | tr -d '\n') | $(safe_runtime_environment_summary | tr -d '\n')"
+	ARCHINSTALL_BOOT_SUMMARY="$(safe_runtime_boot_summary 2>/dev/null | tr -d '\n' || printf 'Unknown')"
+	ARCHINSTALL_ENV_SUMMARY="$(safe_runtime_environment_summary 2>/dev/null | tr -d '\n' || printf 'Unknown')"
+	ARCHINSTALL_GPU_LABEL_CACHED="$(state_or_default "GPU_LABEL" "Generic")"
+	ARCHINSTALL_NETWORK_STATUS="$(type detect_network_status >/dev/null 2>&1 && detect_network_status 2>/dev/null || printf 'Unknown')"
+	ARCHINSTALL_BACKTITLE="ArchInstall Framework | $ARCHINSTALL_BOOT_SUMMARY | $ARCHINSTALL_ENV_SUMMARY | Net: $ARCHINSTALL_NETWORK_STATUS"
 	return 0
 }
 
-installer_context_header() {
-	local boot_summary="$(safe_runtime_boot_summary)"
-	local environment_summary_value="$(safe_runtime_environment_summary)"
-	local gpu_label_value="$(state_or_default "GPU_LABEL" "Generic")"
+check_network_before_install() {
+	if [[ ${ARCHINSTALL_NETWORK_STATUS:-} == "Not Connected" ]]; then
+		warning_box "No Network Connection" \
+			"No active network connection detected.\n\nThe installer requires internet access to run pacstrap.\n\nStatus: $ARCHINSTALL_NETWORK_STATUS\n\nConnect via iwctl, dhcpcd, or NetworkManager before continuing."
+	fi
+}
 
-	printf 'Boot Mode: %s\nEnvironment: %s\nGPU: %s' "$boot_summary" "$environment_summary_value" "$gpu_label_value"
+installer_context_header() {
+	printf 'Boot Mode: %s\nEnvironment: %s\nGPU: %s\nNetwork: %s' \
+		"${ARCHINSTALL_BOOT_SUMMARY:-$(safe_runtime_boot_summary)}" \
+		"${ARCHINSTALL_ENV_SUMMARY:-$(safe_runtime_environment_summary)}" \
+		"${ARCHINSTALL_GPU_LABEL_CACHED:-$(state_or_default "GPU_LABEL" "Generic")}" \
+		"${ARCHINSTALL_NETWORK_STATUS:-Unknown}"
 }
 
 select_boolean_value() {
@@ -860,6 +879,7 @@ run_install_with_dialog() {
 		fi
 	fi
 	log_debug "run_install launch requested"
+	check_network_before_install || true
 	apply_runtime_mode || true
 	INSTALL_UI_MODE="$INSTALL_UI_MODE" ARCHINSTALL_PROGRESS_LOG="$progress_log" run_install >> "$log_file" 2>&1 &
 	install_pid=$!
@@ -868,7 +888,7 @@ run_install_with_dialog() {
 	while kill -0 "$install_pid" 2>/dev/null; do
 		sync_install_ui_mode
 		percent="$(install_progress_percent "$log_file" "$expected_steps")"
-		current_step="$(grep '^\[[0-9-]\{10\} [0-9:]\{8\}\] \[STEP\]' "$log_file" 2>/dev/null | tail -n 1 | sed 's/^.*\[STEP\] //' || printf 'Preparing install')"
+		current_step="$(install_current_stage_label "$log_file")"
 		if [[ $tty_fallback_active == true || ${UI_MODE:-dialog} == "tty" ]]; then
 			log_debug "progress switching to tty mode"
 			stop_progress_dialog

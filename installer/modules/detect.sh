@@ -233,3 +233,31 @@ detect_disk_os_presence() {
 
 	printf 'No OS signatures detected\n'
 }
+
+detect_network_status() {
+	local default_route=""
+	local iface=""
+	local ip_addr=""
+	local connection_type="Ethernet"
+
+	default_route="$(ip route show default 2>/dev/null | head -n1 || true)"
+	if [[ -z $default_route ]]; then
+		printf 'Not Connected\n'
+		return 0
+	fi
+
+	iface="$(printf '%s' "$default_route" | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' 2>/dev/null | head -n1 || true)"
+
+	if [[ -n $iface ]]; then
+		if [[ -d /sys/class/net/${iface}/wireless ]] || [[ -L /sys/class/net/${iface}/phy80211 ]]; then
+			connection_type="WiFi"
+		fi
+		ip_addr="$(ip -4 addr show "$iface" 2>/dev/null | awk '/inet / {print $2}' | cut -d/ -f1 | head -n1 || true)"
+	fi
+
+	if [[ -n $ip_addr ]]; then
+		printf 'Connected (%s) — %s\n' "$connection_type" "$ip_addr"
+	else
+		printf 'Connected (%s)\n' "$connection_type"
+	fi
+}
