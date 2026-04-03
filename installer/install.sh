@@ -1162,7 +1162,6 @@ configure_install_profile() {
 			editor_choice="$(select_editor_choice "$(state_or_default "EDITOR_CHOICE" "micro")")" || return 1
 			include_vscode="$(select_boolean_value "VS Code" "Include Visual Studio Code in the DEV profile?" "$(state_or_default "INCLUDE_VSCODE" "false")" "Install code" "Skip code")" || return 1
 			;;
-			;;
 		custom)
 			desktop_profile="$(select_desktop_profile)" || return 1
 			display_mode="$(select_display_mode "$desktop_profile" "$(state_or_default "DISPLAY_MODE" "auto")")" || return 1

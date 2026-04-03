@@ -1359,7 +1359,7 @@ build_greetd_command() {
 
 if [[ \$TARGET_SECURE_BOOT_MODE == "disabled" || \$BOOT_MODE != "uefi" ]]; then
 	log_chroot_step "Rebuilding initramfs"
-	mkinitcpio -P || echo "[WARN] mkinitcpio reported build issues (often firmware warnings); verify /boot/initramfs-linux.img exists."
+	mkinitcpio -P || true
 fi
 
 if [[ \$TARGET_DESKTOP_PROFILE == "kde" ]]; then
