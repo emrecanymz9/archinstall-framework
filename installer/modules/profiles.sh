@@ -118,18 +118,9 @@ editor_packages_csv() {
 	config_csv_or_default "ARCHINSTALL_EDITOR_PACKAGES_${editor_choice}" "$default_value"
 }
 
-visible_tool_ids_csv() {
-	config_csv_or_default "ARCHINSTALL_VISIBLE_TOOL_ORDER" "git,curl,fastfetch,ripgrep,fd,manuals"
-}
-
 visible_tool_label() {
 	local tool_id=${1:?tool id is required}
 	config_csv_or_default "ARCHINSTALL_TOOL_LABEL_${tool_id}" "$tool_id"
-}
-
-visible_tool_packages_csv() {
-	local tool_id=${1:?tool id is required}
-	config_csv_or_default "ARCHINSTALL_TOOL_PACKAGES_${tool_id}" "$tool_id"
 }
 
 package_dependency_config_key() {

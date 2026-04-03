@@ -432,15 +432,15 @@ prepare_live_console() {
 }
 
 warn_if_low_live_iso_space() {
-	local df_line=""
+	local usage_summary=""
 	local available_kb=0
 	local threshold_kb=1048576
 
-	df_line="$(df -h / 2>/dev/null | tail -n 1 || true)"
+	usage_summary="$(df -h / 2>/dev/null | awk 'NR==2 {printf "Total: %s\nUsed: %s\nFree: %s\nUsage: %s\n", $2, $3, $4, $5}' || true)"
 	available_kb="$(df -Pk / 2>/dev/null | awk 'NR==2 {print $4}' || printf '0')"
 
 	if [[ ${available_kb:-0} =~ ^[0-9]+$ ]] && (( available_kb < threshold_kb )); then
-		warning_box "Low ISO Space" "The live ISO root filesystem appears low on available space.\n\n$df_line\n\nThe Arch ISO runs from RAM. Installing large packages here exhausts memory and can destabilize the session. Keep heavy installs inside pacstrap — they go to the target disk, not RAM."
+		warning_box "Low ISO Space" "The live ISO root filesystem appears low on available space.\n\n${usage_summary:-Usage details unavailable.}\n\nThe Arch ISO runs from RAM. Installing large packages here exhausts memory and can destabilize the session. Keep heavy installs inside pacstrap - they go to the target disk, not RAM."
 	fi
 }
 
@@ -635,7 +635,7 @@ post_install_filesystem_label() {
 }
 
 post_install_disk_type_label() {
-	case "$(state_or_default "DISK_TYPE" "auto")" in
+	case "$(state_or_default "DISK_TYPE" "unknown")" in
 		hdd)
 			printf 'HDD\n'
 			;;
@@ -646,7 +646,7 @@ post_install_disk_type_label() {
 			printf 'NVMe SSD\n'
 			;;
 		*)
-			printf '\n'
+			printf 'Unknown\n'
 			;;
 	esac
 }
@@ -1211,7 +1211,7 @@ configure_install_profile() {
 					break
 				fi
 				local -a _extra_arr=() _bad_pkgs=() _good_pkgs=()
-				read -ra _extra_arr <<< "$_extra_input"
+				read -r -a _extra_arr <<< "$_extra_input"
 				local _pkg
 				for _pkg in "${_extra_arr[@]}"; do
 					[[ -n $_pkg ]] || continue
@@ -1347,7 +1347,7 @@ show_state_summary() {
 	keymap="$(state_or_default "KEYMAP" "us")"
 	username="$(state_or_default "USERNAME" "Not configured")"
 	filesystem="$(state_or_default "FILESYSTEM" "ext4")"
-	disk_type="$(state_or_default "DISK_TYPE" "auto")"
+		disk_type="$(state_or_default "DISK_TYPE" "unknown")"
 	install_scenario="$(state_or_default "INSTALL_SCENARIO" "wipe")"
 	enable_luks="$(state_or_default "ENABLE_LUKS" "false")"
 	snapshot_provider="$(state_or_default "SNAPSHOT_PROVIDER" "none")"
@@ -1367,7 +1367,7 @@ show_state_summary() {
 	[[ -n $INSTALL_USER_PASSWORD ]] && user_password_state="set"
 	[[ -n $INSTALL_ROOT_PASSWORD ]] && root_password_state="set"
 
-	msg "Installer State" "Saved state:\n\nEnvironment: $environment_summary_value\nGPU: $gpu_label_value\nDisk: $disk\nDisk type: $disk_type\nDisk strategy: $install_scenario\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nSecure Boot mode: $(secure_boot_mode_label "$secure_boot_mode")\nEFI: $efi_partition\nRoot: $root_partition\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nInstall profile: $(install_profile_label "$install_profile_value")\nFilesystem: $filesystem\nEncryption: $enable_luks\nSnapshots: $(snapshot_provider_label "$snapshot_provider")\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay mode: $(display_mode_label "$display_mode")\nResolved mode: $(display_mode_label "$resolved_display_mode")\nDisplay manager: $(display_manager_label "$display_manager")\nGreeter frontend: $(greeter_frontend_label "$greeter_frontend")\nSafe mode: $INSTALL_SAFE_MODE\nUser password: $user_password_state\nRoot password: $root_password_state\nDEV_MODE: $DEV_MODE\nUI mode: $INSTALL_UI_MODE" 29 82
+	msg "Installer State" "Saved state:\n\nEnvironment: $environment_summary_value\nGPU: $gpu_label_value\nDisk: $disk\nDisk type: $(post_install_disk_type_label)\nDisk strategy: $install_scenario\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nSecure Boot mode: $(secure_boot_mode_label "$secure_boot_mode")\nEFI: $efi_partition\nRoot: $root_partition\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nInstall profile: $(install_profile_label "$install_profile_value")\nFilesystem: $filesystem\nEncryption: $enable_luks\nSnapshots: $(snapshot_provider_label "$snapshot_provider")\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay mode: $(display_mode_label "$display_mode")\nResolved mode: $(display_mode_label "$resolved_display_mode")\nDisplay manager: $(display_manager_label "$display_manager")\nGreeter frontend: $(greeter_frontend_label "$greeter_frontend")\nSafe mode: $INSTALL_SAFE_MODE\nUser password: $user_password_state\nRoot password: $root_password_state\nDEV_MODE: $DEV_MODE\nUI mode: $INSTALL_UI_MODE" 29 82
 }
 
 confirm_installation() {
@@ -1485,12 +1485,20 @@ show_disk_menu() {
 
 		case "$choice" in
 			select)
-			if type run_hooks >/dev/null 2>&1; then
-				run_hooks pre_disk || true
-			fi
-				select_disk || true
+				local select_status=0
+				local selected_disk=""
+				if type run_hooks >/dev/null 2>&1; then
+					run_hooks pre_disk || true
+				fi
+				select_disk
+				select_status=$?
 				if type run_hooks >/dev/null 2>&1; then
 					run_hooks post_disk || true
+				fi
+				selected_disk="$(get_state "DISK" 2>/dev/null || true)"
+				if [[ $select_status -eq 0 && -n $selected_disk ]]; then
+					set_menu_default_item "config"
+					return 0
 				fi
 				;;
 			clear)
@@ -1514,85 +1522,6 @@ show_disk_menu() {
 	done
 
 	error_box "Navigation Error" "Disk menu retry limit reached. Returning to the main menu."
-	return 1
-}
-
-show_install_menu() {
-	local choice=""
-	local status=0
-	local MAX_RETRY=3
-	local RETRY_COUNT=0
-	local -a dynamic_entries=()
-
-	while (( RETRY_COUNT < MAX_RETRY )); do
-		dynamic_entries=()
-		if type emit_menu_entries >/dev/null 2>&1; then
-			mapfile -t dynamic_entries < <(emit_menu_entries install)
-		fi
-		menu "Install System" "$(installer_context_header)\n\nSelected disk: $(current_disk_label)" 18 82 $((6 + (${#dynamic_entries[@]} / 2))) \
-			"start" "Partition disk and install the base Arch Linux system" \
-			"config" "Configure hostname, timezone, locale, keyboard, and passwords" \
-			"dev" "Toggle developer mode (current: $DEV_MODE / $INSTALL_UI_MODE)" \
-			"state" "Review the current installer state" \
-			"${dynamic_entries[@]}" \
-			"back" "Return to the main menu"
-		choice="$DIALOG_RESULT"
-		status=$DIALOG_STATUS
-
-		case $status in
-			0)
-				RETRY_COUNT=0
-				;;
-			1|255)
-				return 0
-				;;
-			*)
-				RETRY_COUNT=$((RETRY_COUNT + 1))
-				if (( RETRY_COUNT >= MAX_RETRY )); then
-					error_box "Navigation Error" "The install menu failed repeatedly. Returning to the main menu."
-					return 1
-				fi
-				error_box "Navigation Error" "The install menu returned an unexpected dialog status: $status"
-				continue
-				;;
-		esac
-
-		case "$choice" in
-			start)
-				run_install_flow
-				status=$?
-				case $status in
-					0)
-						;;
-					1|255|130)
-						continue
-						;;
-					*)
-						return "$status"
-						;;
-				esac
-				;;
-				config)
-					configure_install_profile || true
-					;;
-				dev)
-					toggle_dev_mode || true
-					;;
-			state)
-				show_state_summary
-				;;
-			back)
-				return 0
-				;;
-			*)
-				if type run_menu_entry_handler >/dev/null 2>&1; then
-					run_menu_entry_handler install "$choice" || true
-				fi
-				;;
-		esac
-	done
-
-	error_box "Navigation Error" "Install menu retry limit reached. Returning to the main menu."
 	return 1
 }
 
@@ -1635,6 +1564,9 @@ main() {
 		dynamic_entries=()
 		if type emit_menu_entries >/dev/null 2>&1; then
 			mapfile -t dynamic_entries < <(emit_menu_entries main)
+		fi
+		if [[ $(state_or_default "DISK" "") == "" ]]; then
+			set_menu_default_item "disk"
 		fi
 		menu "Main Menu" "$(installer_context_header)\n\nChoose an installer action." 18 82 $((7 + (${#dynamic_entries[@]} / 2))) \
 			"disk"   "Disk setup and target selection" \

@@ -9,6 +9,7 @@ ARCHINSTALL_UI_MAX_RETRY=${ARCHINSTALL_UI_MAX_RETRY:-3}
 ARCHINSTALL_UI_RETRY_COUNT=${ARCHINSTALL_UI_RETRY_COUNT:-0}
 ARCHINSTALL_LAST_UI_FAILURE=${ARCHINSTALL_LAST_UI_FAILURE:-false}
 ARCHINSTALL_TTY_FALLBACK_NOTICE_SHOWN=${ARCHINSTALL_TTY_FALLBACK_NOTICE_SHOWN:-false}
+ARCHINSTALL_MENU_DEFAULT_ITEM=${ARCHINSTALL_MENU_DEFAULT_ITEM:-}
 
 sanitize_dialog_text() {
 	printf '%s' "${1-}" | LC_ALL=C tr -cd '\11\12\15\40-\176'
@@ -41,6 +42,20 @@ require_dialog() {
 
 ui_force_tty() {
 	[[ ${UI_MODE:-dialog} == "tty" ]]
+}
+
+restore_tty_input_mode() {
+	stty sane </dev/tty >/dev/null 2>&1 || true
+}
+
+set_menu_default_item() {
+	ARCHINSTALL_MENU_DEFAULT_ITEM=${1:-}
+}
+
+consume_menu_default_item() {
+	local default_item=${ARCHINSTALL_MENU_DEFAULT_ITEM:-}
+	ARCHINSTALL_MENU_DEFAULT_ITEM=""
+	printf '%s\n' "$default_item"
 }
 
 debug_ui_mode() {
@@ -170,6 +185,7 @@ tty_prompt() {
 	local prompt=${1:-"> "}
 	local input=""
 
+	restore_tty_input_mode
 	printf '%s' "$prompt" >/dev/tty
 	if ! IFS= read -r input </dev/tty; then
 		return 1
@@ -186,12 +202,15 @@ tty_menu() {
 	local index=1
 	local option_tag=""
 	local option_desc=""
+	local default_item=""
+	local default_index=0
 	local -a options=()
 
 	shift 5
 	options=("$@")
 	total=$((${#options[@]} / 2))
 	DIALOG_RESULT=""
+	default_item="$(consume_menu_default_item)"
 
 	printf '\n%s\n' "$(sanitize_dialog_text "$title")" >/dev/tty
 	printf '%s\n\n' "$(sanitize_dialog_text "$prompt")" >/dev/tty
@@ -199,18 +218,35 @@ tty_menu() {
 	while (( index <= total )); do
 		option_tag=${options[$(((index - 1) * 2))]}
 		option_desc=${options[$((((index - 1) * 2) + 1))]}
-		printf '  %s) %s - %s\n' "$index" "$option_tag" "$option_desc" >/dev/tty
+		if [[ -n $default_item && $option_tag == "$default_item" ]]; then
+			default_index=$index
+			printf ' >%s) %s - %s\n' "$index" "$option_tag" "$option_desc" >/dev/tty
+		else
+			printf '  %s) %s - %s\n' "$index" "$option_tag" "$option_desc" >/dev/tty
+		fi
 		index=$((index + 1))
 	done
 
-	printf '\nEnter a number or q to go back: ' >/dev/tty
+	restore_tty_input_mode
+	if (( default_index > 0 )); then
+		printf '\nEnter a number, press ENTER for %s, or q to go back: ' "$default_item" >/dev/tty
+	else
+		printf '\nEnter a number or q to go back: ' >/dev/tty
+	fi
 	if ! IFS= read -r response </dev/tty; then
 		return 1
 	fi
 
 	case $response in
-		q|Q|quit|back|"")
+		q|Q|quit|back)
 			return 1
+			;;
+		"")
+			if (( default_index > 0 )); then
+				response=$default_index
+			else
+				return 1
+			fi
 			;;
 		*[!0-9]*)
 			return 1
@@ -229,6 +265,7 @@ tty_msg() {
 	local title=${1:-"Message"}
 	local body=${2:-""}
 
+	restore_tty_input_mode
 	printf '\n%s\n' "$(sanitize_dialog_text "$title")" >/dev/tty
 	printf '%s\n' "$(sanitize_dialog_text "$body")" >/dev/tty
 	printf '\nPress ENTER to continue...' >/dev/tty
@@ -241,6 +278,7 @@ tty_confirm() {
 	local body=${2:-"Proceed?"}
 	local response=""
 
+	restore_tty_input_mode
 	printf '\n%s\n' "$(sanitize_dialog_text "$title")" >/dev/tty
 	printf '%s\n' "$(sanitize_dialog_text "$body")" >/dev/tty
 	printf 'Confirm [y/N]: ' >/dev/tty
@@ -265,6 +303,7 @@ tty_input_box() {
 	local response=""
 	DIALOG_RESULT=""
 
+	restore_tty_input_mode
 	printf '\n%s\n' "$(sanitize_dialog_text "$title")" >/dev/tty
 	printf '%s\n' "$(sanitize_dialog_text "$body")" >/dev/tty
 	if [[ -n $initial_value ]]; then
@@ -286,6 +325,7 @@ tty_password_box() {
 	local response=""
 	DIALOG_RESULT=""
 
+	restore_tty_input_mode
 	printf '\n%s\n' "$(sanitize_dialog_text "$title")" >/dev/tty
 	printf '%s\n' "$(sanitize_dialog_text "$body")" >/dev/tty
 	printf 'Password: ' >/dev/tty
@@ -307,31 +347,46 @@ menu() {
 	local menu_height=${5:-8}
 	local sanitized_title=""
 	local sanitized_prompt=""
+	local default_item=""
 	local status
+	local -a dialog_args=()
 
 	shift 5
 	sanitized_title="$(sanitize_dialog_text "$title")"
 	sanitized_prompt="$(sanitize_dialog_text "$prompt")"
 	DIALOG_RESULT=""
+	default_item="$(consume_menu_default_item)"
 
 	if ui_force_tty; then
 		notify_tty_fallback
+		if [[ -n $default_item ]]; then
+			set_menu_default_item "$default_item"
+		fi
 		tty_menu "$title" "$prompt" "$height" "$width" "$menu_height" "$@"
 		status=$?
 	else
-		safe_dialog \
-			--clear \
-			--backtitle "$ARCHINSTALL_BACKTITLE" \
-			--title "$sanitized_title" \
-			--cancel-label "Back" \
-			--visit-items \
-			--menu "$(sanitize_dialog_text "$(with_footer_hints "$sanitized_prompt")")" \
-			"$height" "$width" "$menu_height" \
-			"$@" \
-			3>&1 1>&2 2>&3
+		dialog_args=(
+			--clear
+			--backtitle "$ARCHINSTALL_BACKTITLE"
+			--title "$sanitized_title"
+			--cancel-label "Back"
+		)
+		if [[ -n $default_item ]]; then
+			dialog_args+=(--default-item "$default_item")
+		fi
+		dialog_args+=(
+			--visit-items
+			--menu "$(sanitize_dialog_text "$(with_footer_hints "$sanitized_prompt")")"
+			"$height" "$width" "$menu_height"
+			"$@"
+		)
+		safe_dialog "${dialog_args[@]}" 3>&1 1>&2 2>&3
 		status=$DIALOG_STATUS
 		if [[ $status -ne 0 && ${ARCHINSTALL_LAST_UI_FAILURE:-false} == true ]]; then
 			notify_tty_fallback
+			if [[ -n $default_item ]]; then
+				set_menu_default_item "$default_item"
+			fi
 			tty_menu "$title" "$prompt" "$height" "$width" "$menu_height" "$@"
 			status=$?
 		fi
@@ -551,6 +606,7 @@ tty_checklist() {
 	total=$((${#options[@]} / 3))
 	DIALOG_RESULT=""
 
+	restore_tty_input_mode
 	printf '\n%s\n' "$(sanitize_dialog_text "$title")" >/dev/tty
 	printf '%s\n\n' "$(sanitize_dialog_text "$prompt")" >/dev/tty
 
@@ -578,7 +634,7 @@ tty_checklist() {
 
 	if [[ -n $response ]]; then
 		local -a toggles
-		read -ra toggles <<< "$response"
+		read -r -a toggles <<< "$response"
 		for t in "${toggles[@]}"; do
 			[[ $t =~ ^[0-9]+$ ]] || continue
 			(( t >= 1 && t <= total )) || continue

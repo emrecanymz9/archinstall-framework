@@ -177,6 +177,24 @@ join_by_comma() {
 	printf '%s\n' "$joined"
 }
 
+run_arch_chroot_with_timeout() {
+	timeout 300 arch-chroot "$@"
+}
+
+log_arch_chroot_failure() {
+	local status=${1:-1}
+
+	case $status in
+		124)
+			log_line "[FAIL] arch-chroot timed out after 300 seconds"
+			print_install_error "arch-chroot timed out after 300 seconds. Cleanup will continue."
+			;;
+		*)
+			log_line "[FAIL] arch-chroot exited with status $status"
+			;;
+	esac
+}
+
 detect_disk_type() {
 	local disk=${1:?disk is required}
 	local disk_name=""
@@ -771,7 +789,7 @@ verify_base_system_files() {
 
 log_installed_target_packages() {
 	validate_target_mount "$1" "$2" || return 1
-	run_optional_step "Recording installed target packages" arch-chroot /mnt pacman -Q
+	run_optional_step "Recording installed target packages" timeout 300 arch-chroot /mnt pacman -Q
 	return 0
 }
 
@@ -1109,7 +1127,8 @@ fi
 
 log_chroot_step "Enabling NetworkManager"
 			if [[ -x /usr/bin/NetworkManager || -f /usr/bin/NetworkManager ]]; then
-else
+				systemctl enable NetworkManager.service || true
+			else
 	echo "[WARN] NetworkManager binary not found in target; skipping enable"
 fi
 
@@ -1556,6 +1575,7 @@ run_chroot_configuration() {
 	local resolved_display_mode=${10:-wayland}
 	local root_partition=${11:-}
 	local expected_root_source=${12:-}
+	local chroot_status=1
 
 	install_ui_uses_dialog || print_install_info "Configuring the new system and installing the bootloader"
 	log_line "[STEP] Configuring the target system inside chroot"
@@ -1568,19 +1588,19 @@ run_chroot_configuration() {
 	log_mount_state
 
 	if install_ui_uses_dialog; then
-		if build_chroot_script "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_mode" "$resolved_display_mode" | arch-chroot /mnt /bin/bash -s 2>&1 | sanitize_stream | tee_install_logs >/dev/null
-		then
-			log_line "[ OK ] Configuring the target system inside chroot"
-			return 0
-		fi
+		build_chroot_script "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_mode" "$resolved_display_mode" | run_arch_chroot_with_timeout /mnt /bin/bash -s 2>&1 | sanitize_stream | tee_install_logs >/dev/null
+		chroot_status=${PIPESTATUS[1]:-1}
 	else
-		if build_chroot_script "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_mode" "$resolved_display_mode" | arch-chroot /mnt /bin/bash -s 2>&1 | sanitize_stream | tee_install_logs
-		then
-			log_line "[ OK ] Configuring the target system inside chroot"
-			return 0
-		fi
+		build_chroot_script "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_mode" "$resolved_display_mode" | run_arch_chroot_with_timeout /mnt /bin/bash -s 2>&1 | sanitize_stream | tee_install_logs
+		chroot_status=${PIPESTATUS[1]:-1}
 	fi
 
+	if [[ $chroot_status -eq 0 ]]; then
+		log_line "[ OK ] Configuring the target system inside chroot"
+		return 0
+	fi
+
+	log_arch_chroot_failure "$chroot_status"
 	log_line "[FAIL] Configuring the target system inside chroot"
 	show_install_error "Configuring the new system"
 	return 1
@@ -1705,6 +1725,7 @@ run_install() {
 		log_line "GPU: $(gpu_vendor_label "$gpu_vendor")"
 		log_line "Install scenario: $install_scenario"
 		disk_type="$(detect_disk_type "$disk")"
+		[[ -n $disk_type ]] || disk_type="unknown"
 		log_line "Disk type: $disk_type"
 		set_state "DISK_TYPE" "$disk_type" || exit 1
 		log_line "Filesystem: $filesystem"
@@ -1975,7 +1996,7 @@ run_install() {
 				findmnt -R /mnt 2>/dev/null || printf '  (findmnt unavailable)\n'
 				printf '\nPACKAGES INSTALLED\n'
 				printf '------------------\n'
-				arch-chroot /mnt pacman -Q 2>/dev/null || printf '  (unavailable)\n'
+				timeout 300 arch-chroot /mnt pacman -Q 2>/dev/null || printf '  (unavailable)\n'
 			} > "$manifest_path" 2>/dev/null || true
 			chmod 644 "$manifest_path" 2>/dev/null || true
 			log_line "Install manifest saved to $manifest_path"

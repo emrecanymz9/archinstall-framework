@@ -83,6 +83,7 @@ select_disk() {
 	local boot_mode
 	local strategy
 	local status
+	local action_status=1
 	local layout_state=""
 	local -a strategy_args=()
 
@@ -124,27 +125,33 @@ select_disk() {
 				0)
 					case $strategy in
 						wipe)
-							prepare_full_wipe_install "$selected_disk" "$boot_mode" || true
+							prepare_full_wipe_install "$selected_disk" "$boot_mode"
+							action_status=$?
 							;;
 						initialize)
-							initialize_disk_dialog "$selected_disk" || true
+							initialize_disk_dialog "$selected_disk"
+							action_status=$?
 							;;
 						free-space)
-							prepare_free_space_install "$selected_disk" "$boot_mode" "free-space" || true
+							prepare_free_space_install "$selected_disk" "$boot_mode" "free-space"
+							action_status=$?
 							;;
 						dual-boot)
-							prepare_free_space_install "$selected_disk" "$boot_mode" "dual-boot" || true
+							prepare_free_space_install "$selected_disk" "$boot_mode" "dual-boot"
+							action_status=$?
 							;;
 						manual)
-							manual_partition_editor "$selected_disk" "$boot_mode" || true
+							manual_partition_editor "$selected_disk" "$boot_mode"
+							action_status=$?
 							;;
 						*)
-							return 0
+							return 1
 							;;
 					esac
+					return "$action_status"
 					;;
 				*)
-					return 0
+					return 1
 					;;
 			esac
 			;;

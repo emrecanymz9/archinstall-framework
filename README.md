@@ -390,7 +390,6 @@ installer/
       layout.sh     Partition-path helpers
       manager.sh    Disk workflow: wipe, free-space, dual-boot, manual
       space.sh      Target free-space estimation and checks
-  postinstall.sh Placeholder for future post-install hooks
   state.sh       Shared installer state helpers
   ui.sh          Reusable dialog wrappers
 config/
