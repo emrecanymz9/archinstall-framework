@@ -533,3 +533,115 @@ error_box() {
 clear_screen() {
 	clear
 }
+
+tty_checklist() {
+	local title=${1:?checklist title is required}
+	local prompt=${2:?checklist prompt is required}
+	local total=0
+	local index=1
+	local option_tag=""
+	local option_desc=""
+	local option_status=""
+	local response=""
+	local -a options=()
+	local -a selected_indices=()
+
+	shift 5
+	options=("$@")
+	total=$((${#options[@]} / 3))
+	DIALOG_RESULT=""
+
+	printf '\n%s\n' "$(sanitize_dialog_text "$title")" >/dev/tty
+	printf '%s\n\n' "$(sanitize_dialog_text "$prompt")" >/dev/tty
+
+	while (( index <= total )); do
+		option_tag=${options[$(( (index - 1) * 3 ))]}
+		option_desc=${options[$(( (index - 1) * 3 + 1 ))]}
+		option_status=${options[$(( (index - 1) * 3 + 2 ))]}
+		local marker=" "
+		[[ $option_status == "on" ]] && marker="*"
+		[[ $option_status == "on" ]] && selected_indices+=("$index")
+		printf '  [%s] %d) %s - %s\n' "$marker" "$index" "$option_tag" "$option_desc" >/dev/tty
+		index=$(( index + 1 ))
+	done
+
+	printf '\nEnter numbers to toggle (space-separated) or press ENTER to accept: ' >/dev/tty
+	if ! IFS= read -r response </dev/tty; then
+		return 1
+	fi
+
+	case $response in
+		q|Q|quit|back)
+			return 1
+			;;
+	esac
+
+	if [[ -n $response ]]; then
+		local -a toggles
+		read -ra toggles <<< "$response"
+		for t in "${toggles[@]}"; do
+			[[ $t =~ ^[0-9]+$ ]] || continue
+			(( t >= 1 && t <= total )) || continue
+			local found=false
+			local -a new_sel=()
+			for s in "${selected_indices[@]}"; do
+				if [[ $s == "$t" ]]; then
+					found=true
+				else
+					new_sel+=("$s")
+				fi
+			done
+			[[ $found == true ]] || new_sel+=("$t")
+			selected_indices=("${new_sel[@]}")
+		done
+	fi
+
+	local -a result_tags=()
+	for s in "${selected_indices[@]}"; do
+		result_tags+=("${options[$(( (s - 1) * 3 ))]}")
+	done
+
+	DIALOG_RESULT="${result_tags[*]}"
+	return 0
+}
+
+checklist_box() {
+	local title=${1:?checklist title is required}
+	local body=${2:?checklist prompt is required}
+	local height=${3:-20}
+	local width=${4:-76}
+	local list_height=${5:-10}
+	local status
+
+	shift 5
+	DIALOG_RESULT=""
+
+	if ui_force_tty; then
+		notify_tty_fallback
+		tty_checklist "$title" "$body" "$height" "$width" "$list_height" "$@"
+		status=$?
+	else
+		safe_dialog \
+			--clear \
+			--backtitle "$ARCHINSTALL_BACKTITLE" \
+			--title "$(sanitize_dialog_text "$title")" \
+			--checklist "$(sanitize_dialog_text "$(with_footer_hints "$body" "SPACE=Toggle, ENTER=Confirm, ESC=Back")")" \
+			"$height" "$width" "$list_height" \
+			"$@" \
+			3>&1 1>&2 2>&3
+		status=$DIALOG_STATUS
+		if [[ $status -ne 0 && ${ARCHINSTALL_LAST_UI_FAILURE:-false} == true ]]; then
+			notify_tty_fallback
+			tty_checklist "$title" "$body" "$height" "$width" "$list_height" "$@"
+			status=$?
+		fi
+	fi
+
+	if [[ $status -eq 0 ]]; then
+		DIALOG_RESULT="${DIALOG_RESULT//\"/}"
+		DIALOG_RESULT="$(sanitize_dialog_text "$DIALOG_RESULT")"
+	fi
+
+	DIALOG_STATUS=$status
+	return "$status"
+}

@@ -119,7 +119,7 @@ editor_packages_csv() {
 }
 
 visible_tool_ids_csv() {
-	config_csv_or_default "ARCHINSTALL_VISIBLE_TOOL_ORDER" "git,htop,tmux,curl,fastfetch,ripgrep,fd,manuals"
+	config_csv_or_default "ARCHINSTALL_VISIBLE_TOOL_ORDER" "git,curl,fastfetch,ripgrep,fd,manuals"
 }
 
 visible_tool_label() {
@@ -178,10 +178,10 @@ profile_default_visible_tools() {
 
 	case $install_profile in
 		daily)
-			profile_config_csv "ARCHINSTALL_DEFAULT_VISIBLE_TOOLS" "daily" "git,htop,tmux,curl,fastfetch"
+			profile_config_csv "ARCHINSTALL_DEFAULT_VISIBLE_TOOLS" "daily" "git,curl,fastfetch"
 			;;
 		dev)
-			profile_config_csv "ARCHINSTALL_DEFAULT_VISIBLE_TOOLS" "dev" "git,htop,tmux,curl,fastfetch,ripgrep,fd,manuals"
+			profile_config_csv "ARCHINSTALL_DEFAULT_VISIBLE_TOOLS" "dev" "git,curl,fastfetch,ripgrep,fd,manuals"
 			;;
 		custom)
 			profile_config_csv "ARCHINSTALL_DEFAULT_VISIBLE_TOOLS" "custom" ""
@@ -364,14 +364,15 @@ get_user_packages() {
 			fi
 			;;
 		custom)
-			# Always include the fixed base tool set for custom installs.
-			append_csv_packages "$(profile_config_csv "ARCHINSTALL_USER_PACKAGES" "custom" "git,curl,wget,fastfetch,ripgrep,fd,less,man-db,man-pages")" package_ref
 			append_csv_packages "$(editor_packages_csv "$editor_choice")" package_ref
-			# custom_tools holds raw space/comma-separated extra packages entered by the user.
+			# custom_tools = checklist-selected packages + user-typed extras (space-separated package names)
 			if [[ -n $custom_tools ]]; then
 				local _normalised_custom="${custom_tools//  / }"
 				_normalised_custom="${_normalised_custom// /,}"
 				append_csv_packages "$_normalised_custom" package_ref
+			else
+				# Fallback when no checklist result is available (e.g. state upgrade from older version)
+				append_csv_packages "$(profile_config_csv "ARCHINSTALL_USER_PACKAGES" "custom" "git,curl,wget,fastfetch,ripgrep,fd,less,man-db,man-pages")" package_ref
 			fi
 			if [[ $include_vscode == "true" ]]; then
 				append_csv_packages "$(config_csv_or_default "ARCHINSTALL_VSCODE_PACKAGES" "code")" package_ref

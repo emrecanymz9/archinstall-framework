@@ -1106,6 +1106,8 @@ configure_install_profile() {
 	local editor_choice=""
 	local include_vscode="false"
 	local custom_tools=""
+	local custom_checklist=""
+	local custom_extra=""
 	local secure_boot_mode=""
 	local secure_boot_state=""
 	local desktop_profile=""
@@ -1169,9 +1171,30 @@ configure_install_profile() {
 			greeter_frontend="$(select_greeter_frontend "$desktop_profile" "$(state_or_default "GREETER_FRONTEND" "tuigreet")")" || return 1
 			editor_choice="$(select_editor_choice "$(state_or_default "EDITOR_CHOICE" "nano")")" || return 1
 			include_vscode="$(select_boolean_value "VS Code" "Include Visual Studio Code in the CUSTOM profile?" "$(state_or_default "INCLUDE_VSCODE" "false")" "Install code" "Skip code")" || return 1
-			input_box "Extra Packages" "Base tools (git curl wget fastfetch ripgrep fd less man-db man-pages) will always be included.\n\nEnter any additional packages separated by spaces (leave blank for none):" "$(state_or_default "CUSTOM_TOOLS" "")" 14 76
+			local _saved_cl
+			_saved_cl="$(state_or_default "CUSTOM_CHECKLIST" "")"
+			_st() { [[ -z $_saved_cl || " $_saved_cl " == *" $1 "* ]] && printf 'on' || printf 'off'; }
+			checklist_box "Custom Packages" \
+				"Select the packages to include in your install. All items are pre-selected by default." \
+				20 76 11 \
+				"git"       "Version control"           "$(_st git)"       \
+				"curl"      "HTTP client"               "$(_st curl)"      \
+				"wget"      "File downloader"           "$(_st wget)"      \
+				"fastfetch" "System info tool"          "$(_st fastfetch)" \
+				"ripgrep"   "Fast recursive grep (rg)" "$(_st ripgrep)"   \
+				"fd"        "Fast find alternative"     "$(_st fd)"        \
+				"less"      "Terminal pager"            "$(_st less)"      \
+				"man-db"    "Manual page reader"        "$(_st man-db)"    \
+				"man-pages" "Linux manual pages"        "$(_st man-pages)"
+			unset -f _st
 			[[ $DIALOG_STATUS -eq 0 ]] || return 1
-			custom_tools="$DIALOG_RESULT"
+			custom_checklist="$DIALOG_RESULT"
+			input_box "Additional Packages" \
+				"Enter any extra packages to install beyond the checklist (space-separated). Leave blank for none." \
+				"$(state_or_default "CUSTOM_EXTRA" "")" 10 76
+			[[ $DIALOG_STATUS -eq 0 ]] || return 1
+			custom_extra="$DIALOG_RESULT"
+			custom_tools="${custom_checklist}${custom_extra:+ $custom_extra}"
 			;;
 		*)
 			return 1
@@ -1193,6 +1216,8 @@ configure_install_profile() {
 	set_state "EDITOR_CHOICE" "$editor_choice" || return 1
 	set_state "INCLUDE_VSCODE" "$include_vscode" || return 1
 	set_state "CUSTOM_TOOLS" "$custom_tools" || return 1
+	set_state "CUSTOM_CHECKLIST" "$custom_checklist" || return 1
+	set_state "CUSTOM_EXTRA" "$custom_extra" || return 1
 	set_state "SECURE_BOOT_MODE" "$secure_boot_mode" || return 1
 	set_state "FILESYSTEM" "$filesystem" || return 1
 	set_state "ENABLE_LUKS" "$enable_luks" || return 1
