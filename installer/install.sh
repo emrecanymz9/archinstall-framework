@@ -640,10 +640,10 @@ post_install_disk_type_label() {
 			printf 'HDD\n'
 			;;
 		ssd)
-			printf 'SSD\n'
+			printf 'SATA SSD\n'
 			;;
 		nvme)
-			printf 'NVMe\n'
+			printf 'NVMe SSD\n'
 			;;
 		*)
 			printf '\n'
@@ -1189,11 +1189,39 @@ configure_install_profile() {
 			unset -f _st
 			[[ $DIALOG_STATUS -eq 0 ]] || return 1
 			custom_checklist="$DIALOG_RESULT"
-			input_box "Additional Packages" \
-				"Enter any extra packages to install beyond the checklist (space-separated). Leave blank for none." \
-				"$(state_or_default "CUSTOM_EXTRA" "")" 10 76
-			[[ $DIALOG_STATUS -eq 0 ]] || return 1
-			custom_extra="$DIALOG_RESULT"
+			local -a _extra_acc=()
+			local _extra_saved
+			_extra_saved="$(state_or_default "CUSTOM_EXTRA" "")"
+			while true; do
+				input_box "Additional Packages" \
+					"Enter extra packages to install beyond the checklist (space-separated). Leave blank for none." \
+					"$_extra_saved" 10 76
+				[[ $DIALOG_STATUS -eq 0 ]] || return 1
+				local _extra_input="$DIALOG_RESULT"
+				_extra_saved=""
+				if [[ -z $_extra_input ]]; then
+					break
+				fi
+				local -a _extra_arr=() _bad_pkgs=() _good_pkgs=()
+				read -ra _extra_arr <<< "$_extra_input"
+				local _pkg
+				for _pkg in "${_extra_arr[@]}"; do
+					[[ -n $_pkg ]] || continue
+					if pacman -Sp "$_pkg" >/dev/null 2>&1; then
+						_good_pkgs+=("$_pkg")
+					else
+						_bad_pkgs+=("$_pkg")
+					fi
+				done
+				if (( ${#_bad_pkgs[@]} > 0 )); then
+					msg "Invalid Packages" "The following packages were not found in the repositories and will not be added:\n\n  ${_bad_pkgs[*]}\n\nPlease re-enter. Only valid package names are accepted."
+					_extra_saved="$_extra_input"
+					continue
+				fi
+				_extra_acc+=("${_good_pkgs[@]}")
+				confirm "Add More Packages" "All packages validated.\n\nCurrently queued: ${_extra_acc[*]}\n\nAdd more extra packages?" || break
+			done
+			custom_extra="${_extra_acc[*]}"
 			custom_tools="${custom_checklist}${custom_extra:+ $custom_extra}"
 			;;
 		*)

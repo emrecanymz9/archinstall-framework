@@ -184,6 +184,18 @@ detect_disk_type() {
 	local rotational_value=""
 
 	disk_name="$(basename "$disk")"
+
+	# If disk_name refers to a partition rather than a block device (e.g. sda3
+	# instead of sda), resolve to the parent device so the /sys/block path exists.
+	if [[ ! -d /sys/block/$disk_name ]]; then
+		local _parent
+		_parent="$(lsblk -no pkname "$disk" 2>/dev/null || true)"
+		_parent="${_parent//[[:space:]]/}"
+		if [[ -n $_parent && -d /sys/block/$_parent ]]; then
+			disk_name="$_parent"
+		fi
+	fi
+
 	if [[ $disk_name == nvme* ]]; then
 		printf 'nvme\n'
 		return 0
@@ -407,6 +419,8 @@ cleanup_mounts() {
 	if mountpoint -q /mnt 2>> "$ARCHINSTALL_LOG"; then
 		log_line "[DEBUG] Mount state before recursive unmount:"
 		findmnt -R /mnt >> "$ARCHINSTALL_LOG" 2>&1 || true
+		log_line "[DEBUG] Killing processes using /mnt before unmount"
+		fuser -km /mnt >> "$ARCHINSTALL_LOG" 2>&1 || true
 	fi
 	umount -R /mnt >> "$ARCHINSTALL_LOG" 2>&1 || true
 	if declare -F close_luks_root_device >/dev/null 2>&1; then
