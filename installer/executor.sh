@@ -598,7 +598,7 @@ filter_valid_packages() {
 }
 
 run_pacstrap_install() {
-	local -a mandatory_packages=(base linux linux-firmware mkinitcpio sudo)
+	local -a mandatory_packages=(base linux linux-firmware mkinitcpio sudo networkmanager)
 	local -a packages=("$@")
 	local -a validated_packages=()
 
@@ -1108,8 +1108,7 @@ elif ! grep -q '^%wheel ALL=(ALL:ALL) ALL' /etc/sudoers; then
 fi
 
 log_chroot_step "Enabling NetworkManager"
-if command -v NetworkManager >/dev/null 2>&1; then
-	systemctl enable NetworkManager
+			if [[ -x /usr/bin/NetworkManager || -f /usr/bin/NetworkManager ]]; then
 else
 	echo "[WARN] NetworkManager binary not found in target; skipping enable"
 fi
@@ -1360,7 +1359,7 @@ build_greetd_command() {
 
 if [[ \$TARGET_SECURE_BOOT_MODE == "disabled" || \$BOOT_MODE != "uefi" ]]; then
 	log_chroot_step "Rebuilding initramfs"
-	mkinitcpio -P
+	mkinitcpio -P || echo "[WARN] mkinitcpio reported build issues (often firmware warnings); verify /boot/initramfs-linux.img exists."
 fi
 
 if [[ \$TARGET_DESKTOP_PROFILE == "kde" ]]; then

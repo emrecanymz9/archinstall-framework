@@ -19,7 +19,7 @@ clone:
 	cd $(REPO_DIR) && bash installer/install.sh
 
 mirror:
-	reflector --latest 10 --sort rate --save /etc/pacman.d/mirrorlist
+	reflector --latest 10 --protocol https --connection-timeout 5 --sort rate --save /etc/pacman.d/mirrorlist
 
 run:
 	bash installer/install.sh

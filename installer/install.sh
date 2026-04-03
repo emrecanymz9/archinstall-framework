@@ -170,7 +170,7 @@ progress_log_excerpt() {
 		return 0
 	fi
 
-	tail -n 8 "$log_file" 2>/dev/null | sed 's/"/'"'"'/g' | tr -cd '\11\12\15\40-\176'
+	tail -n 12 "$log_file" 2>/dev/null | grep -v '\[DEBUG\]' | tail -n 8 | sed "s/\"/'/g" | tr -cd '\11\12\15\40-\176'
 }
 
 install_progress_percent() {
@@ -198,7 +198,7 @@ install_current_stage_label() {
 	local last_stage=""
 
 	if [[ -f $log_file ]]; then
-		last_stage="$(grep -o '\[STAGE:[0-9]*\] [^\n]*' "$log_file" 2>/dev/null | tail -n1 | sed 's/^\[STAGE:[0-9]*\] //' || true)"
+		last_stage="$(grep -oE '\[STAGE:[0-9]+\] .+' "$log_file" 2>/dev/null | tail -n1 | sed 's/^\[STAGE:[0-9]*\] //' || true)"
 	fi
 
 	printf '%s\n' "${last_stage:-Preparing installer}"
@@ -440,7 +440,7 @@ warn_if_low_live_iso_space() {
 	available_kb="$(df -Pk / 2>/dev/null | awk 'NR==2 {print $4}' || printf '0')"
 
 	if [[ ${available_kb:-0} =~ ^[0-9]+$ ]] && (( available_kb < threshold_kb )); then
-		warning_box "Low ISO Space" "The live ISO root filesystem appears low on available space.\n\n$df_line\n\nAvoid installing extra packages into the live environment. Continue in minimal ISO mode and keep heavy installs inside pacstrap."
+		warning_box "Low ISO Space" "The live ISO root filesystem appears low on available space.\n\n$df_line\n\nThe Arch ISO runs from RAM. Installing large packages here exhausts memory and can destabilize the session. Keep heavy installs inside pacstrap — they go to the target disk, not RAM."
 	fi
 }
 
@@ -1153,7 +1153,6 @@ configure_install_profile() {
 			greeter_frontend="tuigreet"
 			editor_choice="kate"
 			include_vscode="false"
-			custom_tools="$(profile_default_visible_tools daily)"
 			;;
 		dev)
 			desktop_profile="$(select_desktop_profile)" || return 1
@@ -1162,7 +1161,7 @@ configure_install_profile() {
 			greeter_frontend="$(select_greeter_frontend "$desktop_profile" "$(state_or_default "GREETER_FRONTEND" "tuigreet")")" || return 1
 			editor_choice="$(select_editor_choice "$(state_or_default "EDITOR_CHOICE" "micro")")" || return 1
 			include_vscode="$(select_boolean_value "VS Code" "Include Visual Studio Code in the DEV profile?" "$(state_or_default "INCLUDE_VSCODE" "false")" "Install code" "Skip code")" || return 1
-			custom_tools="$(profile_default_visible_tools dev)"
+			;;
 			;;
 		custom)
 			desktop_profile="$(select_desktop_profile)" || return 1
@@ -1170,25 +1169,35 @@ configure_install_profile() {
 			display_manager="$(select_display_manager "$desktop_profile")" || return 1
 			greeter_frontend="$(select_greeter_frontend "$desktop_profile" "$(state_or_default "GREETER_FRONTEND" "tuigreet")")" || return 1
 			editor_choice="$(select_editor_choice "$(state_or_default "EDITOR_CHOICE" "nano")")" || return 1
-			include_vscode="$(select_boolean_value "VS Code" "Include Visual Studio Code in the CUSTOM profile?" "$(state_or_default "INCLUDE_VSCODE" "false")" "Install code" "Skip code")" || return 1
 			local _saved_cl
 			_saved_cl="$(state_or_default "CUSTOM_CHECKLIST" "")"
-			_st() { [[ -z $_saved_cl || " $_saved_cl " == *" $1 "* ]] && printf 'on' || printf 'off'; }
+			_st()     { [[ -z $_saved_cl || " $_saved_cl " == *" $1 "* ]] && printf 'on' || printf 'off'; }
+			_st_off() { [[ -n $_saved_cl && " $_saved_cl " == *" $1 "* ]] && printf 'on' || printf 'off'; }
 			checklist_box "Custom Packages" \
-				"Select the packages to include in your install. All items are pre-selected by default." \
-				20 76 11 \
-				"git"       "Version control"           "$(_st git)"       \
-				"curl"      "HTTP client"               "$(_st curl)"      \
-				"wget"      "File downloader"           "$(_st wget)"      \
-				"fastfetch" "System info tool"          "$(_st fastfetch)" \
-				"ripgrep"   "Fast recursive grep (rg)" "$(_st ripgrep)"   \
-				"fd"        "Fast find alternative"     "$(_st fd)"        \
-				"less"      "Terminal pager"            "$(_st less)"      \
-				"man-db"    "Manual page reader"        "$(_st man-db)"    \
-				"man-pages" "Linux manual pages"        "$(_st man-pages)"
-			unset -f _st
+				"Select the packages to include in your install. All items are pre-selected by default. Use SPACE to toggle." \
+				22 76 12 \
+				"git"       "Version control"             "$(_st git)"       \
+				"curl"      "HTTP client"                 "$(_st curl)"      \
+				"wget"      "File downloader"             "$(_st wget)"      \
+				"fastfetch" "System info tool"            "$(_st fastfetch)" \
+				"ripgrep"   "Fast recursive grep (rg)"   "$(_st ripgrep)"   \
+				"fd"        "Fast find alternative"       "$(_st fd)"        \
+				"less"      "Terminal pager"              "$(_st less)"      \
+				"man-db"    "Manual page reader"          "$(_st man-db)"    \
+				"man-pages" "Linux manual pages"          "$(_st man-pages)" \
+				"vscode"    "Visual Studio Code (code)"  "$(_st_off vscode)"
+			unset -f _st _st_off
 			[[ $DIALOG_STATUS -eq 0 ]] || return 1
 			custom_checklist="$DIALOG_RESULT"
+			# Extract VS Code from checklist — it is handled via include_vscode flag
+			if [[ " $custom_checklist " == *" vscode "* ]]; then
+				include_vscode="true"
+				custom_checklist="${custom_checklist/ vscode/}"
+				custom_checklist="${custom_checklist//vscode /}"
+				custom_checklist="${custom_checklist//vscode/}"
+			else
+				include_vscode="false"
+			fi
 			local -a _extra_acc=()
 			local _extra_saved
 			_extra_saved="$(state_or_default "CUSTOM_EXTRA" "")"
@@ -1381,7 +1390,7 @@ confirm_installation() {
 
 	validate_install_profile || return 1
 
-	message="$(installer_context_header)\n\nThis will prepare a bootable Arch Linux system on:\n\n$disk\n\nDisk type: $(state_or_default "DISK_TYPE" "auto")\nDisk strategy: $(state_or_default "INSTALL_SCENARIO" "wipe")\nBoot mode: $(boot_mode_status_label "$(state_or_default "BOOT_MODE" "bios")" "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")\nSecure Boot mode: $(secure_boot_mode_label "$(state_or_default "SECURE_BOOT_MODE" "disabled")")\nHostname: $(state_or_default "HOSTNAME" "archlinux")\nTimezone: $(state_or_default "TIMEZONE" "Europe/Istanbul")\nLocale: $(state_or_default "LOCALE" "en_US.UTF-8")\nKeyboard: $(state_or_default "KEYMAP" "us")\nUser: $(state_or_default "USERNAME" "archuser")\nInstall profile: $(install_profile_label "$(state_or_default "INSTALL_PROFILE" "daily")")\nFilesystem: $(state_or_default "FILESYSTEM" "ext4")\nEncryption: $(state_or_default "ENABLE_LUKS" "false")\nSnapshots: $(snapshot_provider_label "$(state_or_default "SNAPSHOT_PROVIDER" "none")")\nZram: $(state_or_default "ENABLE_ZRAM" "false")\nDesktop: $(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")\nDisplay mode: $(display_mode_label "$(state_or_default "DISPLAY_MODE" "auto")")\nDisplay manager: $(display_manager_label "$(state_or_default "DISPLAY_MANAGER" "none")")\nGreeter frontend: $(greeter_frontend_label "$(state_or_default "GREETER_FRONTEND" "tuigreet")")\nSafe mode: $(state_or_default "INSTALL_SAFE_MODE" "$INSTALL_SAFE_MODE")\n\nDestructive steps may erase existing data."
+	message="$(installer_context_header)\n\nThis will prepare a bootable Arch Linux system on:\n\n$disk\n\nDisk type: $(post_install_disk_type_label)\nDisk strategy: $(state_or_default "INSTALL_SCENARIO" "wipe")\nBoot mode: $(boot_mode_status_label "$(state_or_default "BOOT_MODE" "bios")" "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")\nSecure Boot mode: $(secure_boot_mode_label "$(state_or_default "SECURE_BOOT_MODE" "disabled")")\nHostname: $(state_or_default "HOSTNAME" "archlinux")\nTimezone: $(state_or_default "TIMEZONE" "Europe/Istanbul")\nLocale: $(state_or_default "LOCALE" "en_US.UTF-8")\nKeyboard: $(state_or_default "KEYMAP" "us")\nUser: $(state_or_default "USERNAME" "archuser")\nInstall profile: $(install_profile_label "$(state_or_default "INSTALL_PROFILE" "daily")")\nFilesystem: $(state_or_default "FILESYSTEM" "ext4")\nEncryption: $(state_or_default "ENABLE_LUKS" "false")\nSnapshots: $(snapshot_provider_label "$(state_or_default "SNAPSHOT_PROVIDER" "none")")\nZram: $(state_or_default "ENABLE_ZRAM" "false")\nDesktop: $(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")\nDisplay mode: $(display_mode_label "$(state_or_default "DISPLAY_MODE" "auto")")\nDisplay manager: $(display_manager_label "$(state_or_default "DISPLAY_MANAGER" "none")")\nGreeter frontend: $(greeter_frontend_label "$(state_or_default "GREETER_FRONTEND" "tuigreet")")\nSafe mode: $(state_or_default "INSTALL_SAFE_MODE" "$INSTALL_SAFE_MODE")\n\nDestructive steps may erase existing data."
 	if flag_enabled "$DEV_MODE"; then
 		message+="\n\nDev mode flags:\nSKIP_PARTITION=$SKIP_PARTITION\nSKIP_PACSTRAP=$SKIP_PACSTRAP\nSKIP_CHROOT=$SKIP_CHROOT\nINSTALL_UI_MODE=$INSTALL_UI_MODE"
 	fi
@@ -1608,6 +1617,18 @@ main() {
 		log_ui_error "[UI ERROR] dialog is unavailable after loading preferences; using TTY fallback"
 	fi
 	prepare_live_console || true
+
+	# Let user choose UI mode (Dialog or TTY) before anything else.
+	if require_dialog >/dev/null 2>&1 && [[ ${UI_MODE:-dialog} == "dialog" ]]; then
+		menu "Installer Mode" "Welcome to the ArchInstall Framework.\n\nSelect how you want to interact with the installer:" 12 60 2 \
+			"dialog" "Graphical TUI  (recommended)" \
+			"tty"    "Plain text / debug mode"
+		if [[ $DIALOG_STATUS -eq 0 && $DIALOG_RESULT == "tty" ]]; then
+			set_ui_mode tty
+			apply_runtime_mode || true
+		fi
+	fi
+
 	warn_if_low_live_iso_space || true
 	refresh_runtime_context || true
 
@@ -1617,11 +1638,12 @@ main() {
 			mapfile -t dynamic_entries < <(emit_menu_entries main)
 		fi
 		menu "Main Menu" "$(installer_context_header)\n\nChoose an installer action." 18 82 $((7 + (${#dynamic_entries[@]} / 2))) \
-			"disk" "Disk setup and target selection" \
-			"install" "Base system installation" \
-			"state" "Show saved installer state" \
+			"disk"   "Disk setup and target selection" \
+			"config" "Configure hostname, profile, password, and options" \
+			"install" "Start installation (requires disk and config)" \
+			"state"  "Show saved installer state" \
 			"${dynamic_entries[@]}" \
-			"exit" "Exit the installer"
+			"exit"   "Exit the installer"
 		choice="$DIALOG_RESULT"
 		status=$DIALOG_STATUS
 
@@ -1647,8 +1669,11 @@ main() {
 			disk)
 				show_disk_menu
 				;;
+			config)
+				configure_install_profile || true
+				;;
 			install)
-				show_install_menu
+				run_install_flow
 				;;
 			state)
 				show_state_summary
