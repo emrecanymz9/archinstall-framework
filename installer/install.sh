@@ -577,26 +577,6 @@ join_csv_values() {
 	printf '%s\n' "$joined"
 }
 
-select_custom_tools() {
-	local selected_tools=()
-	local choice=""
-	local tool_id=""
-	local tool_label=""
-	local current_tools=""
-	local -a tool_ids=()
-
-	current_tools="$(state_or_default "CUSTOM_TOOLS" "")"
-	IFS=',' read -r -a tool_ids <<< "$(visible_tool_ids_csv)"
-	for tool_id in "${tool_ids[@]}"; do
-		[[ -n $tool_id ]] || continue
-		tool_label="$(visible_tool_label "$tool_id")"
-		choice="$(select_boolean_value "Custom Tools" "Include $tool_label?" "$(if csv_has_value "$current_tools" "$tool_id"; then printf 'true'; else printf 'false'; fi)" "Include $tool_label" "Skip $tool_label")" || return 1
-		[[ $choice == "true" ]] && selected_tools+=("$tool_id")
-	done
-
-	join_csv_values "${selected_tools[@]}"
-}
-
 apply_runtime_mode() {
 	sync_install_ui_mode
 
@@ -1189,7 +1169,9 @@ configure_install_profile() {
 			greeter_frontend="$(select_greeter_frontend "$desktop_profile" "$(state_or_default "GREETER_FRONTEND" "tuigreet")")" || return 1
 			editor_choice="$(select_editor_choice "$(state_or_default "EDITOR_CHOICE" "nano")")" || return 1
 			include_vscode="$(select_boolean_value "VS Code" "Include Visual Studio Code in the CUSTOM profile?" "$(state_or_default "INCLUDE_VSCODE" "false")" "Install code" "Skip code")" || return 1
-			custom_tools="$(select_custom_tools)" || return 1
+			input_box "Extra Packages" "Base tools (git curl wget fastfetch ripgrep fd less man-db man-pages) will always be included.\n\nEnter any additional packages separated by spaces (leave blank for none):" "$(state_or_default "CUSTOM_TOOLS" "")" 14 76
+			[[ $DIALOG_STATUS -eq 0 ]] || return 1
+			custom_tools="$DIALOG_RESULT"
 			;;
 		*)
 			return 1

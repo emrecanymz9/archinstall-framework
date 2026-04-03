@@ -364,12 +364,15 @@ get_user_packages() {
 			fi
 			;;
 		custom)
+			# Always include the fixed base tool set for custom installs.
+			append_csv_packages "$(profile_config_csv "ARCHINSTALL_USER_PACKAGES" "custom" "git,curl,wget,fastfetch,ripgrep,fd,less,man-db,man-pages")" package_ref
 			append_csv_packages "$(editor_packages_csv "$editor_choice")" package_ref
-			IFS=',' read -r -a _selected_tools <<< "$custom_tools"
-			for tool_id in "${_selected_tools[@]}"; do
-				[[ -n $tool_id ]] || continue
-				append_csv_packages "$(visible_tool_packages_csv "$tool_id")" package_ref
-			done
+			# custom_tools holds raw space/comma-separated extra packages entered by the user.
+			if [[ -n $custom_tools ]]; then
+				local _normalised_custom="${custom_tools//  / }"
+				_normalised_custom="${_normalised_custom// /,}"
+				append_csv_packages "$_normalised_custom" package_ref
+			fi
 			if [[ $include_vscode == "true" ]]; then
 				append_csv_packages "$(config_csv_or_default "ARCHINSTALL_VSCODE_PACKAGES" "code")" package_ref
 			fi

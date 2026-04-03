@@ -1094,7 +1094,11 @@ elif ! grep -q '^%wheel ALL=(ALL:ALL) ALL' /etc/sudoers; then
 fi
 
 log_chroot_step "Enabling NetworkManager"
-systemctl enable NetworkManager
+if command -v NetworkManager >/dev/null 2>&1; then
+	systemctl enable NetworkManager
+else
+	echo "[WARN] NetworkManager binary not found in target; skipping enable"
+fi
 
 # When iwd is installed, use it as the Wi-Fi backend for NetworkManager.
 # This provides better security and WPA3 support over wpa_supplicant.
