@@ -86,17 +86,20 @@ The installer intentionally keeps the live ISO minimal. Heavy packages belong in
 - Secure Boot modes: `Disabled`, `Assisted`, `Advanced`
 - hardware abstraction for VMware, VirtualBox, QEMU/KVM, and common GPU vendors
 - CPU microcode auto-detected and installed (`intel-ucode` or `amd-ucode`)
+- GPU-aware graphics packages for Intel, AMD, NVIDIA, and virtualized desktops
+- optional Steam support with multilib enablement and matching 32-bit graphics userspace
 - optional zram via `zram-generator`
 - config-driven package tiers from `config/packages.conf`
 - KDE Plasma profile with both Wayland and X11 session support
 - install profiles: `DAILY`, `DEV`, `CUSTOM`
 - automatic `sudo` setup with `wheel` group support
-- display mode selection: `Auto`, `Wayland`, `X11`
-- display managers: `greetd`/`tuigreet`, optional `qtgreet`, or `sddm` (recommended for KDE)
+- deterministic display session selection: `Wayland` or `X11`
+- display managers: `greetd` with `tuigreet` or optional `qtgreet`, or `sddm` (recommended for KDE)
 - `iwd` Wi-Fi backend configured automatically when installed
 - btrfs four-subvolume layout: `@`, `@home`, `@var`, `@snapshots`
 - snapper timeline snapshots with automatic cleanup timers
 - `grub-btrfs` included only for BIOS/GRUB installs
+- Secure Boot foundation mode for UKI + `sbctl` preparation without making install success depend on signing
 - 1 GiB EFI partition enforced on new wipe/free-space installs
 - EFI validation on manual partition reuse (size and filesystem warnings)
 - BIOS + GPT safety check blocks unsafe grub-install scenarios
@@ -110,15 +113,12 @@ The installer intentionally keeps the live ISO minimal. Heavy packages belong in
 Additional documentation:
 
 - `docs/ARCHITECTURE.md`
+- `docs/FEATURES.md`
+- `docs/STATE.md`
 - `docs/DISK_MANAGER.md`
-- `docs/INSTALL.md`
-- `docs/DEVELOPMENT.md`
-- `docs/KNOWN_ISSUES.md`
+- `docs/INSTALL_FLOW.md`
 - `docs/SECURE_BOOT.md`
 - `docs/HARDWARE.md`
-- `docs/PROFILES.md`
-- `docs/INSTALL_FLOW.md`
-- `docs/PLUGINS.md`
 
 ## Live ISO Rules
 
@@ -217,7 +217,6 @@ The KDE profile installs `plasma-workspace` and `plasma-x11-session`.
 
 Display mode choices:
 
-- `Auto`: prefer Wayland, fall back to X11 on VMs or when graphics detection is weak
 - `Wayland`: force `startplasma-wayland`
 - `X11`: force `startplasma-x11`
 
@@ -227,7 +226,7 @@ Current display-manager behavior:
 - `tuigreet`: TUI frontend for greetd, always supported by the built-in package set
 - `qtgreet`: optional Qt/QML frontend for greetd when a plugin or custom package source provides it
 - `sddm`: Qt-based display manager, recommended for KDE; installs `sddm` and `sddm-kcm`; writes `/etc/sddm.conf.d/kde_settings.conf` with Breeze theme defaults
-- greetd launches Plasma on Wayland and leaves X11 available as a manual fallback
+- greetd launches the explicitly selected Plasma session command
 - invalid or missing display-manager binaries leave the system on TTY with a manual start hint
 
 ## Package Set
@@ -254,7 +253,7 @@ Required packages are resolved in layers:
 4. Hardware: CPU microcode (`intel-ucode` or `amd-ucode`), GPU drivers, VM guest tools
 5. Desktop profile: Plasma, PipeWire stack, Bluetooth, display manager
 6. Snapshot tools: `snapper`, `snap-pac`, `grub-btrfs` (BIOS only)
-7. Optional: `zram-generator`, LUKS2 tools, Secure Boot tools
+7. Optional: `steam`, `zram-generator`, LUKS2 tools, Secure Boot tools
 8. Plugin-contributed packages from the plugin loader
 
 ## Filesystem Notes

@@ -534,10 +534,14 @@ select_snapshot_provider() {
 	fi
 	current_provider=${current_provider:-none}
 
-	menu "Snapshots" "Choose an optional snapshot engine.\n\nCurrent: $(snapshot_provider_label "$current_provider")\nFilesystem: $filesystem" 16 72 4 \
+	if [[ $filesystem != "btrfs" ]]; then
+		printf 'none\n'
+		return 0
+	fi
+
+	menu "Snapshots" "Choose an optional snapshot engine.\n\nCurrent: $(snapshot_provider_label "$current_provider")\nFilesystem: $filesystem" 15 72 3 \
 		"none" "No snapshot integration" \
-		"snapper" "Btrfs snapshots with timeline cleanup" \
-		"timeshift" "Timeshift snapshots"
+		"snapper" "Btrfs snapshots with timeline cleanup"
 
 	case $DIALOG_STATUS in
 		0)
@@ -1100,11 +1104,12 @@ configure_install_profile() {
 	local secure_boot_state=""
 	local desktop_profile=""
 	local display_manager=""
-	local greeter_frontend="tuigreet"
+	local greeter_frontend="none"
 	local display_session=""
 	local enable_luks="false"
 	local luks_password=""
 	local snapshot_provider="none"
+	local install_steam="false"
 	local package_config_warning=""
 
 	refresh_runtime_context || true
@@ -1138,7 +1143,7 @@ configure_install_profile() {
 			desktop_profile="kde"
 			display_session="wayland"
 			display_manager="sddm"
-			greeter_frontend="tuigreet"
+			greeter_frontend="none"
 			editor_choice="kate"
 			include_vscode="false"
 			;;
@@ -1146,7 +1151,11 @@ configure_install_profile() {
 			desktop_profile="$(select_desktop_profile)" || return 1
 			display_session="$(select_display_mode "$desktop_profile" "$(state_or_default "DISPLAY_SESSION" "wayland")")" || return 1
 			display_manager="$(select_display_manager "$desktop_profile")" || return 1
-			greeter_frontend="$(select_greeter_frontend "$desktop_profile" "$(state_or_default "GREETER" "tuigreet")")" || return 1
+			if [[ $display_manager == "greetd" ]]; then
+				greeter_frontend="$(select_greeter_frontend "$desktop_profile" "$(state_or_default "GREETER" "tuigreet")")" || return 1
+			else
+				greeter_frontend="none"
+			fi
 			editor_choice="$(select_editor_choice "$(state_or_default "EDITOR_CHOICE" "micro")")" || return 1
 			include_vscode="$(select_boolean_value "VS Code" "Include Visual Studio Code in the DEV profile?" "$(state_or_default "INCLUDE_VSCODE" "false")" "Install code" "Skip code")" || return 1
 			;;
@@ -1154,7 +1163,11 @@ configure_install_profile() {
 			desktop_profile="$(select_desktop_profile)" || return 1
 			display_session="$(select_display_mode "$desktop_profile" "$(state_or_default "DISPLAY_SESSION" "wayland")")" || return 1
 			display_manager="$(select_display_manager "$desktop_profile")" || return 1
-			greeter_frontend="$(select_greeter_frontend "$desktop_profile" "$(state_or_default "GREETER" "tuigreet")")" || return 1
+			if [[ $display_manager == "greetd" ]]; then
+				greeter_frontend="$(select_greeter_frontend "$desktop_profile" "$(state_or_default "GREETER" "tuigreet")")" || return 1
+			else
+				greeter_frontend="none"
+			fi
 			editor_choice="$(select_editor_choice "$(state_or_default "EDITOR_CHOICE" "nano")")" || return 1
 			local _saved_cl
 			_saved_cl="$(state_or_default "CUSTOM_CHECKLIST" "")"
@@ -1228,7 +1241,10 @@ configure_install_profile() {
 	if [[ $desktop_profile == "none" ]]; then
 		display_session="wayland"
 		display_manager="none"
-		greeter_frontend="tuigreet"
+		greeter_frontend="none"
+		install_steam="false"
+	else
+		install_steam="$(select_boolean_value "Steam" "Install Steam gaming support?\n\nThis enables the multilib repository and adds Steam plus matching 32-bit graphics userspace packages when needed." "$(state_or_default "INSTALL_STEAM" "false")" "Install Steam" "Skip Steam")" || return 1
 	fi
 
 	set_state "HOSTNAME" "$hostname" || return 1
@@ -1247,6 +1263,7 @@ configure_install_profile() {
 	set_state "ENABLE_LUKS" "$enable_luks" || return 1
 	set_state "LUKS_MAPPER_NAME" "cryptroot" || return 1
 	set_state "SNAPSHOT_PROVIDER" "$snapshot_provider" || return 1
+	set_state "INSTALL_STEAM" "$install_steam" || return 1
 	set_state "ENABLE_ZRAM" "$enable_zram" || return 1
 	set_state "DESKTOP_PROFILE" "$desktop_profile" || return 1
 	set_state "DISPLAY_SESSION" "$display_session" || return 1
@@ -1262,7 +1279,7 @@ configure_install_profile() {
 		sync_install_config_json >/dev/null 2>&1 || true
 	fi
 
-	msg "Profile Saved" "Installation profile updated.\n\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nInstall profile: $(install_profile_label "$install_profile")\nEditor: $(editor_choice_label "$editor_choice")\nVS Code: $include_vscode\nSecure Boot mode: $(secure_boot_mode_label "$secure_boot_mode")\nFilesystem: $filesystem\nEncryption: $enable_luks\nSnapshots: $(snapshot_provider_label "$snapshot_provider")\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay session: $(display_mode_label "$display_session")\nDisplay manager: $(display_manager_label "$display_manager")\nGreeter: $(greeter_frontend_label "$greeter_frontend")\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nUser password: set\nRoot password: set"
+	msg "Profile Saved" "Installation profile updated.\n\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nInstall profile: $(install_profile_label "$install_profile")\nEditor: $(editor_choice_label "$editor_choice")\nVS Code: $include_vscode\nSteam: $install_steam\nSecure Boot mode: $(secure_boot_mode_label "$secure_boot_mode")\nFilesystem: $filesystem\nEncryption: $enable_luks\nSnapshots: $(snapshot_provider_label "$snapshot_provider")\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay session: $(display_mode_label "$display_session")\nDisplay manager: $(display_manager_label "$display_manager")\nGreeter: $(greeter_frontend_label "$greeter_frontend")\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nUser password: set\nRoot password: set"
 }
 
 validate_install_profile() {
@@ -1319,6 +1336,7 @@ show_state_summary() {
 	local install_scenario
 	local enable_luks
 	local snapshot_provider
+	local install_steam
 	local secure_boot_state
 	local secure_boot_mode
 	local environment_summary_value
@@ -1341,6 +1359,7 @@ show_state_summary() {
 	install_scenario="$(state_or_default "INSTALL_SCENARIO" "wipe")"
 	enable_luks="$(state_or_default "ENABLE_LUKS" "false")"
 	snapshot_provider="$(state_or_default "SNAPSHOT_PROVIDER" "none")"
+	install_steam="$(state_or_default "INSTALL_STEAM" "false")"
 	enable_zram="$(state_or_default "ENABLE_ZRAM" "false")"
 	desktop_profile="$(state_or_default "DESKTOP_PROFILE" "none")"
 	display_session="$(state_or_default "DISPLAY_SESSION" "wayland")"
@@ -1357,7 +1376,7 @@ show_state_summary() {
 	[[ -n $INSTALL_USER_PASSWORD ]] && user_password_state="set"
 	[[ -n $INSTALL_ROOT_PASSWORD ]] && root_password_state="set"
 
-	msg "Installer State" "Saved state:\n\nEnvironment: $environment_summary_value\nGPU: $gpu_label_value\nDisk: $disk\nDisk type: $(post_install_disk_type_label)\nDisk strategy: $install_scenario\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nSecure Boot mode: $(secure_boot_mode_label "$secure_boot_mode")\nEFI: $efi_partition\nRoot: $root_partition\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nInstall profile: $(install_profile_label "$install_profile_value")\nFilesystem: $filesystem\nEncryption: $enable_luks\nSnapshots: $(snapshot_provider_label "$snapshot_provider")\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay session: $(display_mode_label "$display_session")\nResolved session: $(display_mode_label "$resolved_display_mode")\nDisplay manager: $(display_manager_label "$display_manager")\nGreeter: $(greeter_frontend_label "$greeter")\nSafe mode: $INSTALL_SAFE_MODE\nUser password: $user_password_state\nRoot password: $root_password_state\nDEV_MODE: $DEV_MODE\nUI mode: $INSTALL_UI_MODE" 29 82
+	msg "Installer State" "Saved state:\n\nEnvironment: $environment_summary_value\nGPU: $gpu_label_value\nDisk: $disk\nDisk model: $(state_or_default "DISK_MODEL" "Unknown")\nDisk transport: $(disk_transport_label "$(state_or_default "DISK_TRANSPORT" "unknown")")\nDisk type: $(post_install_disk_type_label)\nDisk strategy: $install_scenario\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nSecure Boot mode: $(secure_boot_mode_label "$secure_boot_mode")\nEFI: $efi_partition\nRoot: $root_partition\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nInstall profile: $(install_profile_label "$install_profile_value")\nFilesystem: $filesystem\nEncryption: $enable_luks\nSnapshots: $(snapshot_provider_label "$snapshot_provider")\nSteam: $install_steam\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay session: $(display_mode_label "$display_session")\nDisplay manager: $(display_manager_label "$display_manager")\nGreeter: $(greeter_frontend_label "$greeter")\nSafe mode: $INSTALL_SAFE_MODE\nUser password: $user_password_state\nRoot password: $root_password_state\nDEV_MODE: $DEV_MODE\nUI mode: $INSTALL_UI_MODE" 30 82
 }
 
 confirm_installation() {
@@ -1379,7 +1398,7 @@ confirm_installation() {
 
 	validate_install_profile || return 1
 
-	message="$(installer_context_header)\n\nThis will prepare a bootable Arch Linux system on:\n\n$disk\n\nDisk type: $(post_install_disk_type_label)\nDisk strategy: $(state_or_default "INSTALL_SCENARIO" "wipe")\nBoot mode: $(boot_mode_status_label "$(state_or_default "BOOT_MODE" "bios")" "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")\nSecure Boot mode: $(secure_boot_mode_label "$(state_or_default "SECURE_BOOT_MODE" "disabled")")\nHostname: $(state_or_default "HOSTNAME" "archlinux")\nTimezone: $(state_or_default "TIMEZONE" "Europe/Istanbul")\nLocale: $(state_or_default "LOCALE" "en_US.UTF-8")\nKeyboard: $(state_or_default "KEYMAP" "us")\nUser: $(state_or_default "USERNAME" "archuser")\nInstall profile: $(install_profile_label "$(state_or_default "INSTALL_PROFILE" "daily")")\nFilesystem: $(state_or_default "FILESYSTEM" "ext4")\nEncryption: $(state_or_default "ENABLE_LUKS" "false")\nSnapshots: $(snapshot_provider_label "$(state_or_default "SNAPSHOT_PROVIDER" "none")")\nZram: $(state_or_default "ENABLE_ZRAM" "false")\nDesktop: $(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")\nDisplay session: $(display_mode_label "$(state_or_default "DISPLAY_SESSION" "wayland")")\nDisplay manager: $(display_manager_label "$(state_or_default "DISPLAY_MANAGER" "none")")\nGreeter: $(greeter_frontend_label "$(state_or_default "GREETER" "tuigreet")")\nSafe mode: $(state_or_default "INSTALL_SAFE_MODE" "$INSTALL_SAFE_MODE")\n\nDestructive steps may erase existing data."
+	message="$(installer_context_header)\n\nThis will prepare a bootable Arch Linux system on:\n\n$disk\n\nDisk model: $(state_or_default "DISK_MODEL" "Unknown")\nDisk transport: $(disk_transport_label "$(state_or_default "DISK_TRANSPORT" "unknown")")\nDisk type: $(post_install_disk_type_label)\nDisk strategy: $(state_or_default "INSTALL_SCENARIO" "wipe")\nBoot mode: $(boot_mode_status_label "$(state_or_default "BOOT_MODE" "bios")" "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")\nSecure Boot mode: $(secure_boot_mode_label "$(state_or_default "SECURE_BOOT_MODE" "disabled")")\nHostname: $(state_or_default "HOSTNAME" "archlinux")\nTimezone: $(state_or_default "TIMEZONE" "Europe/Istanbul")\nLocale: $(state_or_default "LOCALE" "en_US.UTF-8")\nKeyboard: $(state_or_default "KEYMAP" "us")\nUser: $(state_or_default "USERNAME" "archuser")\nInstall profile: $(install_profile_label "$(state_or_default "INSTALL_PROFILE" "daily")")\nFilesystem: $(state_or_default "FILESYSTEM" "ext4")\nEncryption: $(state_or_default "ENABLE_LUKS" "false")\nSnapshots: $(snapshot_provider_label "$(state_or_default "SNAPSHOT_PROVIDER" "none")")\nSteam: $(state_or_default "INSTALL_STEAM" "false")\nZram: $(state_or_default "ENABLE_ZRAM" "false")\nDesktop: $(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")\nDisplay session: $(display_mode_label "$(state_or_default "DISPLAY_SESSION" "wayland")")\nDisplay manager: $(display_manager_label "$(state_or_default "DISPLAY_MANAGER" "none")")\nGreeter: $(greeter_frontend_label "$(state_or_default "GREETER" "none")")\nSafe mode: $(state_or_default "INSTALL_SAFE_MODE" "$INSTALL_SAFE_MODE")\n\nDestructive steps may erase existing data."
 	if flag_enabled "$DEV_MODE"; then
 		message+="\n\nDev mode flags:\nSKIP_PARTITION=$SKIP_PARTITION\nSKIP_PACSTRAP=$SKIP_PACSTRAP\nSKIP_CHROOT=$SKIP_CHROOT\nINSTALL_UI_MODE=$INSTALL_UI_MODE"
 	fi

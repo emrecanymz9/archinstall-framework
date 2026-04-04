@@ -22,7 +22,7 @@ Default behavior.
 - no Secure Boot configuration is attempted
 - the normal initramfs and standard systemd-boot entry remain in place
 
-### Assisted
+### Setup Foundation
 
 Recommended safe-preparation mode.
 
@@ -35,15 +35,6 @@ Recommended safe-preparation mode.
 - signs generated EFI binaries with `sbctl` when possible
 - attempts `sbctl enroll-keys -m` only when firmware reports setup mode and the environment is not virtualized
 - never fails the install if the Secure Boot steps are not available
-
-### Advanced
-
-Tooling-only mode.
-
-- adds `sbctl` and `systemd-ukify`
-- records the follow-up note
-- builds the UKI path like assisted mode
-- leaves automatic key enrollment to manual operator control
 
 ## Current Safety Model
 
@@ -58,7 +49,7 @@ That means:
 
 ## UKI Pipeline
 
-When Secure Boot mode is enabled on UEFI installs, the target configuration performs:
+When Secure Boot setup is enabled on UEFI installs, the target configuration performs:
 
 - mkinitcpio configuration
 - `/etc/kernel/cmdline` generation

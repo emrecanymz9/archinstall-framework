@@ -50,6 +50,8 @@ list_disks() {
 	local size_gib
 	local label
 	local alerts
+	local transport
+	local disk_type
 
 	archiso_disk="$(get_archiso_boot_disk 2>/dev/null || true)"
 
@@ -60,12 +62,14 @@ list_disks() {
 		[[ -n $archiso_disk && $name == "$archiso_disk" ]] && continue
 
 		model="$(disk_model_value "$name")"
+		transport="$(disk_transport_label "$(disk_transport_value "$name")")"
+		disk_type="$(disk_type_label "$(detect_disk_type "$name" 2>/dev/null || printf 'unknown')")"
 		size_gib="$(disk_size_gib "$name")"
 		label="$(disk_label_value "$name")"
 		alerts="$(detect_disk_os_presence "$name")"
 		partitions="$(disk_partition_summary "$name")"
 
-		printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$size_gib" "$model" "$label" "$alerts" "$partitions"
+		printf '%s\t%s\t%s (%s, %s)\t%s\t%s\t%s\n' "$name" "$size_gib" "$model" "$transport" "$disk_type" "$label" "$alerts" "$partitions"
 	done < <(lsblk -dnpr -o NAME,SIZE,TYPE 2>/dev/null)
 }
 

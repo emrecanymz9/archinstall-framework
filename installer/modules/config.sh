@@ -46,6 +46,8 @@ install_config_bool_json() {
 sync_install_config_json() {
 	local disk="$(install_config_get_or_default "DISK" "")"
 	local disk_type="$(normalize_disk_type "$(install_config_get_or_default "DISK_TYPE" "unknown")")"
+	local disk_model="$(install_config_get_or_default "DISK_MODEL" "")"
+	local disk_transport="$(install_config_get_or_default "DISK_TRANSPORT" "unknown")"
 	local filesystem="$(install_config_get_or_default "FILESYSTEM" "ext4")"
 	local boot_mode="$(install_config_get_or_default "BOOT_MODE" "auto")"
 	local install_scenario="$(install_config_get_or_default "INSTALL_SCENARIO" "wipe")"
@@ -64,6 +66,7 @@ sync_install_config_json() {
 	local cpu_vendor="$(install_config_get_or_default "CPU_VENDOR" "unknown")"
 	local gpu_vendor="$(install_config_get_or_default "GPU_VENDOR" "generic")"
 	local enable_zram="$(install_config_get_or_default "ENABLE_ZRAM" "false")"
+	local install_steam="$(install_config_get_or_default "INSTALL_STEAM" "false")"
 	local secure_boot_mode="$(install_config_get_or_default "SECURE_BOOT_MODE" "disabled")"
 	local luks_password_set=${INSTALL_LUKS_PASSWORD:+true}
 	local tmp_file=""
@@ -75,6 +78,8 @@ sync_install_config_json() {
 {
   "disk": {
     "device": "$(install_config_escape "$disk")",
+		"model": "$(install_config_escape "$disk_model")",
+		"transport": "$(install_config_escape "$disk_transport")",
     "type": "$(install_config_escape "$disk_type")",
     "filesystem": "$(install_config_escape "$filesystem")",
     "bootMode": "$(install_config_escape "$boot_mode")",
@@ -102,6 +107,7 @@ sync_install_config_json() {
   },
   "features": {
     "zram": $(install_config_bool_json "$enable_zram"),
+		"steam": $(install_config_bool_json "$install_steam"),
     "secureBootMode": "$(install_config_escape "$secure_boot_mode")",
     "snapshotProvider": "$(install_config_escape "$snapshot_provider")"
   }

@@ -8,11 +8,8 @@ snapshot_provider_label() {
 		snapper)
 			printf 'Snapper\n'
 			;;
-		timeshift)
-			printf 'Timeshift\n'
-			;;
 		*)
-			printf '%s\n' "$1"
+			printf 'None\n'
 			;;
 	esac
 }
@@ -48,9 +45,6 @@ snapshot_required_packages() {
 				fi
 			fi
 			;;
-		timeshift)
-			package_ref=(timeshift)
-			;;
 		*)
 			;;
 	esac
@@ -73,14 +67,6 @@ if command -v snapper >/dev/null 2>&1; then
 fi
 EOF
 			fi
-			;;
-		timeshift)
-			cat <<'EOF'
-log_chroot_step "Configuring Timeshift"
-if command -v timeshift >/dev/null 2>&1; then
-	timeshift --create --comments "Initial system snapshot" --tags D || true
-fi
-EOF
 			;;
 		*)
 			;;

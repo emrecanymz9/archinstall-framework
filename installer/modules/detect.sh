@@ -46,6 +46,77 @@ disk_model_value() {
 	printf 'Model not reported\n'
 }
 
+disk_transport_value() {
+	local disk=${1:?disk is required}
+	local disk_name=""
+	local transport=""
+	local sys_transport_path=""
+
+	transport="$(lsblk -dnro TRAN "$disk" 2>/dev/null | head -n 1 || true)"
+	transport="$(printf '%s' "$transport" | sed 's/^ *//;s/ *$//')"
+	if [[ -n $transport ]]; then
+		printf '%s\n' "${transport,,}"
+		return 0
+	fi
+
+	disk_name="$(basename "$disk")"
+	if [[ ! -d /sys/block/$disk_name ]]; then
+		disk_name="$(lsblk -no pkname "$disk" 2>/dev/null | head -n 1 || true)"
+	fi
+	case $disk_name in
+		nvme*)
+			printf 'nvme\n'
+			return 0
+			;;
+		vd*|xvd*)
+			printf 'virtio\n'
+			return 0
+			;;
+		mmcblk*)
+			printf 'emmc\n'
+			return 0
+			;;
+	esac
+
+	sys_transport_path="/sys/block/$disk_name/device/transport"
+	if [[ -r $sys_transport_path ]]; then
+		read -r transport < "$sys_transport_path" || true
+		transport="$(printf '%s' "$transport" | sed 's/^ *//;s/ *$//')"
+		if [[ -n $transport ]]; then
+			printf '%s\n' "${transport,,}"
+			return 0
+		fi
+	fi
+
+	printf 'unknown\n'
+}
+
+disk_transport_label() {
+	case ${1:-unknown} in
+		nvme)
+			printf 'NVMe\n'
+			;;
+		sata|ata)
+			printf 'SATA\n'
+			;;
+		usb)
+			printf 'USB\n'
+			;;
+		scsi)
+			printf 'SCSI\n'
+			;;
+		virtio)
+			printf 'VirtIO\n'
+			;;
+		emmc)
+			printf 'eMMC\n'
+			;;
+		*)
+			printf 'Unknown bus\n'
+			;;
+	esac
+}
+
 detect_boot_mode_safe() {
 	if [[ -d /sys/firmware/efi ]]; then
 		printf 'uefi\n'

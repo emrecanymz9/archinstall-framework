@@ -18,12 +18,19 @@ GPU vendor detection uses `lspci`.
 
 Current driver policy:
 
-- Intel -> `mesa`
-- AMD -> `mesa`
+- Intel -> `mesa`, `vulkan-intel`, `intel-media-driver`
+- AMD -> `mesa`, `vulkan-radeon`, `libva-mesa-driver`
 - NVIDIA -> `nvidia`, `nvidia-utils`
 - unknown GUI hardware -> `mesa`
 
 The installer only adds GPU packages automatically for graphical desktop installs.
+
+When Steam is enabled for a graphical install, the hardware layer also adds matching 32-bit userspace graphics packages:
+
+- Intel -> `lib32-mesa`, `lib32-vulkan-intel`
+- AMD -> `lib32-mesa`, `lib32-vulkan-radeon`
+- NVIDIA -> `lib32-nvidia-utils`
+- generic GUI hardware -> `lib32-mesa`
 
 ## Desktop Service Defaults
 
@@ -41,3 +48,4 @@ The hardware layer is intentionally conservative:
 - it does not install all GPU stacks at once
 - it only enables virtualization services that match the detected platform
 - it keeps headless installs free of unnecessary desktop GPU packages
+- it only adds Steam-related multilib graphics packages when `INSTALL_STEAM=true`

@@ -17,7 +17,8 @@ resolve_package_strategy() {
 	local greeter=${14:-tuigreet}
 	local snapshot_provider=${15:-none}
 	local enable_luks=${16:-false}
-	local -n package_ref=${17:?package reference is required}
+	local install_steam=${17:-false}
+	local -n package_ref=${18:?package reference is required}
 	local -a base_packages=()
 	local -a profile_packages=()
 	local -a hardware_packages=()
@@ -25,17 +26,22 @@ resolve_package_strategy() {
 	local -a secure_boot_packages_ref=()
 	local -a snapshot_packages=()
 	local -a encryption_packages=()
+	local -a steam_packages=()
 
 	package_ref=()
 	get_final_packages "$install_profile" "$editor_choice" "$include_vscode" "$custom_tools" base_packages || return 1
 	append_unique_packages package_ref "${base_packages[@]}"
 
 	install_profile_packages "$install_profile" "$editor_choice" "$include_vscode" "$custom_tools" profile_packages || return 1
-	hardware_profile_packages "$environment_vendor" "$gpu_vendor" "$desktop_profile" hardware_packages || return 1
+	hardware_profile_packages "$environment_vendor" "$gpu_vendor" "$desktop_profile" "$install_steam" hardware_packages || return 1
 	secure_boot_packages "$secure_boot_mode" "$boot_mode" secure_boot_packages_ref || return 1
 	append_unique_packages package_ref "${profile_packages[@]}"
 	append_unique_packages package_ref "${hardware_packages[@]}"
 	append_unique_packages package_ref "${secure_boot_packages_ref[@]}"
+	if [[ $install_steam == "true" ]]; then
+		steam_packages=(steam)
+		append_unique_packages package_ref "${steam_packages[@]}"
+	fi
 
 	if desktop_profile_packages "$desktop_profile" "$display_manager" "$display_session" desktop_packages "$greeter"; then
 		append_unique_packages package_ref "${desktop_packages[@]}"

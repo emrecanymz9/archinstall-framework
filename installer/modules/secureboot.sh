@@ -5,11 +5,8 @@ secure_boot_mode_label() {
 		disabled)
 			printf 'Disabled\n'
 			;;
-		assisted)
-			printf 'Assisted (sbctl)\n'
-			;;
-		advanced)
-			printf 'Advanced (manual control)\n'
+		setup)
+			printf 'Setup Foundation\n'
 			;;
 		*)
 			printf '%s\n' "$1"
@@ -27,10 +24,9 @@ select_secure_boot_mode() {
 		return 0
 	fi
 
-	menu "Secure Boot" "Choose the Secure Boot strategy.\n\nCurrent firmware state: $(secure_boot_state_label "$secure_boot_state")\n\nDisabled keeps the install unchanged. Assisted installs sbctl and prepares signed boot assets without making Secure Boot a hard requirement. Advanced keeps package support but leaves all key handling to you." 18 78 4 \
+	menu "Secure Boot" "Choose the Secure Boot strategy.\n\nCurrent firmware state: $(secure_boot_state_label "$secure_boot_state")\n\nDisabled leaves the boot chain unchanged. Setup foundation installs sbctl and ukify, prepares UKIs, and attempts safe enrollment only when firmware setup mode permits it." 18 78 4 \
 		"disabled" "Do not configure Secure Boot" \
-		"assisted" "Recommended: prepare sbctl-based signing" \
-		"advanced" "Manual control for preplanned Secure Boot workflows"
+		"setup" "Prepare a non-fatal sbctl-based Secure Boot foundation"
 
 	case $DIALOG_STATUS in
 		0)
@@ -54,7 +50,7 @@ secure_boot_packages() {
 	fi
 
 	case $secure_boot_mode in
-		assisted|advanced)
+		setup)
 			package_ref+=(sbctl systemd-ukify)
 			;;
 		*)
@@ -76,11 +72,8 @@ secure_boot_guidance_text() {
 		disabled)
 			printf 'Secure Boot configuration is disabled.'
 			;;
-		assisted)
-			printf 'Assisted mode installs sbctl and systemd-ukify, prepares a UKI workflow, and attempts safe key enrollment when firmware setup mode allows it.'
-			;;
-		advanced)
-			printf 'Advanced mode installs the Secure Boot and UKI tooling but leaves enrollment policy to manual follow-up.'
+		setup)
+			printf 'Setup foundation mode installs sbctl and systemd-ukify, prepares a UKI workflow, and keeps key enrollment best-effort so the install remains bootable even when firmware ownership is not ready.'
 			;;
 		*)
 			printf 'Secure Boot mode: %s' "$secure_boot_mode"

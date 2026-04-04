@@ -46,7 +46,10 @@ display_manager_label() {
 }
 
 greeter_frontend_label() {
-	case ${1:-tuigreet} in
+	case ${1:-none} in
+		none)
+			printf 'None\n'
+			;;
 		tuigreet)
 			printf 'tuigreet\n'
 			;;
@@ -167,7 +170,7 @@ desktop_profile_packages() {
 	local display_manager=${2:-none}
 	local display_mode=${3:-wayland}
 	local -n package_ref=${4:?package reference is required}
-	local greeter_frontend=${5:-tuigreet}
+	local greeter_frontend=${5:-none}
 
 	package_ref=()
 
@@ -219,7 +222,7 @@ desktop_profile_packages() {
 						qtgreet)
 							package_ref+=(greetd-qtgreet)
 							;;
-						*)
+						none|tuigreet|*)
 							package_ref+=(greetd-tuigreet)
 							;;
 					esac

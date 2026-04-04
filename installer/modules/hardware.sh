@@ -71,7 +71,8 @@ hardware_profile_packages() {
 	local environment_vendor=${1:-baremetal}
 	local gpu_vendor=${2:-unknown}
 	local desktop_profile=${3:-none}
-	local -n package_ref=${4:?package reference is required}
+	local install_steam=${4:-false}
+	local -n package_ref=${5:?package reference is required}
 	local cpu_vendor
 
 	package_ref=()
@@ -111,9 +112,27 @@ hardware_profile_packages() {
 		case $gpu_vendor in
 			nvidia)
 				package_ref+=(nvidia nvidia-utils)
+				if [[ $install_steam == "true" ]]; then
+					package_ref+=(lib32-nvidia-utils)
+				fi
 				;;
-			intel|amd|generic|vm|vmware|virtualbox|qemu|kvm|hyperv)
+			intel)
+				package_ref+=(mesa vulkan-intel intel-media-driver)
+				if [[ $install_steam == "true" ]]; then
+					package_ref+=(lib32-mesa lib32-vulkan-intel)
+				fi
+				;;
+			amd)
+				package_ref+=(mesa vulkan-radeon libva-mesa-driver)
+				if [[ $install_steam == "true" ]]; then
+					package_ref+=(lib32-mesa lib32-vulkan-radeon)
+				fi
+				;;
+			generic|vm|vmware|virtualbox|qemu|kvm|hyperv)
 				package_ref+=(mesa)
+				if [[ $install_steam == "true" ]]; then
+					package_ref+=(lib32-mesa)
+				fi
 				;;
 			*)
 				;;

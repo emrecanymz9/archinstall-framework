@@ -9,6 +9,17 @@ STATE_ENVIRONMENT=ENVIRONMENT_VENDOR
 STATE_FILESYSTEM=FILESYSTEM
 STATE_PROFILE=INSTALL_PROFILE
 
+normalize_boolean_state() {
+	case ${1:-false} in
+		1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn])
+			printf 'true\n'
+			;;
+		*)
+			printf 'false\n'
+			;;
+	esac
+}
+
 normalize_display_manager() {
 	case ${1:-sddm} in
 		sddm|greetd|none)
@@ -21,12 +32,34 @@ normalize_display_manager() {
 }
 
 normalize_greeter() {
-	case ${1:-tuigreet} in
-		tuigreet|qtgreet)
+	case ${1:-none} in
+		none|tuigreet|qtgreet)
 			printf '%s\n' "$1"
 			;;
 		*)
-			printf 'tuigreet\n'
+			printf 'none\n'
+			;;
+	esac
+}
+
+normalize_snapshot_provider() {
+	case ${1:-none} in
+		none|snapper)
+			printf '%s\n' "$1"
+			;;
+		*)
+			printf 'none\n'
+			;;
+	esac
+}
+
+normalize_secure_boot_mode() {
+	case ${1:-disabled} in
+		disabled|setup)
+			printf '%s\n' "$1"
+			;;
+		*)
+			printf 'disabled\n'
 			;;
 	esac
 }
@@ -109,6 +142,15 @@ set_state() {
 			;;
 		DISPLAY_SESSION|DISPLAY_MODE|RESOLVED_DISPLAY_MODE)
 			value="$(normalize_display_session "$value")"
+			;;
+		SNAPSHOT_PROVIDER)
+			value="$(normalize_snapshot_provider "$value")"
+			;;
+		SECURE_BOOT_MODE)
+			value="$(normalize_secure_boot_mode "$value")"
+			;;
+		INSTALL_STEAM)
+			value="$(normalize_boolean_state "$value")"
 			;;
 	esac
 

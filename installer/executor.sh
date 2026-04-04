@@ -287,12 +287,13 @@ build_pacstrap_package_list() {
 	local gpu_vendor=${13:-generic}
 	local secure_boot_mode=${14:-disabled}
 	local greeter=${15:-tuigreet}
+	local install_steam="$(get_state "INSTALL_STEAM" 2>/dev/null || printf 'false')"
 	local snapshot_provider="$(get_state "SNAPSHOT_PROVIDER" 2>/dev/null || printf 'none')"
 	local enable_luks="$(get_state "ENABLE_LUKS" 2>/dev/null || printf 'false')"
 
 	package_ref=()
 	if declare -F resolve_package_strategy >/dev/null 2>&1; then
-		resolve_package_strategy "$boot_mode" "$filesystem" "$enable_zram" "$install_profile" "$editor_choice" "$include_vscode" "$custom_tools" "$desktop_profile" "$display_manager" "$display_session" "$environment_vendor" "$gpu_vendor" "$secure_boot_mode" "$greeter" "$snapshot_provider" "$enable_luks" package_ref || return 1
+		resolve_package_strategy "$boot_mode" "$filesystem" "$enable_zram" "$install_profile" "$editor_choice" "$include_vscode" "$custom_tools" "$desktop_profile" "$display_manager" "$display_session" "$environment_vendor" "$gpu_vendor" "$secure_boot_mode" "$greeter" "$snapshot_provider" "$enable_luks" "$install_steam" package_ref || return 1
 		return 0
 	fi
 
@@ -364,6 +365,25 @@ require_commands() {
 
 	error_box "Missing Commands" "Install the required tools before continuing:\n\n${missing[*]}"
 	return 1
+}
+
+enable_multilib_repo() {
+	local pacman_conf=${1:?pacman configuration path is required}
+
+	if [[ ! -f $pacman_conf ]]; then
+		return 1
+	fi
+
+	if grep -q '^#\[multilib\]' "$pacman_conf"; then
+		sed -i '/^#\[multilib\]/,/^#Include = \/etc\/pacman.d\/mirrorlist/ s/^#//' "$pacman_conf"
+	fi
+	if ! grep -q '^\[multilib\]' "$pacman_conf"; then
+		cat >> "$pacman_conf" <<'EOF'
+
+[multilib]
+Include = /etc/pacman.d/mirrorlist
+EOF
+	fi
 }
 
 log_line() {
@@ -957,6 +977,7 @@ build_chroot_script() {
 	local environment_vendor=""
 	local gpu_vendor=""
 	local snapshot_provider=""
+	local install_steam=""
 	local enable_luks=""
 	local luks_mapper_name=""
 	local luks_partition_uuid=""
@@ -971,6 +992,7 @@ build_chroot_script() {
 	local quoted_environment_vendor=""
 	local quoted_gpu_vendor=""
 	local quoted_snapshot_provider=""
+	local quoted_install_steam=""
 	local quoted_enable_luks=""
 	local quoted_luks_mapper_name=""
 	local quoted_luks_partition_uuid=""
@@ -993,11 +1015,12 @@ build_chroot_script() {
 	environment_type="$(get_state "ENVIRONMENT_TYPE" 2>/dev/null || printf 'unknown')"
 	gpu_vendor="$(get_state "GPU_VENDOR" 2>/dev/null || printf 'generic')"
 	snapshot_provider="$(get_state "SNAPSHOT_PROVIDER" 2>/dev/null || printf 'none')"
+	install_steam="$(get_state "INSTALL_STEAM" 2>/dev/null || printf 'false')"
 	enable_luks="$(get_state "ENABLE_LUKS" 2>/dev/null || printf 'false')"
 	luks_mapper_name="$(get_state "LUKS_MAPPER_NAME" 2>/dev/null || printf 'cryptroot')"
 	luks_partition_uuid="$(get_state "LUKS_PART_UUID" 2>/dev/null || printf '')"
 	mkinitcpio_hooks="$(luks_mkinitcpio_hooks 2>/dev/null || printf 'base udev autodetect modconf block filesystems keyboard fsck')"
-	greeter="$(get_state "GREETER" 2>/dev/null || printf 'tuigreet')"
+	greeter="$(get_state "GREETER" 2>/dev/null || printf 'none')"
 
 	if [[ -z $user_password ]]; then
 		print_install_error "The installer user password is not set. Configure the install profile before starting."
@@ -1038,6 +1061,7 @@ build_chroot_script() {
 	printf -v quoted_environment_type '%q' "$environment_type"
 	printf -v quoted_gpu_vendor '%q' "$gpu_vendor"
 	printf -v quoted_snapshot_provider '%q' "$snapshot_provider"
+	printf -v quoted_install_steam '%q' "$install_steam"
 	printf -v quoted_enable_luks '%q' "$enable_luks"
 	printf -v quoted_luks_mapper_name '%q' "$luks_mapper_name"
 	printf -v quoted_luks_partition_uuid '%q' "$luks_partition_uuid"
@@ -1075,6 +1099,7 @@ TARGET_ENVIRONMENT_VENDOR=$quoted_environment_vendor
 TARGET_ENVIRONMENT_TYPE=$quoted_environment_type
 TARGET_GPU_VENDOR=$quoted_gpu_vendor
 TARGET_SNAPSHOT_PROVIDER=$quoted_snapshot_provider
+TARGET_INSTALL_STEAM=$quoted_install_steam
 TARGET_LUKS_ENABLED=$quoted_enable_luks
 TARGET_LUKS_MAPPER_NAME=$quoted_luks_mapper_name
 LUKS_UUID=$quoted_luks_partition_uuid
@@ -1187,6 +1212,20 @@ install_packages_if_missing() {
 	pacman -S "\${pacman_opts[@]}" "\${missing[@]}"
 }
 
+if [[ \$TARGET_INSTALL_STEAM == "true" ]]; then
+	log_chroot_step "Persisting multilib for Steam support"
+	if grep -q '^#\[multilib\]' /etc/pacman.conf; then
+		sed -i '/^#\[multilib\]/,/^#Include = \/etc\/pacman.d\/mirrorlist/ s/^#//' /etc/pacman.conf
+	fi
+	if ! grep -q '^\[multilib\]' /etc/pacman.conf; then
+		cat >> /etc/pacman.conf <<'PACMANMULTILIB'
+
+[multilib]
+Include = /etc/pacman.d/mirrorlist
+PACMANMULTILIB
+	fi
+fi
+
 write_secure_boot_notice() {
 	install -d -m 0700 /root
 	cat > /root/ARCHINSTALL_SECURE_BOOT.txt <<EOT
@@ -1197,7 +1236,7 @@ Install profile: \$TARGET_INSTALL_PROFILE
 Environment: \$TARGET_ENVIRONMENT_VENDOR
 GPU: \$TARGET_GPU_VENDOR
 
-This installer uses mkinitcpio + ukify to build a Unified Kernel Image when Secure Boot mode is enabled.
+This installer uses mkinitcpio + ukify to build a Unified Kernel Image when Secure Boot setup is enabled.
 It keeps the workflow non-fatal: VM firmware quirks, missing tooling, or signing failures will not abort the install.
 
 If the GPU is NVIDIA, the installer enables early driver modules and appends nvidia_drm.modeset=1 to the kernel command line.
@@ -1308,7 +1347,7 @@ configure_secure_boot_mode() {
 		disabled)
 			return 0
 			;;
-		assisted|advanced)
+		setup)
 			log_chroot_step "Preparing Secure Boot and UKI tooling"
 			if ! command -v sbctl >/dev/null 2>&1; then
 				echo "[WARN] sbctl is not installed in the target system."
@@ -1328,9 +1367,9 @@ configure_secure_boot_mode() {
 			if [[ ! -d /var/lib/sbctl/keys ]]; then
 				sbctl create-keys || true
 			fi
-			if [[ \$TARGET_SECURE_BOOT_MODE == "assisted" && \$TARGET_SECURE_BOOT_SETUP_MODE == "setup" && \$TARGET_ENVIRONMENT_VENDOR == "baremetal" ]]; then
+			if [[ \$TARGET_SECURE_BOOT_SETUP_MODE == "setup" && \$TARGET_ENVIRONMENT_VENDOR == "baremetal" ]]; then
 				sbctl enroll-keys -m || true
-			elif [[ \$TARGET_SECURE_BOOT_MODE == "assisted" && \$TARGET_ENVIRONMENT_VENDOR != "baremetal" ]]; then
+			elif [[ \$TARGET_ENVIRONMENT_VENDOR != "baremetal" ]]; then
 				echo "[WARN] Virtualized environment detected. Skipping automatic key enrollment."
 			fi
 			mkinitcpio -P || {
@@ -1493,6 +1532,7 @@ EOT
 			;;
 		*)
 			TARGET_DISPLAY_MANAGER="sddm"
+			TARGET_GREETER="none"
 			install_packages_if_missing sddm sddm-kcm || true
 			rm -f /etc/greetd/config.toml 2>/dev/null || true
 			systemctl disable greetd.service 2>/dev/null || true
@@ -1671,6 +1711,7 @@ run_install() {
 	local enable_luks="false"
 	local luks_mapper_name="cryptroot"
 	local snapshot_provider="none"
+	local install_steam="false"
 	local required_space_mib=""
 	local root_mount_options=""
 	local expected_root_source=""
@@ -1699,11 +1740,12 @@ run_install() {
 	format_efi="$(get_state "FORMAT_EFI" 2>/dev/null || printf 'true')"
 	desktop_profile="$(get_state "DESKTOP_PROFILE" 2>/dev/null || printf 'none')"
 	display_manager="$(get_state "DISPLAY_MANAGER" 2>/dev/null || printf 'none')"
-	greeter="$(get_state "GREETER" 2>/dev/null || printf 'tuigreet')"
+	greeter="$(get_state "GREETER" 2>/dev/null || printf 'none')"
 	display_session="$(get_state "DISPLAY_SESSION" 2>/dev/null || printf 'wayland')"
 	enable_luks="$(get_state "ENABLE_LUKS" 2>/dev/null || printf 'false')"
 	luks_mapper_name="$(get_state "LUKS_MAPPER_NAME" 2>/dev/null || printf 'cryptroot')"
 	snapshot_provider="$(get_state "SNAPSHOT_PROVIDER" 2>/dev/null || printf 'none')"
+	install_steam="$(get_state "INSTALL_STEAM" 2>/dev/null || printf 'false')"
 	[[ -n $boot_mode ]] || boot_mode="$(detect_boot_mode)"
 	current_secure_boot_state="$(detect_secure_boot_state "$boot_mode")"
 	environment_vendor="$(detect_virtualization_vendor)"
@@ -1760,6 +1802,8 @@ run_install() {
 		log_line "GPU: $(gpu_vendor_label "$gpu_vendor")"
 		log_line "Install scenario: $install_scenario"
 		disk_type="$(normalize_disk_type "$(detect_disk_type "$disk")")"
+		set_state "DISK_MODEL" "$(disk_model_value "$disk")" || exit 1
+		set_state "DISK_TRANSPORT" "$(disk_transport_value "$disk")" || exit 1
 		log_line "Disk type: $disk_type"
 		set_state "DISK_TYPE" "$disk_type" || exit 1
 		log_line "Filesystem: $filesystem"
@@ -1771,14 +1815,20 @@ run_install() {
 		log_line "Greeter: $greeter"
 		log_line "Encryption: $enable_luks"
 		log_line "Snapshot provider: $snapshot_provider"
+		log_line "Steam: $install_steam"
 		log_line "Safe mode: $INSTALL_SAFE_MODE"
 
 		resolved_display_session="$(normalize_display_session "$display_session")"
 		set_state "DISPLAY_SESSION" "$resolved_display_session" || exit 1
 		set_state "DISPLAY_MODE" "$resolved_display_session" || exit 1
 		set_state "RESOLVED_DISPLAY_MODE" "$resolved_display_session" || exit 1
-		set_state "GREETER" "$greeter" || exit 1
-		set_state "GREETER_FRONTEND" "$greeter" || exit 1
+		if [[ $display_manager == "greetd" ]]; then
+			set_state "GREETER" "$greeter" || exit 1
+			set_state "GREETER_FRONTEND" "$greeter" || exit 1
+		else
+			set_state "GREETER" "none" || exit 1
+			set_state "GREETER_FRONTEND" "none" || exit 1
+		fi
 		log_line "Resolved display session: $resolved_display_session"
 		if flag_enabled "$DEV_MODE"; then
 			log_line "DEV_MODE enabled: SKIP_PARTITION=$SKIP_PARTITION SKIP_PACSTRAP=$SKIP_PACSTRAP SKIP_CHROOT=$SKIP_CHROOT"
@@ -1788,6 +1838,9 @@ run_install() {
 		log_stage 5 "Checking prerequisites"
 		run_optional_step "Checking internet connectivity" ping -c 1 archlinux.org
 		initialize_pacman_environment || exit 1
+		if [[ $install_steam == "true" ]]; then
+			run_step "Enabling multilib for Steam support" enable_multilib_repo /etc/pacman.conf || exit 1
+		fi
 
 		if flag_enabled "$SKIP_PARTITION"; then
 			log_line "Skipping partitioning and formatting because SKIP_PARTITION=$SKIP_PARTITION"
@@ -1973,6 +2026,7 @@ run_install() {
 				printf 'Filesystem  : %s\n' "$filesystem"
 				printf 'Encryption  : %s\n' "$enable_luks"
 				printf 'Snapshots   : %s\n' "$snapshot_provider"
+				printf 'Steam       : %s\n' "$install_steam"
 				printf 'Zram        : %s\n' "$enable_zram"
 				printf 'Boot Mode   : %s\n' "$boot_mode"
 				printf 'Secure Boot : %s\n' "$secure_boot_mode"
@@ -1982,6 +2036,8 @@ run_install() {
 				printf '\nDISK LAYOUT\n'
 				printf '-----------\n'
 				printf 'Device      : %s\n' "$disk"
+				printf 'Disk Model  : %s\n' "$(get_state "DISK_MODEL" 2>/dev/null || printf 'unknown')"
+				printf 'Disk Bus    : %s\n' "$(get_state "DISK_TRANSPORT" 2>/dev/null || printf 'unknown')"
 				printf 'Disk Type   : %s\n' "$disk_type"
 				printf 'Scenario    : %s\n' "$(get_state "INSTALL_SCENARIO" 2>/dev/null || printf 'wipe')"
 				printf 'EFI         : %s\n' "${efi_partition:-not required}"
