@@ -45,7 +45,7 @@ install_config_bool_json() {
 
 sync_install_config_json() {
 	local disk="$(install_config_get_or_default "DISK" "")"
-	local disk_type="$(install_config_get_or_default "DISK_TYPE" "unknown")"
+	local disk_type="$(normalize_disk_type "$(install_config_get_or_default "DISK_TYPE" "unknown")")"
 	local filesystem="$(install_config_get_or_default "FILESYSTEM" "ext4")"
 	local boot_mode="$(install_config_get_or_default "BOOT_MODE" "auto")"
 	local install_scenario="$(install_config_get_or_default "INSTALL_SCENARIO" "wipe")"

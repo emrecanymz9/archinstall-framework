@@ -9,6 +9,51 @@ STATE_ENVIRONMENT=ENVIRONMENT_VENDOR
 STATE_FILESYSTEM=FILESYSTEM
 STATE_PROFILE=INSTALL_PROFILE
 
+normalize_disk_type() {
+	local value=${1-}
+	local normalized=""
+
+	value="${value//$'\r'/}"
+	value="${value//$'\n'/}"
+	normalized="${value,,}"
+	normalized="${normalized//[[:space:]_-]/}"
+
+	case $normalized in
+		""|auto|unknown)
+			printf 'unknown\n'
+			;;
+		hdd|rotational)
+			printf 'hdd\n'
+			;;
+			ssd|sata|satassd|ata|flash|emmc|mmc|mmcblk)
+			printf 'ssd\n'
+			;;
+		nvme|nvmessd|pcie)
+			printf 'nvme\n'
+			;;
+		*)
+			printf 'unknown\n'
+			;;
+	esac
+}
+
+disk_type_label() {
+	case "$(normalize_disk_type "${1-unknown}")" in
+		hdd)
+			printf 'HDD\n'
+			;;
+		ssd)
+			printf 'SATA SSD\n'
+			;;
+		nvme)
+			printf 'NVMe SSD\n'
+			;;
+		*)
+			printf 'Unknown\n'
+			;;
+	esac
+}
+
 ensure_state_file() {
 	mkdir -p "$(dirname "$ARCHINSTALL_STATE_FILE")"
 	touch "$ARCHINSTALL_STATE_FILE"
@@ -18,6 +63,10 @@ set_state() {
 	local key=${1:?state key is required}
 	local value=${2-}
 	local temp_file
+
+	if [[ $key == "DISK_TYPE" ]]; then
+		value="$(normalize_disk_type "$value")"
+	fi
 
 	ensure_state_file
 	temp_file="$(mktemp "${ARCHINSTALL_STATE_FILE}.XXXXXX")" || return 1

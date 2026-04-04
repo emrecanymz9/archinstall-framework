@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# TEST_OK
 
 set -uo pipefail
 
@@ -635,20 +636,7 @@ post_install_filesystem_label() {
 }
 
 post_install_disk_type_label() {
-	case "$(state_or_default "DISK_TYPE" "unknown")" in
-		hdd)
-			printf 'HDD\n'
-			;;
-		ssd)
-			printf 'SATA SSD\n'
-			;;
-		nvme)
-			printf 'NVMe SSD\n'
-			;;
-		*)
-			printf 'Unknown\n'
-			;;
-	esac
+	disk_type_label "$(state_or_default "DISK_TYPE" "unknown")"
 }
 
 install_summary_text() {
@@ -1347,7 +1335,7 @@ show_state_summary() {
 	keymap="$(state_or_default "KEYMAP" "us")"
 	username="$(state_or_default "USERNAME" "Not configured")"
 	filesystem="$(state_or_default "FILESYSTEM" "ext4")"
-		disk_type="$(state_or_default "DISK_TYPE" "unknown")"
+	disk_type="$(normalize_disk_type "$(state_or_default "DISK_TYPE" "unknown")")"
 	install_scenario="$(state_or_default "INSTALL_SCENARIO" "wipe")"
 	enable_luks="$(state_or_default "ENABLE_LUKS" "false")"
 	snapshot_provider="$(state_or_default "SNAPSHOT_PROVIDER" "none")"

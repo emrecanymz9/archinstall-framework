@@ -215,7 +215,7 @@ detect_disk_type() {
 	fi
 
 	if [[ $disk_name == nvme* ]]; then
-		printf 'nvme\n'
+		normalize_disk_type "nvme"
 		return 0
 	fi
 
@@ -223,30 +223,32 @@ detect_disk_type() {
 	if [[ -r $rotational_path ]]; then
 		read -r rotational_value < "$rotational_path"
 		if [[ $rotational_value == "0" ]]; then
-			printf 'ssd\n'
+			normalize_disk_type "ssd"
 		else
-			printf 'hdd\n'
+			normalize_disk_type "hdd"
 		fi
 		return 0
 	fi
 
 	if rotational_value="$(lsblk -dn -o ROTA "$disk" 2>> "$ARCHINSTALL_LOG" || true)"; then
 		if [[ $rotational_value == "0" ]]; then
-			printf 'ssd\n'
+			normalize_disk_type "ssd"
 			return 0
 		fi
 		if [[ $rotational_value == "1" ]]; then
-			printf 'hdd\n'
+			normalize_disk_type "hdd"
 			return 0
 		fi
 	fi
 
-	printf 'unknown\n'
+	normalize_disk_type "unknown"
 }
 
 ext4_mount_options() {
-	local disk_type=${1:-unknown}
+	local disk_type
 	local -a options=(defaults noatime)
+
+	disk_type="$(normalize_disk_type "${1:-unknown}")"
 
 	if [[ $disk_type == "ssd" || $disk_type == "nvme" ]]; then
 		options+=(discard=async)
@@ -257,8 +259,10 @@ ext4_mount_options() {
 
 btrfs_mount_options() {
 	local subvolume=${1:?subvolume is required}
-	local disk_type=${2:-unknown}
+	local disk_type
 	local -a options=("subvol=$subvolume" compress=zstd noatime)
+
+	disk_type="$(normalize_disk_type "${2:-unknown}")"
 
 	if [[ $disk_type == "ssd" || $disk_type == "nvme" ]]; then
 		options+=(discard=async)
@@ -1724,8 +1728,7 @@ run_install() {
 		log_line "Environment: $(environment_label "$environment_vendor")"
 		log_line "GPU: $(gpu_vendor_label "$gpu_vendor")"
 		log_line "Install scenario: $install_scenario"
-		disk_type="$(detect_disk_type "$disk")"
-		[[ -n $disk_type ]] || disk_type="unknown"
+		disk_type="$(normalize_disk_type "$(detect_disk_type "$disk")")"
 		log_line "Disk type: $disk_type"
 		set_state "DISK_TYPE" "$disk_type" || exit 1
 		log_line "Filesystem: $filesystem"
