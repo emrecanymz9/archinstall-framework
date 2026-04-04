@@ -7,10 +7,6 @@ bluetooth_required_packages() {
 }
 
 enable_bluetooth_service() {
-	echo "[STEP] Enabling bluetooth"
-	if systemctl list-unit-files bluetooth.service >/dev/null 2>&1; then
-		systemctl enable bluetooth.service || true
-	else
-		echo "[WARN] bluetooth.service not present - skipping"
-	fi
+	echo "[INFO] Bluetooth service enablement is handled by installer/postinstall/services.sh"
+	return 0
 }

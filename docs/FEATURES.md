@@ -2,57 +2,52 @@
 
 ## Runtime Detection
 
-- Boot mode detection for BIOS and UEFI
-- Secure Boot firmware state and setup-mode detection
-- Virtualization vendor detection for VMware, VirtualBox, QEMU/KVM, and Hyper-V
-- CPU and GPU vendor detection used by package strategy
-- Disk model, transport bus, and coarse disk-type reporting in the UI and manifest
+- boot mode
+- Secure Boot state and setup mode
+- virtualization vendor
+- CPU vendor
+- GPU vendor
+- disk model, transport, and disk type
 
 ## Install Profiles
 
-- `daily`: KDE-first workstation flow with reduced prompts
-- `dev`: developer-focused profile with editor and VS Code choices
-- `custom`: explicit package, desktop, and optional-feature selection
+- `daily`
+- `dev`
+- `custom`
 
-## Desktop And Login
+## Desktop
 
-- KDE Plasma desktop profile
-- Deterministic display session selection: `wayland` or `x11`
-- Deterministic display manager selection: `sddm`, `greetd`, or `none`
-- greetd frontend selection: `tuigreet`, `qtgreet`, or `none`
-- Strict enable/disable behavior so only the chosen display manager is active in the target system
+- KDE desktop profile
+- display session selection: `wayland|x11`
+- display manager selection: `sddm|greetd|none`
+- greetd greeter selection: `tuigreet|qtgreet|none`
 
-## Storage
+## Storage And Recovery
 
-- Full-disk wipe installs
-- GPT initialization for blank or unreadable disks
-- Free-space installs
-- Windows-aware dual-boot preparation
-- Manual partition reuse with EFI validation
-- Btrfs subvolume layout: `@`, `@home`, `@var`, `@snapshots`
-- Disk-space validation before pacstrap
+- full-disk wipe
+- free-space install
+- dual-boot preparation
+- manual partition reuse
+- ext4 and btrfs
+- optional LUKS2 root encryption
+- snapper for btrfs installs
 
-## Security And Recovery
+## Boot
 
-- Optional LUKS2 root encryption
-- Secure Boot foundation mode with `sbctl` and UKI preparation
-- Non-fatal Secure Boot workflow for imperfect firmware or VM environments
-- Snapper integration for btrfs installs with timeline and cleanup timers
-- BIOS plus GPT safety checks before GRUB install
+- `systemd-boot`
+- `grub`
+- `limine`
+- Secure Boot foundation mode
 
-## Package Strategy
+## Package System
 
-- Config-driven base and required package sets from `config/packages.conf`
-- GPU-aware driver selection for Intel, AMD, NVIDIA, and virtualized systems
-- CPU microcode package selection
-- Guest tools for supported hypervisors
-- Optional Steam support with multilib enablement and 32-bit graphics userspace
-- Optional zram and VS Code support
-- Plugin-contributed packages merged into the final pacstrap set
+- deterministic base and required package layers
+- optional checklist packages: `firefox`, `keepassxc`, `vscode`, `fastfetch`
+- GPU-aware package mapping
+- Steam-aware 32-bit graphics userspace additions
 
-## UX And Operations
+## Postinstall
 
-- Dialog-first UI with TTY fallback
-- Live progress output with recent log lines
-- Saved installer state summaries
-- Install manifest and copied install log in the target user home directory
+- service enablement in one place
+- graphical target enforcement
+- install log export into the target system

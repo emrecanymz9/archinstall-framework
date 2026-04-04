@@ -38,12 +38,10 @@ safe_source_module "$SCRIPT_DIR/core/module-registry.sh" || true
 safe_source_module "$SCRIPT_DIR/core/plugin-loader.sh" || true
 # shellcheck source=installer/modules/config.sh
 safe_source_module "$SCRIPT_DIR/modules/config.sh" || true
-# shellcheck source=installer/modules/runtime.sh
-safe_source_module "$SCRIPT_DIR/modules/runtime.sh" || true
+# shellcheck source=installer/modules/system.sh
+safe_source_module "$SCRIPT_DIR/modules/system.sh" || true
 # shellcheck source=installer/modules/hardware.sh
 safe_source_module "$SCRIPT_DIR/modules/hardware.sh" || true
-# shellcheck source=installer/modules/environment.sh
-safe_source_module "$SCRIPT_DIR/modules/environment.sh" || true
 # shellcheck source=installer/executor.sh
 safe_source_module "$SCRIPT_DIR/executor.sh" || {
 	printf 'failed to source %s/executor.sh\n' "$SCRIPT_DIR" >&2
@@ -51,12 +49,12 @@ safe_source_module "$SCRIPT_DIR/executor.sh" || {
 }
 # shellcheck source=installer/disk.sh
 safe_source_module "$SCRIPT_DIR/disk.sh" || true
-# shellcheck source=installer/modules/network.sh
-safe_source_module "$SCRIPT_DIR/modules/network.sh" || true
+# shellcheck source=installer/modules/system/network.sh
+safe_source_module "$SCRIPT_DIR/modules/system/network.sh" || true
 # shellcheck source=installer/modules/desktop.sh
 safe_source_module "$SCRIPT_DIR/modules/desktop.sh" || true
-# shellcheck source=installer/modules/secureboot.sh
-safe_source_module "$SCRIPT_DIR/modules/secureboot.sh" || true
+# shellcheck source=installer/features/secureboot.sh
+safe_source_module "$SCRIPT_DIR/features/secureboot.sh" || true
 # shellcheck source=installer/modules/profiles.sh
 safe_source_module "$SCRIPT_DIR/modules/profiles.sh" || true
 # shellcheck source=installer/modules/profile.sh
@@ -65,8 +63,8 @@ safe_source_module "$SCRIPT_DIR/modules/profile.sh" || true
 safe_source_module "$SCRIPT_DIR/modules/packages.sh" || true
 # shellcheck source=installer/modules/luks.sh
 safe_source_module "$SCRIPT_DIR/modules/luks.sh" || true
-# shellcheck source=installer/modules/snapshots.sh
-safe_source_module "$SCRIPT_DIR/modules/snapshots.sh" || true
+# shellcheck source=installer/features/snapshots.sh
+safe_source_module "$SCRIPT_DIR/features/snapshots.sh" || true
 
 INSTALL_USER_PASSWORD=${INSTALL_USER_PASSWORD:-""}
 INSTALL_ROOT_PASSWORD=${INSTALL_ROOT_PASSWORD:-""}
@@ -1126,7 +1124,7 @@ configure_install_profile() {
 	enable_zram="$(select_zram_preference "$(state_or_default "ENABLE_ZRAM" "$ZRAM")")" || return 1
 	user_password="$(prompt_password "User Password")" || return 1
 	root_password="$(prompt_password "Root Password")" || return 1
-	boot_mode="$(state_or_default "BOOT_MODE" "$(detect_boot_mode 2>/dev/null || printf 'uefi')")"
+	boot_mode="$(state_or_default "BOOT_MODE" "bios")"
 	bootloader="$(normalize_bootloader "$(state_or_default "BOOTLOADER" "")" "$boot_mode")"
 	secure_boot_state="$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")"
 	secure_boot_mode="$(select_secure_boot_mode "$(state_or_default "SECURE_BOOT_MODE" "disabled")" "$boot_mode" "$secure_boot_state")" || return 1
@@ -1142,25 +1140,13 @@ configure_install_profile() {
 			;;
 		dev)
 			desktop_profile="$(select_desktop_profile)" || return 1
-			display_session="$(select_display_mode "$desktop_profile" "$(state_or_default "DISPLAY_SESSION" "wayland")")" || return 1
-			display_manager="$(select_display_manager "$desktop_profile")" || return 1
-			if [[ $display_manager == "greetd" ]]; then
-				greeter_frontend="$(select_greeter_frontend "$desktop_profile" "$(state_or_default "GREETER" "tuigreet")")" || return 1
-			else
-				greeter_frontend="none"
-			fi
+			collect_display_preferences "$desktop_profile" display_session display_manager greeter_frontend || return 1
 			editor_choice="$(select_editor_choice "$(state_or_default "EDITOR_CHOICE" "micro")")" || return 1
 			include_vscode="$(select_boolean_value "VS Code" "Include Visual Studio Code in the DEV profile?" "$(state_or_default "INCLUDE_VSCODE" "false")" "Install code" "Skip code")" || return 1
 			;;
 		custom)
 			desktop_profile="$(select_desktop_profile)" || return 1
-			display_session="$(select_display_mode "$desktop_profile" "$(state_or_default "DISPLAY_SESSION" "wayland")")" || return 1
-			display_manager="$(select_display_manager "$desktop_profile")" || return 1
-			if [[ $display_manager == "greetd" ]]; then
-				greeter_frontend="$(select_greeter_frontend "$desktop_profile" "$(state_or_default "GREETER" "tuigreet")")" || return 1
-			else
-				greeter_frontend="none"
-			fi
+			collect_display_preferences "$desktop_profile" display_session display_manager greeter_frontend || return 1
 			editor_choice="$(select_editor_choice "$(state_or_default "EDITOR_CHOICE" "nano")")" || return 1
 			local _saved_cl
 			_saved_cl="$(state_or_default "CUSTOM_CHECKLIST" "")"
@@ -1169,15 +1155,9 @@ configure_install_profile() {
 			checklist_box "Custom Packages" \
 				"Select the packages to include in your install. All items are pre-selected by default. Use SPACE to toggle." \
 				22 76 12 \
-				"git"       "Version control"             "$(_st git)"       \
-				"curl"      "HTTP client"                 "$(_st curl)"      \
-				"wget"      "File downloader"             "$(_st wget)"      \
+				"firefox"   "Web browser"                 "$(_st firefox)"   \
+				"keepassxc" "Password manager"            "$(_st keepassxc)" \
 				"fastfetch" "System info tool"            "$(_st fastfetch)" \
-				"ripgrep"   "Fast recursive grep (rg)"   "$(_st ripgrep)"   \
-				"fd"        "Fast find alternative"       "$(_st fd)"        \
-				"less"      "Terminal pager"              "$(_st less)"      \
-				"man-db"    "Manual page reader"          "$(_st man-db)"    \
-				"man-pages" "Linux manual pages"          "$(_st man-pages)" \
 				"vscode"    "Visual Studio Code (code)"  "$(_st_off vscode)"
 			unset -f _st _st_off
 			[[ $DIALOG_STATUS -eq 0 ]] || return 1
@@ -1240,6 +1220,8 @@ configure_install_profile() {
 		install_steam="$(select_boolean_value "Steam" "Install Steam gaming support?\n\nThis enables the multilib repository and adds Steam plus matching 32-bit graphics userspace packages when needed." "$(state_or_default "INSTALL_STEAM" "false")" "Install Steam" "Skip Steam")" || return 1
 	fi
 
+	apply_display_state "$desktop_profile" display_session display_manager greeter_frontend || return 1
+
 	set_state "HOSTNAME" "$hostname" || return 1
 	set_state "TIMEZONE" "$timezone" || return 1
 	set_state "LOCALE" "$locale" || return 1
@@ -1259,11 +1241,6 @@ configure_install_profile() {
 	set_state "INSTALL_STEAM" "$install_steam" || return 1
 	set_state "ENABLE_ZRAM" "$enable_zram" || return 1
 	set_state "DESKTOP_PROFILE" "$desktop_profile" || return 1
-	set_state "DISPLAY_SESSION" "$display_session" || return 1
-	set_state "DISPLAY_MODE" "$display_session" || return 1
-	set_state "DISPLAY_MANAGER" "$display_manager" || return 1
-	set_state "GREETER" "$greeter_frontend" || return 1
-	set_state "GREETER_FRONTEND" "$greeter_frontend" || return 1
 	set_state "BOOT_MODE" "$boot_mode" || return 1
 	set_state "BOOTLOADER" "$bootloader" || return 1
 	INSTALL_USER_PASSWORD="$user_password"
@@ -1341,7 +1318,7 @@ show_state_summary() {
 	local root_password_state
 
 	disk="$(get_state "DISK" 2>/dev/null || printf 'Not selected')"
-	boot_mode="$(get_state "BOOT_MODE" 2>/dev/null || detect_boot_mode 2>/dev/null || printf 'bios')"
+	boot_mode="$(state_or_default "BOOT_MODE" "bios")"
 	efi_partition="$(get_state "EFI_PART" 2>/dev/null || printf 'Not created')"
 	root_partition="$(get_state "ROOT_PART" 2>/dev/null || printf 'Not created')"
 	hostname="$(state_or_default "HOSTNAME" "archlinux")"
@@ -1359,7 +1336,7 @@ show_state_summary() {
 	enable_zram="$(state_or_default "ENABLE_ZRAM" "false")"
 	desktop_profile="$(state_or_default "DESKTOP_PROFILE" "none")"
 	display_session="$(state_or_default "DISPLAY_SESSION" "wayland")"
-	resolved_display_mode="$(state_or_default "RESOLVED_DISPLAY_MODE" "wayland")"
+	resolved_display_mode="$(state_or_default "DISPLAY_SESSION" "wayland")"
 	display_manager="$(state_or_default "DISPLAY_MANAGER" "none")"
 	greeter="$(state_or_default "GREETER" "none")"
 	secure_boot_state="$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")"

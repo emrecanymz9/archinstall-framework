@@ -122,15 +122,13 @@ Canonical installer layout:
 
 Compatibility wrappers remain in older module paths where needed, but new bootloader, feature, and post-install behavior lives in those directories.
 
+The current repository no longer treats wrappers as part of the target architecture. Entry points now source canonical files directly.
+
 Additional documentation:
 
-- `docs/ARCHITECTURE.md`
-- `docs/FEATURES.md`
-- `docs/STATE.md`
-- `docs/DISK_MANAGER.md`
-- `docs/INSTALL_FLOW.md`
-- `docs/SECURE_BOOT.md`
-- `docs/HARDWARE.md`
+- `docs/architecture.md`
+- `docs/features.md`
+- `docs/state.md`
 
 ## Live ISO Rules
 

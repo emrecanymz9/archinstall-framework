@@ -30,8 +30,8 @@ snapshot_required_packages() {
 	local provider=${1:-none}
 	local filesystem=${2:-ext4}
 	local boot_mode=${3:-uefi}
-	local -n package_ref=${4:?package reference is required}
-	local selected_bootloader="$(get_state "BOOTLOADER" 2>/dev/null || default_bootloader_for_mode "$boot_mode")"
+	local selected_bootloader=${4:-$(default_bootloader_for_mode "$boot_mode")}
+	local -n package_ref=${5:?package reference is required}
 
 	package_ref=()
 	case $provider in

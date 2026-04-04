@@ -2,124 +2,101 @@
 
 ## Entry Points
 
-- `installer/install.sh`: interactive configuration and operator-facing summaries.
-- `installer/executor.sh`: install orchestration, pacstrap, fstab handoff, and chroot execution.
-- `installer/state.sh`: canonical persisted state implementation.
+- `installer/install.sh`: interactive UI, state capture, validation, and confirmations.
+- `installer/executor.sh`: orchestration entrypoint.
+- `installer/state.sh`: single source of truth for persisted installer state.
 
-## Canonical Layout
+## Canonical Structure
 
-The installer now treats these directories as the stable structure:
+- `installer/core/`: shared hooks, registries, and pipeline execution.
+- `installer/modules/`: execution helpers only.
+- `installer/features/`: decision logic only.
+- `installer/boot/`: bootloader-specific snippets only.
+- `installer/postinstall/`: finalization, services, logs, and cleanup.
 
-- `installer/core/`: shared registries, hooks, plugin loading, and compatibility shims.
-- `installer/modules/`: runtime, disk, display, GPU, network, and system-oriented helpers.
-- `installer/features/`: optional feature units such as Steam, snapshots, and Secure Boot.
-- `installer/boot/`: bootloader helpers and bootloader-specific chroot snippets.
-- `installer/postinstall/`: finalization, service enablement, and cleanup snippets.
+## Runtime Rules
 
-Legacy module paths still exist where needed as wrappers so existing imports do not break while the new folders become the canonical structure.
+- Runtime and hardware detection are refreshed into state before the install pipeline runs.
+- The executor consumes persisted state; it does not make user-intent decisions.
+- Disk metadata is persisted as `DISK_MODEL`, `DISK_TYPE`, and `DISK_TRANSPORT`.
+- Display state is persisted as `DISPLAY_MANAGER`, `GREETER`, and `DISPLAY_SESSION`.
 
-## State Model
+## Pipeline
 
-State is normalized at write time in `installer/state.sh`.
+The final install pipeline is:
 
-Primary keys for install orchestration:
-
-- `BOOT_MODE`, `BOOTLOADER`
-- `CURRENT_SECURE_BOOT_STATE`, `CURRENT_SECURE_BOOT_SETUP_MODE`, `SECURE_BOOT_MODE`
-- `DISK`, `DISK_MODEL`, `DISK_TRANSPORT`, `DISK_TYPE`, `INSTALL_SCENARIO`
-- `FILESYSTEM`, `ENABLE_LUKS`, `SNAPSHOT_PROVIDER`, `ENABLE_ZRAM`, `INSTALL_STEAM`
-- `INSTALL_PROFILE`, `EDITOR_CHOICE`, `INCLUDE_VSCODE`, `CUSTOM_TOOLS`
-- `DESKTOP_PROFILE`, `DISPLAY_MANAGER`, `DISPLAY_SESSION`, `GREETER`
-- `ENVIRONMENT_VENDOR`, `ENVIRONMENT_TYPE`, `CPU_VENDOR`, `GPU_VENDOR`
-
-Compatibility aliases such as `DISPLAY_MODE`, `RESOLVED_DISPLAY_MODE`, and `GREETER_FRONTEND` remain mirrored for older callers.
-
-## Detection And Modules
-
-`installer/modules/detect.sh` remains the low-level probe layer for boot mode, virtualization, CPU/GPU vendors, disk metadata, and network hints.
-
-The higher-level module split is now:
-
-- `installer/modules/disk/`: partition strategy and disk analysis.
-- `installer/modules/display/`: compatibility entrypoints for display-manager logic.
-- `installer/modules/gpu/`: compatibility entrypoints for GPU package logic.
-- `installer/modules/network/`: compatibility entrypoints for network helpers.
-- `installer/modules/system/`: runtime and host-system state helpers.
+1. `apply_disk`
+2. `apply_base`
+3. `apply_gpu`
+4. `apply_display`
+5. `apply_boot`
+6. `apply_features`
+7. `apply_postinstall`
 
 ## Package Resolution
 
-`installer/modules/packages.sh` resolves the pacstrap set in deterministic layers:
+Package resolution is deterministic and driven by explicit inputs plus persisted state.
 
-1. base packages
-2. required profile packages
-3. profile and user packages
-4. hardware packages
-5. bootloader packages
-6. desktop packages
-7. Secure Boot tooling
-8. snapshot tooling
-9. optional feature packages such as Steam and zram
-10. plugin-contributed packages
+Always-installed packages include:
 
-Bootloader package selection is now explicit through `BOOTLOADER`, which supports `systemd-boot`, `grub`, and `limine`.
+- `base`
+- `linux`
+- `linux-firmware`
+- `mkinitcpio`
+- `sudo`
+- `networkmanager`
+- `iwd`
+- `iptables-nft`
+- `dialog`
+- `make`
+- `nano`
+- `git`
+- `curl`
+- `wget`
+- `ripgrep`
+- `fd`
+- `less`
+- `man-db`
+- `man-pages`
 
-## Boot Pipeline
+Optional checklist packages are limited to:
 
-Bootloader installation is now delegated to `installer/boot/`.
+- `firefox`
+- `keepassxc`
+- `vscode`
+- `fastfetch`
+
+## Display System
+
+Decision layer:
+
+- `installer/features/display.sh`
+
+Execution layer:
+
+- `installer/modules/display/manager.sh`
+
+Allowed values:
+
+- `DISPLAY_MANAGER`: `sddm|greetd|none`
+- `GREETER`: `tuigreet|qtgreet|none`
+- `DISPLAY_SESSION`: `wayland|x11`
+
+`postinstall/services.sh` is the only place that enables or disables display-manager services and it always sets `graphical.target`.
+
+## Boot System
+
+All boot logic lives under:
 
 - `installer/boot/systemd-boot.sh`
 - `installer/boot/grub.sh`
 - `installer/boot/limine.sh`
 
-The executor still builds one chroot script, but it now injects the selected bootloader snippet instead of hardcoding bootloader installation inline. Only one bootloader path is executed for a given install.
+The executor injects the selected boot snippet; it does not call bootloader installers directly.
 
-Limine support is integrated for both BIOS and UEFI at a basic deterministic level:
+## Postinstall
 
-- installs `limine`
-- writes `/boot/limine.cfg`
-- uses the same kernel command-line builder as GRUB and systemd-boot
-- supports LUKS and btrfs through the shared root command-line logic
-
-## Feature Pipeline
-
-Optional feature behavior is delegated to `installer/features/`:
-
-- `secureboot.sh`: state labels, package selection, and setup-mode semantics.
-- `snapshots.sh`: snapper package logic and btrfs snapshot setup.
-- `steam.sh`: multilib preparation and target persistence for Steam installs.
-
-This keeps feature-specific decisions out of the main executor flow.
-
-## Post-Install Pipeline
-
-Post-install work is now structured under `installer/postinstall/`.
-
-- `finalize.sh`: locale, timezone, hostname, sudo, user provisioning, and the host-side fstab wrapper.
-- `enable_services.sh`: NetworkManager, iwd, selected display manager, and snapper timers.
-- `cleanup.sh`: final temp-file cleanup in the target system.
-
-The executor calls these snippets after package installation, inside the chroot, before the install returns control to the operator.
-
-## Chroot Flow
-
-The generated chroot script now proceeds in this order:
-
-1. finalize base system state
-2. define service helpers
-3. install or repair optional packages as needed
-4. apply feature snippets
-5. configure desktop and display assets
-6. run VM helper enablement
-7. run structured post-install service enablement
-8. install exactly one bootloader
-9. apply Secure Boot setup if requested
-10. perform cleanup
-
-## Operator Artifacts
-
-After a successful install the executor still writes:
-
-- `archinstall.log`
-- `archinstall-manifest.txt`
-
-The manifest now records bootloader choice alongside runtime, disk, filesystem, display, and feature state.
+- `installer/postinstall/finalize.sh`: locale, hostname, users, sudo, mkinitcpio.
+- `installer/postinstall/services.sh`: all service enablement and display-manager exclusivity.
+- `installer/postinstall/logs.sh`: export install logs to `/var/log/archinstall.log` and `/home/$USER/install.log`.
+- `installer/postinstall/cleanup.sh`: cleanup steps.

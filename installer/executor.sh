@@ -49,34 +49,40 @@ safe_source_module "$SCRIPT_DIR/core/module-registry.sh" || true
 safe_source_module "$SCRIPT_DIR/core/plugin-loader.sh" || true
 # shellcheck source=installer/modules/config.sh
 safe_source_module "$SCRIPT_DIR/modules/config.sh" || true
-# shellcheck source=installer/modules/runtime.sh
-safe_source_module "$SCRIPT_DIR/modules/runtime.sh" || true
+# shellcheck source=installer/modules/system.sh
+safe_source_module "$SCRIPT_DIR/modules/system.sh" || true
 # shellcheck source=installer/modules/bootloader.sh
 safe_source_module "$SCRIPT_DIR/modules/bootloader.sh" || true
 # shellcheck source=installer/modules/hardware.sh
 safe_source_module "$SCRIPT_DIR/modules/hardware.sh" || true
-# shellcheck source=installer/modules/environment.sh
-safe_source_module "$SCRIPT_DIR/modules/environment.sh" || true
 # shellcheck source=installer/modules/desktop.sh
 safe_source_module "$SCRIPT_DIR/modules/desktop.sh" || true
-# shellcheck source=installer/modules/secureboot.sh
-safe_source_module "$SCRIPT_DIR/modules/secureboot.sh" || true
+# shellcheck source=installer/modules/display/manager.sh
+safe_source_module "$SCRIPT_DIR/modules/display/manager.sh" || true
+# shellcheck source=installer/features/secureboot.sh
+safe_source_module "$SCRIPT_DIR/features/secureboot.sh" || true
+# shellcheck source=installer/features/display.sh
+safe_source_module "$SCRIPT_DIR/features/display.sh" || true
+# shellcheck source=installer/features/gpu.sh
+safe_source_module "$SCRIPT_DIR/features/gpu.sh" || true
 # shellcheck source=installer/modules/profiles.sh
 safe_source_module "$SCRIPT_DIR/modules/profiles.sh" || true
-# shellcheck source=installer/modules/network.sh
-safe_source_module "$SCRIPT_DIR/modules/network.sh" || true
+# shellcheck source=installer/modules/system/network.sh
+safe_source_module "$SCRIPT_DIR/modules/system/network.sh" || true
 # shellcheck source=installer/modules/packages.sh
 safe_source_module "$SCRIPT_DIR/modules/packages.sh" || true
 # shellcheck source=installer/modules/luks.sh
 safe_source_module "$SCRIPT_DIR/modules/luks.sh" || true
-# shellcheck source=installer/modules/snapshots.sh
-safe_source_module "$SCRIPT_DIR/modules/snapshots.sh" || true
+# shellcheck source=installer/features/snapshots.sh
+safe_source_module "$SCRIPT_DIR/features/snapshots.sh" || true
 # shellcheck source=installer/features/steam.sh
 safe_source_module "$SCRIPT_DIR/features/steam.sh" || true
 # shellcheck source=installer/postinstall/finalize.sh
 safe_source_module "$SCRIPT_DIR/postinstall/finalize.sh" || true
-# shellcheck source=installer/postinstall/enable_services.sh
-safe_source_module "$SCRIPT_DIR/postinstall/enable_services.sh" || true
+# shellcheck source=installer/postinstall/services.sh
+safe_source_module "$SCRIPT_DIR/postinstall/services.sh" || true
+# shellcheck source=installer/postinstall/logs.sh
+safe_source_module "$SCRIPT_DIR/postinstall/logs.sh" || true
 # shellcheck source=installer/postinstall/cleanup.sh
 safe_source_module "$SCRIPT_DIR/postinstall/cleanup.sh" || true
 # shellcheck source=installer/modules/disk/layout.sh
@@ -89,6 +95,10 @@ safe_source_module "$SCRIPT_DIR/modules/system/network.sh" || true
 safe_source_module "$SCRIPT_DIR/modules/system/audio.sh" || true
 # shellcheck source=installer/modules/system/bluetooth.sh
 safe_source_module "$SCRIPT_DIR/modules/system/bluetooth.sh" || true
+# shellcheck source=installer/modules/gpu/driver.sh
+safe_source_module "$SCRIPT_DIR/modules/gpu/driver.sh" || true
+# shellcheck source=installer/core/pipeline.sh
+safe_source_module "$SCRIPT_DIR/core/pipeline.sh" || true
 
 if type load_installer_plugins >/dev/null 2>&1; then
 	load_installer_plugins || true
@@ -208,6 +218,7 @@ log_arch_chroot_failure() {
 detect_disk_type() {
 	local disk=${1:?disk is required}
 	local disk_name=""
+	local device_path=""
 	local rotational_path=""
 	local rotational_value=""
 
@@ -222,6 +233,10 @@ detect_disk_type() {
 		if [[ -n $_parent && -d /sys/block/$_parent ]]; then
 			disk_name="$_parent"
 		fi
+	fi
+	device_path="/dev/$disk_name"
+	if [[ ! -b $device_path ]]; then
+		device_path="$disk"
 	fi
 
 	if [[ $disk_name == nvme* ]]; then
@@ -240,7 +255,8 @@ detect_disk_type() {
 		return 0
 	fi
 
-	if rotational_value="$(lsblk -dn -o ROTA "$disk" 2>> "$ARCHINSTALL_LOG" || true)"; then
+	if rotational_value="$(lsblk -dn -o ROTA "$device_path" 2>> "$ARCHINSTALL_LOG" || true)"; then
+		rotational_value="${rotational_value//[[:space:]]/}"
 		if [[ $rotational_value == "0" ]]; then
 			normalize_disk_type "ssd"
 			return 0
@@ -297,13 +313,16 @@ build_pacstrap_package_list() {
 	local gpu_vendor=${13:-generic}
 	local secure_boot_mode=${14:-disabled}
 	local greeter=${15:-tuigreet}
-	local install_steam="$(get_state "INSTALL_STEAM" 2>/dev/null || printf 'false')"
-	local snapshot_provider="$(get_state "SNAPSHOT_PROVIDER" 2>/dev/null || printf 'none')"
-	local enable_luks="$(get_state "ENABLE_LUKS" 2>/dev/null || printf 'false')"
+	local install_steam=${16:-false}
+	local snapshot_provider=${17:-none}
+	local enable_luks=${18:-false}
+	local bootloader=${19:-$(default_bootloader_for_mode "$boot_mode")}
+	local cpu_vendor=${20:-unknown}
+	local environment_type=${21:-unknown}
 
 	package_ref=()
 	if declare -F resolve_package_strategy >/dev/null 2>&1; then
-		resolve_package_strategy "$boot_mode" "$filesystem" "$enable_zram" "$install_profile" "$editor_choice" "$include_vscode" "$custom_tools" "$desktop_profile" "$display_manager" "$display_session" "$environment_vendor" "$gpu_vendor" "$secure_boot_mode" "$greeter" "$snapshot_provider" "$enable_luks" "$install_steam" package_ref || return 1
+		resolve_package_strategy "$boot_mode" "$filesystem" "$enable_zram" "$install_profile" "$editor_choice" "$include_vscode" "$custom_tools" "$desktop_profile" "$display_manager" "$display_session" "$environment_vendor" "$gpu_vendor" "$secure_boot_mode" "$greeter" "$snapshot_provider" "$enable_luks" "$install_steam" "$bootloader" "$cpu_vendor" "$environment_type" package_ref || return 1
 		return 0
 	fi
 
@@ -339,8 +358,9 @@ require_commands() {
 	local filesystem=""
 	local enable_luks=""
 	local selected_bootloader=""
+	local -a boot_commands=()
 
-	boot_mode="$(get_state "BOOT_MODE" 2>/dev/null || detect_boot_mode 2>/dev/null || printf 'uefi')"
+	boot_mode="$(get_state "BOOT_MODE" 2>/dev/null || printf 'bios')"
 	filesystem="$(normalize_filesystem "$(get_state "FILESYSTEM" 2>/dev/null || printf 'ext4')")"
 	enable_luks="$(get_state "ENABLE_LUKS" 2>/dev/null || printf 'false')"
 	selected_bootloader="$(normalize_bootloader "$(get_state "BOOTLOADER" 2>/dev/null || printf '')" "$boot_mode")"
@@ -355,20 +375,12 @@ require_commands() {
 	if [[ $boot_mode == "uefi" ]]; then
 		command -v mkfs.fat >/dev/null 2>&1 || missing+=("mkfs.fat")
 	fi
-	case $selected_bootloader in
-		systemd-boot)
-			command -v bootctl >/dev/null 2>&1 || missing+=("bootctl")
-			;;
-		grub)
-			for cmd in grub-install grub-mkconfig; do
-				command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
-			done
-			;;
-		limine)
-			;;
-		*)
-			;;
-	esac
+	if declare -F bootloader_required_commands >/dev/null 2>&1; then
+		bootloader_required_commands "$selected_bootloader" "$boot_mode" boot_commands || return 1
+		for cmd in "${boot_commands[@]}"; do
+			command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+		done
+	fi
 
 	if [[ $filesystem == "btrfs" ]]; then
 		for cmd in mkfs.btrfs btrfs; do
@@ -1139,6 +1151,10 @@ $(postinstall_finalize_chroot_snippet)
 
 $(postinstall_services_chroot_snippet)
 
+$(postinstall_logs_chroot_snippet)
+
+$(bootloader_common_chroot_snippet)
+
 build_pacman_opts_array() {
 	local -a opts=()
 	read -r -a opts <<< "\${PACMAN_OPTS:---noconfirm --needed}"
@@ -1170,168 +1186,6 @@ install_packages_if_missing() {
 
 $(steam_chroot_setup_snippet "$(get_state "INSTALL_STEAM" 2>/dev/null || printf 'false')")
 
-write_secure_boot_notice() {
-	install -d -m 0700 /root
-	cat > /root/ARCHINSTALL_SECURE_BOOT.txt <<EOT
-Secure Boot firmware state: \$TARGET_CURRENT_SECURE_BOOT_STATE
-Secure Boot mode: \$TARGET_SECURE_BOOT_MODE
-Firmware setup mode: \$TARGET_SECURE_BOOT_SETUP_MODE
-Install profile: \$TARGET_INSTALL_PROFILE
-Environment: \$TARGET_ENVIRONMENT_VENDOR
-GPU: \$TARGET_GPU_VENDOR
-
-This installer uses mkinitcpio + ukify to build a Unified Kernel Image when Secure Boot setup is enabled.
-It keeps the workflow non-fatal: VM firmware quirks, missing tooling, or signing failures will not abort the install.
-
-If the GPU is NVIDIA, the installer enables early driver modules and appends nvidia_drm.modeset=1 to the kernel command line.
-If the environment is virtualized, automatic key enrollment is skipped unless you handle firmware ownership manually.
-
-Recommended follow-up commands:
-  sbctl status
-  sbctl create-keys
-  sbctl enroll-keys -m
-  sbctl verify
-EOT
-}
-
-build_kernel_cmdline() {
-	local kernel_cmdline=""
-
-	if [[ \$TARGET_LUKS_ENABLED == "true" && -n \${LUKS_UUID:-} ]]; then
-		kernel_cmdline="cryptdevice=UUID=\$LUKS_UUID:\$TARGET_LUKS_MAPPER_NAME root=UUID=\$ROOT_UUID rw"
-	else
-		kernel_cmdline="root=UUID=\$ROOT_UUID rw"
-	fi
-
-	if [[ \$TARGET_FILESYSTEM == "btrfs" ]]; then
-		kernel_cmdline="\$kernel_cmdline rootfstype=btrfs rootflags=\$TARGET_ROOT_MOUNT_OPTIONS"
-	fi
-	if [[ \$TARGET_GPU_VENDOR == "nvidia" ]]; then
-		kernel_cmdline="\$kernel_cmdline nvidia_drm.modeset=1"
-	fi
-
-	printf '%s\n' "\$kernel_cmdline"
-}
-
-configure_nvidia_mkinitcpio() {
-	if [[ \$TARGET_GPU_VENDOR != "nvidia" ]]; then
-		return 0
-	fi
-
-	if grep -q '^MODULES=' /etc/mkinitcpio.conf; then
-		sed -i 's/^MODULES=.*/MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)/' /etc/mkinitcpio.conf
-	else
-		echo 'MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)' >> /etc/mkinitcpio.conf
-	fi
-}
-
-write_uki_configuration() {
-	local kernel_cmdline=""
-
-	install -d -m 0755 /etc/kernel /boot/EFI/Linux
-	kernel_cmdline="\$(build_kernel_cmdline)"
-	printf '%s\n' "\$kernel_cmdline" > /etc/kernel/cmdline
-	cat > /etc/mkinitcpio.d/linux.preset <<'EOT'
-ALL_config="/etc/mkinitcpio.conf"
-ALL_kver="/boot/vmlinuz-linux"
-
-PRESETS=('default' 'fallback')
-
-default_uki="/boot/EFI/Linux/arch-linux.efi"
-fallback_uki="/boot/EFI/Linux/arch-linux-fallback.efi"
-fallback_options="-S autodetect"
-EOT
-}
-
-sign_efi_binary_if_present() {
-	local binary_path=
-	binary_path=\${1:-}
-	[[ -n \$binary_path ]] || return 0
-	[[ -e \$binary_path ]] || return 0
-
-	if ! sbctl sign -s "\$binary_path"; then
-		echo "[WARN] sbctl could not sign \$binary_path"
-		return 1
-	fi
-	return 0
-}
-
-configure_vm_services() {
-	case \$TARGET_ENVIRONMENT_VENDOR in
-		vmware)
-			enable_service_if_present vmtoolsd.service
-			;;
-		virtualbox)
-			enable_service_if_present vboxservice.service
-			;;
-		kvm|qemu)
-			enable_service_if_present spice-vdagentd.service
-			enable_service_if_present qemu-guest-agent.service
-			;;
-		hyperv)
-			enable_service_if_present hv_fcopy_daemon.service
-			enable_service_if_present hv_kvp_daemon.service
-			enable_service_if_present hv_vss_daemon.service
-			;;
-		*)
-			;;
-	esac
-	if [[ \$TARGET_ENVIRONMENT_TYPE == "laptop" ]]; then
-		enable_service_if_present tlp.service
-		enable_service_if_present acpid.service
-	fi
-}
-
-configure_secure_boot_mode() {
-	if [[ \$BOOT_MODE != "uefi" ]]; then
-		return 0
-	fi
-
-	case \$TARGET_SECURE_BOOT_MODE in
-		disabled)
-			return 0
-			;;
-		setup)
-			log_chroot_step "Preparing Secure Boot and UKI tooling"
-			if ! command -v sbctl >/dev/null 2>&1; then
-				echo "[WARN] sbctl is not installed in the target system."
-				mkinitcpio -P || true
-				write_secure_boot_notice
-				return 0
-			fi
-			if ! command -v ukify >/dev/null 2>&1; then
-				echo "[WARN] ukify is not installed in the target system. Falling back to the standard initramfs path."
-				mkinitcpio -P || true
-				write_secure_boot_notice
-				return 0
-			fi
-			configure_nvidia_mkinitcpio
-			write_uki_configuration
-			sbctl status || true
-			if [[ ! -d /var/lib/sbctl/keys ]]; then
-				sbctl create-keys || true
-			fi
-			if [[ \$TARGET_SECURE_BOOT_SETUP_MODE == "setup" && \$TARGET_ENVIRONMENT_VENDOR == "baremetal" ]]; then
-				sbctl enroll-keys -m || true
-			elif [[ \$TARGET_ENVIRONMENT_VENDOR != "baremetal" ]]; then
-				echo "[WARN] Virtualized environment detected. Skipping automatic key enrollment."
-			fi
-			mkinitcpio -P || {
-				echo "[WARN] mkinitcpio failed to build UKIs. Continuing with the rest of the install."
-				write_secure_boot_notice
-				return 0
-			}
-			sign_efi_binary_if_present /boot/EFI/Linux/arch-linux.efi || true
-			sign_efi_binary_if_present /boot/EFI/Linux/arch-linux-fallback.efi || true
-			sign_efi_binary_if_present /boot/EFI/systemd/systemd-bootx64.efi || true
-			sign_efi_binary_if_present /boot/EFI/BOOT/BOOTX64.EFI || true
-			write_secure_boot_notice
-			;;
-		*)
-			;;
-	esac
-}
-
 if [[ \$TARGET_ENABLE_ZRAM == "true" ]]; then
 	log_chroot_step "Configuring zram"
 	mkdir -p /etc/systemd
@@ -1344,153 +1198,23 @@ fi
 
 $(snapshot_chroot_setup_snippet "$(get_state "SNAPSHOT_PROVIDER" 2>/dev/null || printf 'none')" "$filesystem")
 
-write_display_manager_fallback_notice() {
-	local fallback_command=\${1:-startplasma-wayland}
-	install -d -m 0755 /etc/profile.d
-	cat > /etc/profile.d/archinstall-desktop-fallback.sh <<EOT
-if [[ -z "\${DISPLAY:-}" && -z "\${WAYLAND_DISPLAY:-}" && "\$(tty 2>/dev/null || true)" == /dev/tty* ]]; then
-	echo "Display manager failed, start KDE manually with: \$fallback_command"
-fi
-EOT
-}
-
-write_x11_fallback_helper() {
-	install -d -m 0755 /usr/local/bin
-	cat > /usr/local/bin/archinstall-startplasma-x11 <<'EOT'
-#!/usr/bin/env bash
-set -euo pipefail
-printf 'exec startplasma-x11\n' > "$HOME/.xinitrc"
-exec startx
-EOT
-	chmod 0755 /usr/local/bin/archinstall-startplasma-x11
-}
-
-plasma_session_command() {
-	case \${1:-wayland} in
-		x11)
-			printf 'startplasma-x11\n'
-			;;
-		*)
-			printf 'startplasma-wayland\n'
-			;;
-	esac
-}
-
-TARGET_DISPLAY_SESSION="\$(printf '%s' "\$TARGET_DISPLAY_SESSION" | tr '[:upper:]' '[:lower:]')"
-case "\$TARGET_DISPLAY_SESSION" in
-	wayland|x11)
-		;;
-	*)
-		TARGET_DISPLAY_SESSION="wayland"
-		;;
-esac
-SESSION_CMD="\$(plasma_session_command "\$TARGET_DISPLAY_SESSION")"
-TARGET_RESOLVED_DISPLAY_SESSION="\$TARGET_DISPLAY_SESSION"
-
-write_x11_fallback_helper
-
-build_greetd_command() {
-	case \${1:-tuigreet} in
-		qtgreet)
-			printf 'qtgreet\n'
-			;;
-		*)
-			printf 'tuigreet --time --cmd %s\n' "\$SESSION_CMD"
-			;;
-	esac
-}
-
 if [[ \$TARGET_SECURE_BOOT_MODE == "disabled" || \$BOOT_MODE != "uefi" ]]; then
 	log_chroot_step "Rebuilding initramfs"
 	mkinitcpio -P || true
 fi
 
-if [[ \$TARGET_DESKTOP_PROFILE == "kde" ]]; then
-	log_chroot_step "Configuring KDE services"
-	install_packages_if_missing plasma-desktop plasma-workspace sddm || true
-	enable_service_if_present bluetooth.service
-	install -d -m 0755 /etc/systemd/user/default.target.wants
-	ln -sf /usr/lib/systemd/user/pipewire.service /etc/systemd/user/default.target.wants/pipewire.service
-	ln -sf /usr/lib/systemd/user/pipewire-pulse.service /etc/systemd/user/default.target.wants/pipewire-pulse.service
-	ln -sf /usr/lib/systemd/user/wireplumber.service /etc/systemd/user/default.target.wants/wireplumber.service
 
-	log_chroot_step "Enforcing graphical target"
-	systemctl set-default graphical.target || true
-
-	case \$TARGET_DISPLAY_MANAGER in
-		greetd)
-			log_chroot_step "Configuring greetd"
-			if [[ \$TARGET_GREETER == "qtgreet" ]]; then
-				install_packages_if_missing greetd greetd-qtgreet || true
-			else
-				TARGET_GREETER="tuigreet"
-				install_packages_if_missing greetd greetd-tuigreet || true
-			fi
-			install -d -m 0755 /etc/greetd
-			cat > /etc/greetd/config.toml <<EOT
-[terminal]
-vt = 1
-
-[default_session]
-command = "\$(build_greetd_command "\$TARGET_GREETER")"
-user = "greeter"
-EOT
-			write_display_manager_fallback_notice "\$SESSION_CMD"
-			;;
-		sddm)
-			log_chroot_step "Configuring SDDM"
-			install_packages_if_missing sddm sddm-kcm || true
-			if command -v sddm >/dev/null 2>&1; then
-				install -d -m 0755 /etc/sddm.conf.d
-				cat > /etc/sddm.conf.d/kde_settings.conf <<'SDDMCONF'
-[Autologin]
-Relogin=false
-Session=
-User=
-
-[General]
-HaltCommand=/usr/bin/systemctl poweroff
-RebootCommand=/usr/bin/systemctl reboot
-
-[Theme]
-Current=breeze
-
-[Users]
-MaximumUid=60000
-MinimumUid=1000
-SDDMCONF
-				cat > /etc/sddm.conf.d/session.conf <<EOT
-[Autologin]
-Session=$(if [[ "\$TARGET_DISPLAY_SESSION" == "x11" ]]; then printf 'plasma.desktop'; else printf 'plasmawayland.desktop'; fi)
-EOT
-				rm -f /etc/greetd/config.toml 2>/dev/null || true
-				write_display_manager_fallback_notice "\$SESSION_CMD"
-			else
-				echo "[WARN] sddm binary not found in target system. Skipping SDDM configuration."
-				write_display_manager_fallback_notice "\$SESSION_CMD"
-			fi
-			;;
-		*)
-			TARGET_DISPLAY_MANAGER="sddm"
-			TARGET_GREETER="none"
-			install_packages_if_missing sddm sddm-kcm || true
-			rm -f /etc/greetd/config.toml 2>/dev/null || true
-			write_display_manager_fallback_notice "\$SESSION_CMD"
-			;;
-	esac
-fi
+$(display_manager_chroot_snippet "$(get_state "DESKTOP_PROFILE" 2>/dev/null || printf 'none')")
 
 if type emit_chroot_snippets >/dev/null 2>&1; then
 	emit_chroot_snippets
 fi
 
-configure_vm_services
 run_postinstall_service_enablement
-enable_service_if_present bluetooth.service
 
 $(emit_bootloader_chroot_snippet "$(normalize_bootloader "$(get_state "BOOTLOADER" 2>/dev/null || printf '')" "$boot_mode")" "$boot_mode")
 
-configure_secure_boot_mode
+$(secure_boot_chroot_snippet)
 $(postinstall_cleanup_chroot_snippet)
 EOF
 }
@@ -1606,19 +1330,22 @@ run_install() {
 	luks_mapper_name="$(get_state "LUKS_MAPPER_NAME" 2>/dev/null || printf 'cryptroot')"
 	snapshot_provider="$(get_state "SNAPSHOT_PROVIDER" 2>/dev/null || printf 'none')"
 	install_steam="$(get_state "INSTALL_STEAM" 2>/dev/null || printf 'false')"
-	[[ -n $boot_mode ]] || boot_mode="$(detect_boot_mode)"
-	current_secure_boot_state="$(detect_secure_boot_state "$boot_mode")"
-	environment_vendor="$(detect_virtualization_vendor)"
-	gpu_vendor="$(detect_gpu_vendor)"
+	if type refresh_runtime_system_state >/dev/null 2>&1; then
+		refresh_runtime_system_state >/dev/null 2>&1 || return 1
+	fi
+	if type refresh_hardware_state >/dev/null 2>&1; then
+		refresh_hardware_state >/dev/null 2>&1 || return 1
+	fi
+	boot_mode="$(get_state "BOOT_MODE" 2>/dev/null || printf 'bios')"
+	current_secure_boot_state="$(get_state "CURRENT_SECURE_BOOT_STATE" 2>/dev/null || printf 'unsupported')"
+	environment_vendor="$(get_state "ENVIRONMENT_VENDOR" 2>/dev/null || printf 'unknown')"
+	gpu_vendor="$(get_state "GPU_VENDOR" 2>/dev/null || printf 'generic')"
 	local cpu_vendor
-	cpu_vendor="$(detect_cpu_vendor_safe 2>/dev/null || printf 'unknown')"
-	set_state "CURRENT_SECURE_BOOT_STATE" "$current_secure_boot_state" || return 1
-	set_state "CURRENT_SECURE_BOOT_SETUP_MODE" "$(detect_secure_boot_setup_mode "$boot_mode")" || return 1
-	set_state "ENVIRONMENT_VENDOR" "$environment_vendor" || return 1
-	set_state "ENVIRONMENT_LABEL" "$(environment_label "$environment_vendor")" || return 1
-	set_state "GPU_VENDOR" "$gpu_vendor" || return 1
-	set_state "GPU_LABEL" "$(gpu_vendor_label "$gpu_vendor")" || return 1
-	set_state "CPU_VENDOR" "$cpu_vendor" || return 1
+	local environment_type
+	cpu_vendor="$(get_state "CPU_VENDOR" 2>/dev/null || printf 'unknown')"
+	environment_type="$(get_state "ENVIRONMENT_TYPE" 2>/dev/null || printf 'unknown')"
+	apply_display_state "$desktop_profile" display_session display_manager greeter || return 1
+	resolved_display_session="$(state_or_default "DISPLAY_SESSION" "$(normalize_display_session "$display_session")")"
 	set_state "BOOTLOADER" "$(normalize_bootloader "$bootloader" "$boot_mode")" || return 1
 	case $boot_mode in
 		uefi|bios)
@@ -1642,7 +1369,7 @@ run_install() {
 		run_hooks pre_install "$disk" || true
 	fi
 
-	build_pacstrap_package_list "$boot_mode" "$filesystem" "$enable_zram" pacstrap_packages "$desktop_profile" "$display_manager" "$display_session" "$install_profile" "$editor_choice" "$include_vscode" "$custom_tools" "$environment_vendor" "$gpu_vendor" "$secure_boot_mode" "$greeter"
+	build_pacstrap_package_list "$boot_mode" "$filesystem" "$enable_zram" pacstrap_packages "$desktop_profile" "$display_manager" "$resolved_display_session" "$install_profile" "$editor_choice" "$include_vscode" "$custom_tools" "$environment_vendor" "$gpu_vendor" "$secure_boot_mode" "$greeter" "$install_steam" "$snapshot_provider" "$enable_luks" "$bootloader" "$cpu_vendor" "$environment_type"
 
 	: > "$ARCHINSTALL_LOG" || {
 		print_install_error "Could not write the install log: $ARCHINSTALL_LOG"
@@ -1655,268 +1382,7 @@ run_install() {
 		trap 'cleanup_install' EXIT
 		trap 'on_install_sigint' INT
 
-		log_line "Starting installation on $disk"
-		log_line "Boot mode: $boot_mode"
-		log_line "Bootloader: $(bootloader_label "$(get_state "BOOTLOADER" 2>/dev/null || printf '')" "$boot_mode")"
-		log_line "Secure Boot firmware state: $current_secure_boot_state"
-		log_line "Secure Boot mode: $secure_boot_mode"
-		log_line "Environment: $(environment_label "$environment_vendor")"
-		log_line "GPU: $(gpu_vendor_label "$gpu_vendor")"
-		log_line "Install scenario: $install_scenario"
-		disk_type="$(normalize_disk_type "$(detect_disk_type "$disk")")"
-		set_state "DISK_MODEL" "$(disk_model_value "$disk")" || exit 1
-		set_state "DISK_TRANSPORT" "$(disk_transport_value "$disk")" || exit 1
-		log_line "Disk type: $disk_type"
-		set_state "DISK_TYPE" "$disk_type" || exit 1
-		log_line "Filesystem: $filesystem"
-		log_line "Zram: $enable_zram"
-		log_line "Install profile: $install_profile"
-		log_line "Desktop profile: $desktop_profile"
-		log_line "Display session: $display_session"
-		log_line "Display manager: $display_manager"
-		log_line "Greeter: $greeter"
-		log_line "Encryption: $enable_luks"
-		log_line "Snapshot provider: $snapshot_provider"
-		log_line "Steam: $install_steam"
-		log_line "Safe mode: $INSTALL_SAFE_MODE"
-
-		resolved_display_session="$(normalize_display_session "$display_session")"
-		set_state "DISPLAY_SESSION" "$resolved_display_session" || exit 1
-		set_state "DISPLAY_MODE" "$resolved_display_session" || exit 1
-		set_state "RESOLVED_DISPLAY_MODE" "$resolved_display_session" || exit 1
-		if [[ $display_manager == "greetd" ]]; then
-			set_state "GREETER" "$greeter" || exit 1
-			set_state "GREETER_FRONTEND" "$greeter" || exit 1
-		else
-			set_state "GREETER" "none" || exit 1
-			set_state "GREETER_FRONTEND" "none" || exit 1
-		fi
-		log_line "Resolved display session: $resolved_display_session"
-		if flag_enabled "$DEV_MODE"; then
-			log_line "DEV_MODE enabled: SKIP_PARTITION=$SKIP_PARTITION SKIP_PACSTRAP=$SKIP_PACSTRAP SKIP_CHROOT=$SKIP_CHROOT"
-		fi
-
-		run_step "Unmounting any previous install target" cleanup_mounts || exit 1
-		log_stage 5 "Checking prerequisites"
-		run_optional_step "Checking internet connectivity" ping -c 1 archlinux.org
-		initialize_pacman_environment || exit 1
-		if [[ $install_steam == "true" ]]; then
-			run_step "Enabling multilib for Steam support" enable_multilib_repo /etc/pacman.conf || exit 1
-		fi
-
-		if flag_enabled "$SKIP_PARTITION"; then
-			log_line "Skipping partitioning and formatting because SKIP_PARTITION=$SKIP_PARTITION"
-		elif [[ $install_scenario != "wipe" ]]; then
-			log_line "Reusing prepared partition layout because INSTALL_SCENARIO=$install_scenario"
-		else
-			run_step "Wiping existing signatures on $disk" wipefs -a "$disk" || exit 1
-			if [[ $boot_mode == "uefi" ]]; then
-				run_step "Creating a GPT partition table" parted -s "$disk" mklabel gpt || exit 1
-				run_step "Creating the EFI system partition" parted -s "$disk" mkpart ESP fat32 1MiB 1025MiB || exit 1
-				run_step "Setting the EFI boot flag" parted -s "$disk" set 1 boot on || exit 1
-				run_step "Setting the EFI ESP flag" parted -s "$disk" set 1 esp on || exit 1
-				run_step "Creating the root partition" parted -s "$disk" mkpart ROOT ext4 1025MiB 100% || exit 1
-			else
-				run_step "Creating an MBR partition table" parted -s "$disk" mklabel msdos || exit 1
-				run_step "Creating the root partition" parted -s "$disk" mkpart primary ext4 1MiB 100% || exit 1
-				run_step "Marking the root partition bootable" parted -s "$disk" set 1 boot on || exit 1
-			fi
-			run_step "Refreshing the kernel partition table" partprobe "$disk" || exit 1
-
-			if command -v udevadm >/dev/null 2>&1; then
-				run_step "Waiting for partition device nodes" udevadm settle || exit 1
-			fi
-		fi
-
-		mapfile -t resolved_partitions < <(resolve_target_partitions "$disk" "$boot_mode") || exit 1
-		efi_partition=${resolved_partitions[0]:-}
-		root_partition=${resolved_partitions[1]:-}
-		[[ $efi_partition == "-" ]] && efi_partition=""
-
-		if [[ -z $root_partition ]]; then
-			print_install_error "Could not resolve the target partitions for: $disk"
-			exit 1
-		fi
-		if [[ $boot_mode == "uefi" && -z $efi_partition ]]; then
-			print_install_error "Could not resolve the EFI partition for: $disk"
-			exit 1
-		fi
-
-		if [[ -n $efi_partition ]]; then
-			set_state "EFI_PART" "$efi_partition" || exit 1
-		else
-			unset_state "EFI_PART" || exit 1
-		fi
-		set_state "BOOT_MODE" "$boot_mode" || exit 1
-		set_state "ROOT_PART" "$root_partition" || exit 1
-		set_state "ENABLE_LUKS" "$enable_luks" || exit 1
-		set_state "LUKS_MAPPER_NAME" "$luks_mapper_name" || exit 1
-		set_state "SNAPSHOT_PROVIDER" "$snapshot_provider" || exit 1
-
-		log_stage 15 "Partitioning disk"
-		if flag_enabled "$SKIP_PARTITION"; then
-			log_line "Skipping filesystem creation because SKIP_PARTITION=$SKIP_PARTITION"
-		else
-			if [[ $boot_mode == "uefi" && $format_efi == "true" ]]; then
-				run_step "Formatting the EFI partition as FAT32" mkfs.fat -F32 "$efi_partition" || exit 1
-			fi
-			if [[ $format_root == "true" ]]; then
-				if flag_enabled "$enable_luks"; then
-					root_mount_device="$(prepare_luks_root_device "$root_partition" "$luks_mapper_name" "${INSTALL_LUKS_PASSWORD:-}")" || exit 1
-					set_state "ROOT_MAPPER" "$root_mount_device" || exit 1
-					luks_partition_uuid="$(get_partition_uuid "$root_partition")" || exit 1
-					set_state "LUKS_PART_UUID" "$luks_partition_uuid" || exit 1
-					format_root_filesystem "$filesystem" "$root_mount_device" || exit 1
-				else
-					root_mount_device="$root_partition"
-					format_root_filesystem "$filesystem" "$root_partition" || exit 1
-				fi
-			else
-				log_line "Skipping root filesystem creation because FORMAT_ROOT=$format_root"
-			fi
-		fi
-
-		if [[ -z $root_mount_device ]]; then
-			if flag_enabled "$enable_luks"; then
-				root_mount_device="$(open_luks_root_device "$root_partition" "$luks_mapper_name" "${INSTALL_LUKS_PASSWORD:-}")" || exit 1
-				set_state "ROOT_MAPPER" "$root_mount_device" || exit 1
-				if [[ -z ${luks_partition_uuid:-} ]]; then
-					luks_partition_uuid="$(get_partition_uuid "$root_partition")" || exit 1
-					set_state "LUKS_PART_UUID" "$luks_partition_uuid" || exit 1
-				fi
-			else
-				root_mount_device="$root_partition"
-			fi
-		fi
-
-		log_stage 25 "Mounting filesystems"
-		mount_root_filesystem "$filesystem" "$disk_type" "$root_mount_device" || exit 1
-		validate_target_mount "$root_mount_device" || exit 1
-		expected_root_source="$(normalized_mount_source /mnt)"
-		if [[ -z $expected_root_source ]]; then
-			print_install_error "Could not determine the expected source for /mnt after mounting."
-			exit 1
-		fi
-		log_line "[DEBUG] Locked /mnt to expected source: $expected_root_source"
-		log_line "[DEBUG] Mount state after root mount"
-		log_mount_state
-		if [[ $boot_mode == "uefi" ]]; then
-			validate_target_mount "$root_mount_device" "$expected_root_source" || exit 1
-			run_step "Creating the EFI mount point" mkdir -p /mnt/boot || exit 1
-			run_step "Mounting the EFI partition" mount "$efi_partition" /mnt/boot || exit 1
-		fi
-		validate_target_mount "$root_mount_device" "$expected_root_source" || exit 1
-		log_partition_metadata "$root_partition" "$efi_partition"
-		log_mounted_filesystems "$filesystem"
-		required_space_mib="$(estimate_target_required_space_mib "$desktop_profile" "$filesystem")"
-		validate_target_mount "$root_mount_device" "$expected_root_source" || exit 1
-		run_step "Checking target free space" ensure_target_has_space /mnt "$required_space_mib" || exit 1
-
-		if flag_enabled "$SKIP_PACSTRAP"; then
-			log_line "Skipping pacstrap because SKIP_PACSTRAP=$SKIP_PACSTRAP"
-			if ! verify_target_system_present "$root_mount_device" "$expected_root_source"; then
-				print_install_error "SKIP_PACSTRAP=true requires an existing installed system mounted at /mnt."
-				exit 1
-			fi
-			verify_base_system_files "$root_mount_device" "$expected_root_source" || exit 1
-			log_installed_target_packages "$root_mount_device" "$expected_root_source" || exit 1
-		else
-			validate_target_mount "$root_mount_device" "$expected_root_source" || exit 1
-			log_stage 35 "Downloading and installing packages (this may take several minutes)"
-			# Remove legacy iptables if present to prevent pacman conflict with iptables-nft
-			run_optional_step "Removing legacy iptables to prevent conflict" \
-				pacman -Rdd iptables --noconfirm
-			run_pacstrap_install "${pacstrap_packages[@]}" || exit 1
-			log_line "[DEBUG] Mount state after pacstrap"
-			log_mount_state
-			validate_target_mount "$root_mount_device" "$expected_root_source" || exit 1
-			verify_target_system_present "$root_mount_device" "$expected_root_source" || exit 1
-			verify_base_system_files "$root_mount_device" "$expected_root_source" || exit 1
-			log_line "[DEBUG] Verified required base system files after pacstrap"
-			log_installed_target_packages "$root_mount_device" "$expected_root_source" || exit 1
-		fi
-
-		log_stage 75 "Configuring system"
-		validate_target_mount "$root_mount_device" "$expected_root_source" || exit 1
-		postinstall_generate_fstab "$filesystem" "$disk_type" "$root_mount_device" "$expected_root_source" "$efi_partition" || exit 1
-		log_stage 82 "Generating fstab"
-
-		if flag_enabled "$SKIP_CHROOT"; then
-			log_line "Skipping chroot configuration because SKIP_CHROOT=$SKIP_CHROOT"
-		else
-			validate_target_mount "$root_mount_device" "$expected_root_source" || exit 1
-			root_uuid="$(get_partition_uuid "$root_mount_device")" || exit 1
-			if [[ $filesystem == "btrfs" ]]; then
-				root_mount_options="$(btrfs_mount_options '@' "$disk_type")"
-			else
-				root_mount_options=""
-			fi
-			prepare_chroot_mounts "$root_mount_device" "$expected_root_source" || exit 1
-			log_stage 88 "Running chroot configuration"
-			run_chroot_configuration "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_session" "$resolved_display_session" "$root_mount_device" "$expected_root_source" || exit 1
-			log_stage 95 "Finalizing installation"
-			if type run_hooks >/dev/null 2>&1; then
-				run_hooks post_chroot "$disk" "$root_partition" || true
-			fi
-		fi
-
-		# Copy install log to the new user's home directory for post-install reference
-		local log_username
-		log_username="$(get_state "USERNAME" 2>/dev/null || printf 'archuser')"
-		if [[ -n $log_username && -d "/mnt/home/$log_username" ]]; then
-			install -m 644 "$ARCHINSTALL_LOG" "/mnt/home/$log_username/archinstall.log" 2>>"$ARCHINSTALL_LOG" || true
-			log_line "Install log saved to /mnt/home/$log_username/archinstall.log"
-		fi
-
-		# Generate install manifest for post-install reference
-		local manifest_path="/mnt/home/$log_username/archinstall-manifest.txt"
-		if [[ -n $log_username && -d "/mnt/home/$log_username" ]]; then
-			{
-				printf 'ArchInstall Framework — Install Manifest\n'
-				printf 'Generated: %s\n' "$(date '+%F %T')"
-				printf '========================================\n\n'
-				printf 'CONFIGURATION\n'
-				printf '-------------\n'
-				printf 'Hostname    : %s\n' "$(get_state "HOSTNAME" 2>/dev/null || printf 'unknown')"
-				printf 'Timezone    : %s\n' "$(get_state "TIMEZONE" 2>/dev/null || printf 'unknown')"
-				printf 'Locale      : %s\n' "$(get_state "LOCALE" 2>/dev/null || printf 'unknown')"
-				printf 'Keymap      : %s\n' "$(get_state "KEYMAP" 2>/dev/null || printf 'unknown')"
-				printf 'User        : %s\n' "$log_username"
-				printf 'Profile     : %s\n' "$(get_state "INSTALL_PROFILE" 2>/dev/null || printf 'unknown')"
-				printf 'Desktop     : %s\n' "$(get_state "DESKTOP_PROFILE" 2>/dev/null || printf 'none')"
-				printf 'Display Mgr : %s\n' "$(get_state "DISPLAY_MANAGER" 2>/dev/null || printf 'none')"
-				printf 'Bootloader  : %s\n' "$(get_state "BOOTLOADER" 2>/dev/null || printf 'unknown')"
-				printf 'Filesystem  : %s\n' "$filesystem"
-				printf 'Encryption  : %s\n' "$enable_luks"
-				printf 'Snapshots   : %s\n' "$snapshot_provider"
-				printf 'Steam       : %s\n' "$install_steam"
-				printf 'Zram        : %s\n' "$enable_zram"
-				printf 'Boot Mode   : %s\n' "$boot_mode"
-				printf 'Secure Boot : %s\n' "$secure_boot_mode"
-				printf 'CPU Vendor  : %s\n' "$(get_state "CPU_VENDOR" 2>/dev/null || printf 'unknown')"
-				printf 'GPU Vendor  : %s\n' "$(get_state "GPU_VENDOR" 2>/dev/null || printf 'unknown')"
-				printf 'Environment : %s\n' "$(get_state "ENVIRONMENT_VENDOR" 2>/dev/null || printf 'unknown')"
-				printf '\nDISK LAYOUT\n'
-				printf '-----------\n'
-				printf 'Device      : %s\n' "$disk"
-				printf 'Disk Model  : %s\n' "$(get_state "DISK_MODEL" 2>/dev/null || printf 'unknown')"
-				printf 'Disk Bus    : %s\n' "$(get_state "DISK_TRANSPORT" 2>/dev/null || printf 'unknown')"
-				printf 'Disk Type   : %s\n' "$disk_type"
-				printf 'Scenario    : %s\n' "$(get_state "INSTALL_SCENARIO" 2>/dev/null || printf 'wipe')"
-				printf 'EFI         : %s\n' "${efi_partition:-not required}"
-				printf 'Root        : %s\n' "$root_partition"
-				printf '\nPartition table:\n'
-				lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS "$disk" 2>/dev/null || printf '  (lsblk unavailable)\n'
-				printf '\nMOUNT POINTS\n'
-				printf '------------\n'
-				findmnt -R /mnt 2>/dev/null || printf '  (findmnt unavailable)\n'
-				printf '\nPACKAGES INSTALLED\n'
-				printf '------------------\n'
-				timeout 300 arch-chroot /mnt pacman -Q 2>/dev/null || printf '  (unavailable)\n'
-			} > "$manifest_path" 2>/dev/null || true
-			chmod 644 "$manifest_path" 2>/dev/null || true
-			log_line "Install manifest saved to $manifest_path"
-		fi
+		run_install_pipeline || exit 1
 
 		ARCHINSTALL_INSTALL_SUCCESS=true
 		ARCHINSTALL_CLEANUP_ACTIVE=false

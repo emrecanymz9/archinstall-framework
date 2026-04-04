@@ -78,6 +78,29 @@ bootloader_required_packages() {
 	esac
 }
 
+bootloader_required_commands() {
+	local bootloader="$(normalize_bootloader "${1:-}" "${2:-bios}")"
+	local boot_mode=${2:-bios}
+	local -n command_ref=${3:?command reference is required}
+
+	command_ref=()
+	case $bootloader in
+		systemd-boot)
+			if [[ $boot_mode == "uefi" ]]; then
+				command_ref+=(bootctl)
+			fi
+			;;
+		grub)
+			command_ref+=(grub-install grub-mkconfig)
+			;;
+		limine)
+			command_ref+=(limine)
+			;;
+		*)
+			;;
+	esac
+}
+
 systemd_boot_chroot_snippet() {
 	cat <<'EOF'
 log_chroot_step "Installing systemd-boot"

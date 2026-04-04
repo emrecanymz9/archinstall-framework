@@ -1,61 +1,58 @@
-# State Model
+# State
 
-## Canonical Store
+## Source Of Truth
 
-- Persistent installer state lives in `installer/state.sh`.
-- Values are normalized on write.
-- `installer/core/state.sh` only exists to source the canonical implementation for older callers.
+`installer/state.sh` is the single source of truth.
+
+All install decisions must be represented in persisted state before pipeline execution.
 
 ## Core Runtime Keys
 
-- `BOOT_MODE`: `bios|uefi`
-- `BOOTLOADER`: `systemd-boot|grub|limine`
-- `CURRENT_SECURE_BOOT_STATE`: `enabled|disabled|unsupported|unknown`
-- `CURRENT_SECURE_BOOT_SETUP_MODE`: `setup|user|unknown`
-- `ENVIRONMENT_VENDOR`: `baremetal|vmware|virtualbox|kvm|qemu|hyperv|unknown`
-- `ENVIRONMENT_TYPE`: `desktop|laptop|vm|unknown`
-- `CPU_VENDOR`: `intel|amd|unknown`
-- `GPU_VENDOR`: `intel|amd|nvidia|generic|vm`
-- `GPU_LABEL`: human-readable label derived from `GPU_VENDOR`
+- `BOOT_MODE`
+- `BOOTLOADER`
+- `CURRENT_SECURE_BOOT_STATE`
+- `CURRENT_SECURE_BOOT_SETUP_MODE`
+- `ENVIRONMENT_VENDOR`
+- `ENVIRONMENT_TYPE`
+- `CPU_VENDOR`
+- `GPU_VENDOR`
+- `GPU_LABEL`
 
 ## Disk Keys
 
-- `DISK`: selected install target block device
-- `DISK_MODEL`: descriptive model string from lsblk or sysfs
-- `DISK_TRANSPORT`: `nvme|sata|ata|usb|scsi|virtio|emmc|unknown`
-- `DISK_TYPE`: normalized physical class `nvme|ssd|hdd|unknown`
-- `INSTALL_SCENARIO`: `wipe|initialize|free-space|dual-boot|manual`
-- `EFI_PART`, `ROOT_PART`, `ROOT_MAPPER`, `LUKS_PART_UUID`
+- `DISK`
+- `DISK_MODEL`
+- `DISK_TRANSPORT`
+- `DISK_TYPE`
+- `INSTALL_SCENARIO`
+- `EFI_PART`
+- `ROOT_PART`
+- `ROOT_MAPPER`
+- `LUKS_PART_UUID`
 
 ## Feature Keys
 
-- `FILESYSTEM`: `ext4|btrfs`
-- `ENABLE_LUKS`: boolean string
-- `SNAPSHOT_PROVIDER`: `none|snapper`
-- `ENABLE_ZRAM`: boolean string
-- `INSTALL_STEAM`: boolean string
-- `SECURE_BOOT_MODE`: `disabled|setup`
-
-## Profile And Package Keys
-
-- `INSTALL_PROFILE`: `daily|dev|custom`
-- `EDITOR_CHOICE`: `nano|micro|vim|kate`
-- `INCLUDE_VSCODE`: boolean string
-- `CUSTOM_TOOLS`: space-separated extra package list
+- `FILESYSTEM`
+- `ENABLE_LUKS`
+- `SNAPSHOT_PROVIDER`
+- `ENABLE_ZRAM`
+- `INSTALL_STEAM`
+- `SECURE_BOOT_MODE`
 
 ## Desktop Keys
 
-- `DESKTOP_PROFILE`: currently `kde|none`
-- `DISPLAY_MANAGER`: `sddm|greetd|none`
-- `DISPLAY_SESSION`: `wayland|x11`
-- `GREETER`: `tuigreet|qtgreet|none`
+- `DESKTOP_PROFILE`
+- `DISPLAY_MANAGER`
+- `GREETER`
+- `DISPLAY_SESSION`
 
-## Compatibility Keys
+## Package Keys
 
-These still exist for older callers and exported summaries, but canonical behavior is driven by the keys above:
+- `INSTALL_PROFILE`
+- `EDITOR_CHOICE`
+- `INCLUDE_VSCODE`
+- `CUSTOM_TOOLS`
 
-- `DISPLAY_MODE`
-- `RESOLVED_DISPLAY_MODE`
-- `GREETER_FRONTEND`
+## Compatibility
 
-They mirror normalized display state and should not be treated as the source of truth for new code.
+Older compatibility aliases may still be readable from state, but new code must write canonical keys only.

@@ -7,6 +7,16 @@ if [[ -r "$HARDWARE_MODULE_DIR/detect.sh" ]]; then
 	source "$HARDWARE_MODULE_DIR/detect.sh" >/dev/null 2>&1
 fi
 
+if [[ -r "$HARDWARE_MODULE_DIR/gpu/detect.sh" ]]; then
+	# shellcheck source=installer/modules/gpu/detect.sh
+	source "$HARDWARE_MODULE_DIR/gpu/detect.sh" >/dev/null 2>&1
+fi
+
+if [[ -r "$HARDWARE_MODULE_DIR/../features/gpu.sh" ]]; then
+	# shellcheck source=installer/features/gpu.sh
+	source "$HARDWARE_MODULE_DIR/../features/gpu.sh" >/dev/null 2>&1
+fi
+
 gpu_vendor_label() {
 	case ${1:-unknown} in
 		intel)
@@ -36,15 +46,6 @@ gpu_vendor_label() {
 	esac
 }
 
-detect_gpu_vendor() {
-	if type detect_gpu_vendor_safe >/dev/null 2>&1; then
-		detect_gpu_vendor_safe 2>/dev/null || printf 'generic\n'
-		return 0
-	fi
-
-	printf 'generic\n'
-}
-
 refresh_hardware_state() {
 	local cpu_vendor=""
 	local gpu_vendor=""
@@ -72,13 +73,13 @@ hardware_profile_packages() {
 	local gpu_vendor=${2:-unknown}
 	local desktop_profile=${3:-none}
 	local install_steam=${4:-false}
-	local -n package_ref=${5:?package reference is required}
-	local cpu_vendor
+	local cpu_vendor=${5:-unknown}
+	local environment_type=${6:-unknown}
+	local -n package_ref=${7:?package reference is required}
 
 	package_ref=()
 
-	# CPU microcode — always install regardless of desktop profile or environment
-	cpu_vendor="$(get_state "CPU_VENDOR" 2>/dev/null || detect_cpu_vendor_safe 2>/dev/null || printf 'unknown')"
+	# CPU microcode is driven by persisted hardware state collected before strategy resolution.
 	case $cpu_vendor in
 		intel) package_ref+=(intel-ucode) ;;
 		amd)   package_ref+=(amd-ucode) ;;
@@ -102,41 +103,12 @@ hardware_profile_packages() {
 	esac
 
 	# Laptop-specific optimisation packages
-	local environment_type=""
-	environment_type="$(get_state "ENVIRONMENT_TYPE" 2>/dev/null || printf 'unknown')"
 	if [[ $environment_type == "laptop" ]]; then
 		package_ref+=(tlp acpi)
 	fi
 
 	if [[ $desktop_profile != "none" ]]; then
-		case $gpu_vendor in
-			nvidia)
-				package_ref+=(nvidia nvidia-utils)
-				if [[ $install_steam == "true" ]]; then
-					package_ref+=(lib32-nvidia-utils)
-				fi
-				;;
-			intel)
-				package_ref+=(mesa vulkan-intel intel-media-driver)
-				if [[ $install_steam == "true" ]]; then
-					package_ref+=(lib32-mesa lib32-vulkan-intel)
-				fi
-				;;
-			amd)
-				package_ref+=(mesa vulkan-radeon libva-mesa-driver)
-				if [[ $install_steam == "true" ]]; then
-					package_ref+=(lib32-mesa lib32-vulkan-radeon)
-				fi
-				;;
-			generic|vm|vmware|virtualbox|qemu|kvm|hyperv)
-				package_ref+=(mesa)
-				if [[ $install_steam == "true" ]]; then
-					package_ref+=(lib32-mesa)
-				fi
-				;;
-			*)
-				;;
-		esac
+		gpu_driver_packages "$gpu_vendor" "$install_steam" package_ref || return 1
 	fi
 }
 

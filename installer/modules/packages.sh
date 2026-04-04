@@ -18,7 +18,10 @@ resolve_package_strategy() {
 	local snapshot_provider=${15:-none}
 	local enable_luks=${16:-false}
 	local install_steam=${17:-false}
-	local -n package_ref=${18:?package reference is required}
+	local bootloader=${18:-$(default_bootloader_for_mode "$boot_mode")}
+	local cpu_vendor=${19:-unknown}
+	local environment_type=${20:-unknown}
+	local -n package_ref=${21:?package reference is required}
 	local -a base_packages=()
 	local -a profile_packages=()
 	local -a hardware_packages=()
@@ -28,16 +31,14 @@ resolve_package_strategy() {
 	local -a encryption_packages=()
 	local -a steam_packages=()
 	local -a bootloader_packages=()
-	local bootloader=""
 
 	package_ref=()
 	get_final_packages "$install_profile" "$editor_choice" "$include_vscode" "$custom_tools" base_packages || return 1
 	append_unique_packages package_ref "${base_packages[@]}"
 
 	install_profile_packages "$install_profile" "$editor_choice" "$include_vscode" "$custom_tools" profile_packages || return 1
-	hardware_profile_packages "$environment_vendor" "$gpu_vendor" "$desktop_profile" "$install_steam" hardware_packages || return 1
+	hardware_profile_packages "$environment_vendor" "$gpu_vendor" "$desktop_profile" "$install_steam" "$cpu_vendor" "$environment_type" hardware_packages || return 1
 	secure_boot_packages "$secure_boot_mode" "$boot_mode" secure_boot_packages_ref || return 1
-	bootloader="$(get_state "BOOTLOADER" 2>/dev/null || default_bootloader_for_mode "$boot_mode")"
 	if declare -F bootloader_required_packages >/dev/null 2>&1; then
 		bootloader_required_packages "$bootloader" "$boot_mode" bootloader_packages || return 1
 		append_unique_packages package_ref "${bootloader_packages[@]}"
@@ -65,7 +66,7 @@ resolve_package_strategy() {
 		append_unique_packages package_ref "${encryption_packages[@]}"
 	fi
 	if declare -F snapshot_required_packages >/dev/null 2>&1; then
-		snapshot_required_packages "$snapshot_provider" "$filesystem" "$boot_mode" snapshot_packages || return 1
+		snapshot_required_packages "$snapshot_provider" "$filesystem" "$boot_mode" "$bootloader" snapshot_packages || return 1
 		append_unique_packages package_ref "${snapshot_packages[@]}"
 	fi
 	if type list_plugin_packages >/dev/null 2>&1; then
