@@ -613,16 +613,7 @@ post_install_kernel_label() {
 }
 
 post_install_bootloader_label() {
-	local boot_mode="$(state_or_default "BOOT_MODE" "auto")"
-
-	case "$boot_mode" in
-		uefi)
-			printf 'systemd-boot\n'
-			;;
-		*)
-			printf 'GRUB\n'
-			;;
-	esac
+	bootloader_label "$(state_or_default "BOOTLOADER" "")" "$(state_or_default "BOOT_MODE" "bios")"
 }
 
 post_install_filesystem_label() {
@@ -1101,6 +1092,7 @@ configure_install_profile() {
 	local custom_checklist=""
 	local custom_extra=""
 	local secure_boot_mode=""
+	local bootloader=""
 	local secure_boot_state=""
 	local desktop_profile=""
 	local display_manager=""
@@ -1135,6 +1127,7 @@ configure_install_profile() {
 	user_password="$(prompt_password "User Password")" || return 1
 	root_password="$(prompt_password "Root Password")" || return 1
 	boot_mode="$(state_or_default "BOOT_MODE" "$(detect_boot_mode 2>/dev/null || printf 'uefi')")"
+	bootloader="$(normalize_bootloader "$(state_or_default "BOOTLOADER" "")" "$boot_mode")"
 	secure_boot_state="$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")"
 	secure_boot_mode="$(select_secure_boot_mode "$(state_or_default "SECURE_BOOT_MODE" "disabled")" "$boot_mode" "$secure_boot_state")" || return 1
 
@@ -1272,6 +1265,7 @@ configure_install_profile() {
 	set_state "GREETER" "$greeter_frontend" || return 1
 	set_state "GREETER_FRONTEND" "$greeter_frontend" || return 1
 	set_state "BOOT_MODE" "$boot_mode" || return 1
+	set_state "BOOTLOADER" "$bootloader" || return 1
 	INSTALL_USER_PASSWORD="$user_password"
 	INSTALL_ROOT_PASSWORD="$root_password"
 	INSTALL_LUKS_PASSWORD="$luks_password"
@@ -1279,7 +1273,7 @@ configure_install_profile() {
 		sync_install_config_json >/dev/null 2>&1 || true
 	fi
 
-	msg "Profile Saved" "Installation profile updated.\n\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nInstall profile: $(install_profile_label "$install_profile")\nEditor: $(editor_choice_label "$editor_choice")\nVS Code: $include_vscode\nSteam: $install_steam\nSecure Boot mode: $(secure_boot_mode_label "$secure_boot_mode")\nFilesystem: $filesystem\nEncryption: $enable_luks\nSnapshots: $(snapshot_provider_label "$snapshot_provider")\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay session: $(display_mode_label "$display_session")\nDisplay manager: $(display_manager_label "$display_manager")\nGreeter: $(greeter_frontend_label "$greeter_frontend")\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nUser password: set\nRoot password: set"
+	msg "Profile Saved" "Installation profile updated.\n\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nInstall profile: $(install_profile_label "$install_profile")\nEditor: $(editor_choice_label "$editor_choice")\nVS Code: $include_vscode\nSteam: $install_steam\nSecure Boot mode: $(secure_boot_mode_label "$secure_boot_mode")\nFilesystem: $filesystem\nEncryption: $enable_luks\nSnapshots: $(snapshot_provider_label "$snapshot_provider")\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay session: $(display_mode_label "$display_session")\nDisplay manager: $(display_manager_label "$display_manager")\nGreeter: $(greeter_frontend_label "$greeter_frontend")\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nBootloader: $(bootloader_label "$bootloader" "$boot_mode")\nUser password: set\nRoot password: set"
 }
 
 validate_install_profile() {
@@ -1337,6 +1331,7 @@ show_state_summary() {
 	local enable_luks
 	local snapshot_provider
 	local install_steam
+	local bootloader
 	local secure_boot_state
 	local secure_boot_mode
 	local environment_summary_value
@@ -1360,12 +1355,13 @@ show_state_summary() {
 	enable_luks="$(state_or_default "ENABLE_LUKS" "false")"
 	snapshot_provider="$(state_or_default "SNAPSHOT_PROVIDER" "none")"
 	install_steam="$(state_or_default "INSTALL_STEAM" "false")"
+	bootloader="$(state_or_default "BOOTLOADER" "")"
 	enable_zram="$(state_or_default "ENABLE_ZRAM" "false")"
 	desktop_profile="$(state_or_default "DESKTOP_PROFILE" "none")"
 	display_session="$(state_or_default "DISPLAY_SESSION" "wayland")"
 	resolved_display_mode="$(state_or_default "RESOLVED_DISPLAY_MODE" "wayland")"
 	display_manager="$(state_or_default "DISPLAY_MANAGER" "none")"
-	greeter="$(state_or_default "GREETER" "tuigreet")"
+	greeter="$(state_or_default "GREETER" "none")"
 	secure_boot_state="$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")"
 	secure_boot_mode="$(state_or_default "SECURE_BOOT_MODE" "disabled")"
 	environment_summary_value="$(safe_runtime_environment_summary)"
@@ -1376,7 +1372,7 @@ show_state_summary() {
 	[[ -n $INSTALL_USER_PASSWORD ]] && user_password_state="set"
 	[[ -n $INSTALL_ROOT_PASSWORD ]] && root_password_state="set"
 
-	msg "Installer State" "Saved state:\n\nEnvironment: $environment_summary_value\nGPU: $gpu_label_value\nDisk: $disk\nDisk model: $(state_or_default "DISK_MODEL" "Unknown")\nDisk transport: $(disk_transport_label "$(state_or_default "DISK_TRANSPORT" "unknown")")\nDisk type: $(post_install_disk_type_label)\nDisk strategy: $install_scenario\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nSecure Boot mode: $(secure_boot_mode_label "$secure_boot_mode")\nEFI: $efi_partition\nRoot: $root_partition\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nInstall profile: $(install_profile_label "$install_profile_value")\nFilesystem: $filesystem\nEncryption: $enable_luks\nSnapshots: $(snapshot_provider_label "$snapshot_provider")\nSteam: $install_steam\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay session: $(display_mode_label "$display_session")\nDisplay manager: $(display_manager_label "$display_manager")\nGreeter: $(greeter_frontend_label "$greeter")\nSafe mode: $INSTALL_SAFE_MODE\nUser password: $user_password_state\nRoot password: $root_password_state\nDEV_MODE: $DEV_MODE\nUI mode: $INSTALL_UI_MODE" 30 82
+	msg "Installer State" "Saved state:\n\nEnvironment: $environment_summary_value\nGPU: $gpu_label_value\nDisk: $disk\nDisk model: $(state_or_default "DISK_MODEL" "Unknown")\nDisk transport: $(disk_transport_label "$(state_or_default "DISK_TRANSPORT" "unknown")")\nDisk type: $(post_install_disk_type_label)\nDisk strategy: $install_scenario\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nBootloader: $(bootloader_label "$bootloader" "$boot_mode")\nSecure Boot mode: $(secure_boot_mode_label "$secure_boot_mode")\nEFI: $efi_partition\nRoot: $root_partition\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nInstall profile: $(install_profile_label "$install_profile_value")\nFilesystem: $filesystem\nEncryption: $enable_luks\nSnapshots: $(snapshot_provider_label "$snapshot_provider")\nSteam: $install_steam\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay session: $(display_mode_label "$display_session")\nDisplay manager: $(display_manager_label "$display_manager")\nGreeter: $(greeter_frontend_label "$greeter")\nSafe mode: $INSTALL_SAFE_MODE\nUser password: $user_password_state\nRoot password: $root_password_state\nDEV_MODE: $DEV_MODE\nUI mode: $INSTALL_UI_MODE" 30 82
 }
 
 confirm_installation() {
@@ -1398,7 +1394,7 @@ confirm_installation() {
 
 	validate_install_profile || return 1
 
-	message="$(installer_context_header)\n\nThis will prepare a bootable Arch Linux system on:\n\n$disk\n\nDisk model: $(state_or_default "DISK_MODEL" "Unknown")\nDisk transport: $(disk_transport_label "$(state_or_default "DISK_TRANSPORT" "unknown")")\nDisk type: $(post_install_disk_type_label)\nDisk strategy: $(state_or_default "INSTALL_SCENARIO" "wipe")\nBoot mode: $(boot_mode_status_label "$(state_or_default "BOOT_MODE" "bios")" "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")\nSecure Boot mode: $(secure_boot_mode_label "$(state_or_default "SECURE_BOOT_MODE" "disabled")")\nHostname: $(state_or_default "HOSTNAME" "archlinux")\nTimezone: $(state_or_default "TIMEZONE" "Europe/Istanbul")\nLocale: $(state_or_default "LOCALE" "en_US.UTF-8")\nKeyboard: $(state_or_default "KEYMAP" "us")\nUser: $(state_or_default "USERNAME" "archuser")\nInstall profile: $(install_profile_label "$(state_or_default "INSTALL_PROFILE" "daily")")\nFilesystem: $(state_or_default "FILESYSTEM" "ext4")\nEncryption: $(state_or_default "ENABLE_LUKS" "false")\nSnapshots: $(snapshot_provider_label "$(state_or_default "SNAPSHOT_PROVIDER" "none")")\nSteam: $(state_or_default "INSTALL_STEAM" "false")\nZram: $(state_or_default "ENABLE_ZRAM" "false")\nDesktop: $(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")\nDisplay session: $(display_mode_label "$(state_or_default "DISPLAY_SESSION" "wayland")")\nDisplay manager: $(display_manager_label "$(state_or_default "DISPLAY_MANAGER" "none")")\nGreeter: $(greeter_frontend_label "$(state_or_default "GREETER" "none")")\nSafe mode: $(state_or_default "INSTALL_SAFE_MODE" "$INSTALL_SAFE_MODE")\n\nDestructive steps may erase existing data."
+	message="$(installer_context_header)\n\nThis will prepare a bootable Arch Linux system on:\n\n$disk\n\nDisk model: $(state_or_default "DISK_MODEL" "Unknown")\nDisk transport: $(disk_transport_label "$(state_or_default "DISK_TRANSPORT" "unknown")")\nDisk type: $(post_install_disk_type_label)\nDisk strategy: $(state_or_default "INSTALL_SCENARIO" "wipe")\nBoot mode: $(boot_mode_status_label "$(state_or_default "BOOT_MODE" "bios")" "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")\nBootloader: $(bootloader_label "$(state_or_default "BOOTLOADER" "")" "$(state_or_default "BOOT_MODE" "bios")")\nSecure Boot mode: $(secure_boot_mode_label "$(state_or_default "SECURE_BOOT_MODE" "disabled")")\nHostname: $(state_or_default "HOSTNAME" "archlinux")\nTimezone: $(state_or_default "TIMEZONE" "Europe/Istanbul")\nLocale: $(state_or_default "LOCALE" "en_US.UTF-8")\nKeyboard: $(state_or_default "KEYMAP" "us")\nUser: $(state_or_default "USERNAME" "archuser")\nInstall profile: $(install_profile_label "$(state_or_default "INSTALL_PROFILE" "daily")")\nFilesystem: $(state_or_default "FILESYSTEM" "ext4")\nEncryption: $(state_or_default "ENABLE_LUKS" "false")\nSnapshots: $(snapshot_provider_label "$(state_or_default "SNAPSHOT_PROVIDER" "none")")\nSteam: $(state_or_default "INSTALL_STEAM" "false")\nZram: $(state_or_default "ENABLE_ZRAM" "false")\nDesktop: $(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")\nDisplay session: $(display_mode_label "$(state_or_default "DISPLAY_SESSION" "wayland")")\nDisplay manager: $(display_manager_label "$(state_or_default "DISPLAY_MANAGER" "none")")\nGreeter: $(greeter_frontend_label "$(state_or_default "GREETER" "none")")\nSafe mode: $(state_or_default "INSTALL_SAFE_MODE" "$INSTALL_SAFE_MODE")\n\nDestructive steps may erase existing data."
 	if flag_enabled "$DEV_MODE"; then
 		message+="\n\nDev mode flags:\nSKIP_PARTITION=$SKIP_PARTITION\nSKIP_PACSTRAP=$SKIP_PACSTRAP\nSKIP_CHROOT=$SKIP_CHROOT\nINSTALL_UI_MODE=$INSTALL_UI_MODE"
 	fi

@@ -20,6 +20,31 @@ normalize_boolean_state() {
 	esac
 }
 
+normalize_bootloader_state() {
+	local value=${1:-}
+	local boot_mode="$(get_state "BOOT_MODE" 2>/dev/null || printf 'bios')"
+
+	case $value in
+		systemd-boot|grub|limine)
+			;;
+		*)
+			if [[ $boot_mode == "uefi" ]]; then
+				printf 'systemd-boot\n'
+			else
+				printf 'grub\n'
+			fi
+			return 0
+			;;
+	esac
+
+	if [[ $boot_mode != "uefi" && $value == "systemd-boot" ]]; then
+		printf 'grub\n'
+		return 0
+	fi
+
+	printf '%s\n' "$value"
+}
+
 normalize_display_manager() {
 	case ${1:-sddm} in
 		sddm|greetd|none)
@@ -148,6 +173,9 @@ set_state() {
 			;;
 		SECURE_BOOT_MODE)
 			value="$(normalize_secure_boot_mode "$value")"
+			;;
+		BOOTLOADER)
+			value="$(normalize_bootloader_state "$value")"
 			;;
 		INSTALL_STEAM)
 			value="$(normalize_boolean_state "$value")"

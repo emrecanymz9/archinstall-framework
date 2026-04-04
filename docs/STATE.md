@@ -9,6 +9,7 @@
 ## Core Runtime Keys
 
 - `BOOT_MODE`: `bios|uefi`
+- `BOOTLOADER`: `systemd-boot|grub|limine`
 - `CURRENT_SECURE_BOOT_STATE`: `enabled|disabled|unsupported|unknown`
 - `CURRENT_SECURE_BOOT_SETUP_MODE`: `setup|user|unknown`
 - `ENVIRONMENT_VENDOR`: `baremetal|vmware|virtualbox|kvm|qemu|hyperv|unknown`

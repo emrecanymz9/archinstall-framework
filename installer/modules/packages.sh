@@ -27,6 +27,8 @@ resolve_package_strategy() {
 	local -a snapshot_packages=()
 	local -a encryption_packages=()
 	local -a steam_packages=()
+	local -a bootloader_packages=()
+	local bootloader=""
 
 	package_ref=()
 	get_final_packages "$install_profile" "$editor_choice" "$include_vscode" "$custom_tools" base_packages || return 1
@@ -35,11 +37,16 @@ resolve_package_strategy() {
 	install_profile_packages "$install_profile" "$editor_choice" "$include_vscode" "$custom_tools" profile_packages || return 1
 	hardware_profile_packages "$environment_vendor" "$gpu_vendor" "$desktop_profile" "$install_steam" hardware_packages || return 1
 	secure_boot_packages "$secure_boot_mode" "$boot_mode" secure_boot_packages_ref || return 1
+	bootloader="$(get_state "BOOTLOADER" 2>/dev/null || default_bootloader_for_mode "$boot_mode")"
+	if declare -F bootloader_required_packages >/dev/null 2>&1; then
+		bootloader_required_packages "$bootloader" "$boot_mode" bootloader_packages || return 1
+		append_unique_packages package_ref "${bootloader_packages[@]}"
+	fi
 	append_unique_packages package_ref "${profile_packages[@]}"
 	append_unique_packages package_ref "${hardware_packages[@]}"
 	append_unique_packages package_ref "${secure_boot_packages_ref[@]}"
-	if [[ $install_steam == "true" ]]; then
-		steam_packages=(steam)
+	if declare -F steam_required_packages >/dev/null 2>&1; then
+		steam_required_packages "$install_steam" steam_packages || return 1
 		append_unique_packages package_ref "${steam_packages[@]}"
 	fi
 
@@ -49,9 +56,6 @@ resolve_package_strategy() {
 
 	if [[ $filesystem == "btrfs" ]]; then
 		append_unique_packages package_ref btrfs-progs
-	fi
-	if [[ $boot_mode == "bios" ]]; then
-		append_unique_packages package_ref grub
 	fi
 	if declare -F flag_enabled >/dev/null 2>&1 && flag_enabled "$enable_zram"; then
 		append_unique_packages package_ref zram-generator

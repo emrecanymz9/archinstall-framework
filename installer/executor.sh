@@ -51,6 +51,8 @@ safe_source_module "$SCRIPT_DIR/core/plugin-loader.sh" || true
 safe_source_module "$SCRIPT_DIR/modules/config.sh" || true
 # shellcheck source=installer/modules/runtime.sh
 safe_source_module "$SCRIPT_DIR/modules/runtime.sh" || true
+# shellcheck source=installer/modules/bootloader.sh
+safe_source_module "$SCRIPT_DIR/modules/bootloader.sh" || true
 # shellcheck source=installer/modules/hardware.sh
 safe_source_module "$SCRIPT_DIR/modules/hardware.sh" || true
 # shellcheck source=installer/modules/environment.sh
@@ -69,6 +71,14 @@ safe_source_module "$SCRIPT_DIR/modules/packages.sh" || true
 safe_source_module "$SCRIPT_DIR/modules/luks.sh" || true
 # shellcheck source=installer/modules/snapshots.sh
 safe_source_module "$SCRIPT_DIR/modules/snapshots.sh" || true
+# shellcheck source=installer/features/steam.sh
+safe_source_module "$SCRIPT_DIR/features/steam.sh" || true
+# shellcheck source=installer/postinstall/finalize.sh
+safe_source_module "$SCRIPT_DIR/postinstall/finalize.sh" || true
+# shellcheck source=installer/postinstall/enable_services.sh
+safe_source_module "$SCRIPT_DIR/postinstall/enable_services.sh" || true
+# shellcheck source=installer/postinstall/cleanup.sh
+safe_source_module "$SCRIPT_DIR/postinstall/cleanup.sh" || true
 # shellcheck source=installer/modules/disk/layout.sh
 safe_source_module "$SCRIPT_DIR/modules/disk/layout.sh" || true
 # shellcheck source=installer/modules/disk/space.sh
@@ -328,10 +338,12 @@ require_commands() {
 	local boot_mode=""
 	local filesystem=""
 	local enable_luks=""
+	local selected_bootloader=""
 
 	boot_mode="$(get_state "BOOT_MODE" 2>/dev/null || detect_boot_mode 2>/dev/null || printf 'uefi')"
 	filesystem="$(normalize_filesystem "$(get_state "FILESYSTEM" 2>/dev/null || printf 'ext4')")"
 	enable_luks="$(get_state "ENABLE_LUKS" 2>/dev/null || printf 'false')"
+	selected_bootloader="$(normalize_bootloader "$(get_state "BOOTLOADER" 2>/dev/null || printf '')" "$boot_mode")"
 
 	for cmd in lsblk wipefs parted partprobe mkfs.ext4 mount umount pacman pacstrap ping blkid arch-chroot tee tail findmnt genfstab mountpoint; do
 		command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
@@ -341,14 +353,22 @@ require_commands() {
 	fi
 
 	if [[ $boot_mode == "uefi" ]]; then
-		for cmd in mkfs.fat bootctl; do
-			command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
-		done
-	else
-		for cmd in grub-install grub-mkconfig; do
-			command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
-		done
+		command -v mkfs.fat >/dev/null 2>&1 || missing+=("mkfs.fat")
 	fi
+	case $selected_bootloader in
+		systemd-boot)
+			command -v bootctl >/dev/null 2>&1 || missing+=("bootctl")
+			;;
+		grub)
+			for cmd in grub-install grub-mkconfig; do
+				command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+			done
+			;;
+		limine)
+			;;
+		*)
+			;;
+	esac
 
 	if [[ $filesystem == "btrfs" ]]; then
 		for cmd in mkfs.btrfs btrfs; do
@@ -967,6 +987,7 @@ build_chroot_script() {
 	local quoted_greeter=""
 	local quoted_display_session=""
 	local quoted_resolved_display_session=""
+	local bootloader=""
 	local install_profile=""
 	local editor_choice=""
 	local include_vscode=""
@@ -983,6 +1004,7 @@ build_chroot_script() {
 	local luks_partition_uuid=""
 	local mkinitcpio_hooks=""
 	local quoted_install_profile=""
+	local quoted_bootloader=""
 	local quoted_editor_choice=""
 	local quoted_include_vscode=""
 	local quoted_custom_tools=""
@@ -1004,6 +1026,7 @@ build_chroot_script() {
 	keymap="$(get_state "KEYMAP" 2>/dev/null || printf 'us')"
 	username="$(get_state "USERNAME" 2>/dev/null || printf 'archuser')"
 	install_profile="$(get_state "INSTALL_PROFILE" 2>/dev/null || printf 'daily')"
+	bootloader="$(normalize_bootloader "$(get_state "BOOTLOADER" 2>/dev/null || printf '')" "$boot_mode")"
 	editor_choice="$(get_state "EDITOR_CHOICE" 2>/dev/null || printf 'nano')"
 	include_vscode="$(get_state "INCLUDE_VSCODE" 2>/dev/null || printf 'false')"
 	custom_tools="$(get_state "CUSTOM_TOOLS" 2>/dev/null || printf '')"
@@ -1050,6 +1073,7 @@ build_chroot_script() {
 	printf -v quoted_display_session '%q' "$display_session"
 	printf -v quoted_resolved_display_session '%q' "$resolved_display_session"
 	printf -v quoted_install_profile '%q' "$install_profile"
+	printf -v quoted_bootloader '%q' "$bootloader"
 	printf -v quoted_editor_choice '%q' "$editor_choice"
 	printf -v quoted_include_vscode '%q' "$include_vscode"
 	printf -v quoted_custom_tools '%q' "$custom_tools"
@@ -1089,6 +1113,7 @@ TARGET_GREETER=$quoted_greeter
 TARGET_DISPLAY_SESSION=$quoted_display_session
 TARGET_RESOLVED_DISPLAY_SESSION=$quoted_resolved_display_session
 TARGET_INSTALL_PROFILE=$quoted_install_profile
+TARGET_BOOTLOADER=$quoted_bootloader
 TARGET_EDITOR_CHOICE=$quoted_editor_choice
 TARGET_INCLUDE_VSCODE=$quoted_include_vscode
 TARGET_CUSTOM_TOOLS=$quoted_custom_tools
@@ -1110,78 +1135,9 @@ log_chroot_step() {
 	echo "[STEP] $1"
 }
 
-log_chroot_step "Configuring mkinitcpio hooks"
-if [[ ! -f /etc/mkinitcpio.conf ]]; then
-	echo "[FAIL] /etc/mkinitcpio.conf is missing inside the target chroot"
-	exit 1
-fi
-echo "[DEBUG] Preparing to update /etc/mkinitcpio.conf inside chroot"
-echo "[DEBUG] Applying mkinitcpio hooks"
-sed -i "s/^HOOKS=.*/HOOKS=(\$TARGET_MKINITCPIO_HOOKS)/" /etc/mkinitcpio.conf
+$(postinstall_finalize_chroot_snippet)
 
-log_chroot_step "Configuring timezone"
-ln -sf "/usr/share/zoneinfo/\$TARGET_TIMEZONE" /etc/localtime
-hwclock --systohc
-
-log_chroot_step "Configuring locale"
-if ! grep -qx "\$TARGET_LOCALE UTF-8" /etc/locale.gen; then
-	echo "\$TARGET_LOCALE UTF-8" >> /etc/locale.gen
-fi
-locale-gen
-printf '%s\n' "LANG=\$TARGET_LOCALE" > /etc/locale.conf
-printf '%s\n' "KEYMAP=\$TARGET_KEYMAP" > /etc/vconsole.conf
-
-log_chroot_step "Configuring hostname and hosts"
-printf '%s\n' "\$TARGET_HOSTNAME" > /etc/hostname
-cat > /etc/hosts <<'EOT'
-127.0.0.1 localhost
-::1       localhost
-127.0.1.1 TARGET_HOSTNAME.localdomain TARGET_HOSTNAME
-EOT
-sed -i "s/TARGET_HOSTNAME/\$TARGET_HOSTNAME/g" /etc/hosts
-
-log_chroot_step "Creating user accounts and setting passwords"
-if ! id -u "\$TARGET_USERNAME" >/dev/null 2>&1; then
-	useradd -m -G wheel -s /bin/bash "\$TARGET_USERNAME"
-fi
-echo "\$TARGET_USERNAME:\$TARGET_USER_PASSWORD" | chpasswd
-echo "root:\$TARGET_ROOT_PASSWORD" | chpasswd
-
-log_chroot_step "Configuring sudo permissions"
-if grep -q '^# %wheel ALL=(ALL:ALL) ALL' /etc/sudoers; then
-	sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
-elif ! grep -q '^%wheel ALL=(ALL:ALL) ALL' /etc/sudoers; then
-	echo '%wheel ALL=(ALL:ALL) ALL' >> /etc/sudoers
-fi
-
-log_chroot_step "Enabling NetworkManager"
-			if [[ -x /usr/bin/NetworkManager || -f /usr/bin/NetworkManager ]]; then
-				systemctl enable NetworkManager.service || true
-			else
-	echo "[WARN] NetworkManager binary not found in target; skipping enable"
-fi
-
-# When iwd is installed, use it as the Wi-Fi backend for NetworkManager.
-# This provides better security and WPA3 support over wpa_supplicant.
-if command -v iwctl >/dev/null 2>&1; then
-	log_chroot_step "Configuring iwd as NetworkManager Wi-Fi backend"
-	install -d -m 755 /etc/NetworkManager/conf.d
-	cat > /etc/NetworkManager/conf.d/wifi_backend.conf <<'NMCONFIGEOF'
-[device]
-wifi.backend=iwd
-NMCONFIGEOF
-	systemctl enable iwd.service
-fi
-
-enable_service_if_present() {
-	local service_name=
-	service_name=\${1:?service name is required}
-	if systemctl list-unit-files "\$service_name" >/dev/null 2>&1; then
-		systemctl enable "\$service_name" || true
-	else
-		echo "[WARN] Optional service not present: \$service_name"
-	fi
-}
+$(postinstall_services_chroot_snippet)
 
 build_pacman_opts_array() {
 	local -a opts=()
@@ -1212,19 +1168,7 @@ install_packages_if_missing() {
 	pacman -S "\${pacman_opts[@]}" "\${missing[@]}"
 }
 
-if [[ \$TARGET_INSTALL_STEAM == "true" ]]; then
-	log_chroot_step "Persisting multilib for Steam support"
-	if grep -q '^#\[multilib\]' /etc/pacman.conf; then
-		sed -i '/^#\[multilib\]/,/^#Include = \/etc\/pacman.d\/mirrorlist/ s/^#//' /etc/pacman.conf
-	fi
-	if ! grep -q '^\[multilib\]' /etc/pacman.conf; then
-		cat >> /etc/pacman.conf <<'PACMANMULTILIB'
-
-[multilib]
-Include = /etc/pacman.d/mirrorlist
-PACMANMULTILIB
-	fi
-fi
+$(steam_chroot_setup_snippet "$(get_state "INSTALL_STEAM" 2>/dev/null || printf 'false')")
 
 write_secure_boot_notice() {
 	install -d -m 0700 /root
@@ -1491,8 +1435,6 @@ vt = 1
 command = "\$(build_greetd_command "\$TARGET_GREETER")"
 user = "greeter"
 EOT
-			systemctl disable sddm.service 2>/dev/null || true
-			systemctl enable greetd.service || true
 			write_display_manager_fallback_notice "\$SESSION_CMD"
 			;;
 		sddm)
@@ -1522,8 +1464,6 @@ SDDMCONF
 Session=$(if [[ "\$TARGET_DISPLAY_SESSION" == "x11" ]]; then printf 'plasma.desktop'; else printf 'plasmawayland.desktop'; fi)
 EOT
 				rm -f /etc/greetd/config.toml 2>/dev/null || true
-				systemctl disable greetd.service 2>/dev/null || true
-				systemctl enable sddm.service || true
 				write_display_manager_fallback_notice "\$SESSION_CMD"
 			else
 				echo "[WARN] sddm binary not found in target system. Skipping SDDM configuration."
@@ -1535,8 +1475,6 @@ EOT
 			TARGET_GREETER="none"
 			install_packages_if_missing sddm sddm-kcm || true
 			rm -f /etc/greetd/config.toml 2>/dev/null || true
-			systemctl disable greetd.service 2>/dev/null || true
-			systemctl enable sddm.service || true
 			write_display_manager_fallback_notice "\$SESSION_CMD"
 			;;
 	esac
@@ -1547,93 +1485,13 @@ if type emit_chroot_snippets >/dev/null 2>&1; then
 fi
 
 configure_vm_services
+run_postinstall_service_enablement
 enable_service_if_present bluetooth.service
 
-if [[ \$BOOT_MODE == "uefi" ]]; then
-	log_chroot_step "Installing systemd-boot"
-	bootctl install
-	mkdir -p /boot/loader/entries
-
-	# Detect installed microcode image for early CPU microcode loading
-	MICROCODE_INITRD_LINE=""
-	if [[ -f /boot/intel-ucode.img ]]; then
-		MICROCODE_INITRD_LINE="initrd /intel-ucode.img"
-	elif [[ -f /boot/amd-ucode.img ]]; then
-		MICROCODE_INITRD_LINE="initrd /amd-ucode.img"
-	fi
-
-	# Write loader.conf. For Secure Boot mode, use @saved so sd-boot defaults to
-	# the last successfully booted entry (the signed UKI from /boot/EFI/Linux/).
-	if [[ \$TARGET_SECURE_BOOT_MODE == "disabled" ]]; then
-		cat > /boot/loader/loader.conf <<'LOADERCONF'
-default arch
-timeout 3
-editor no
-LOADERCONF
-	else
-		cat > /boot/loader/loader.conf <<'LOADERCONF'
-default @saved
-timeout 3
-editor no
-LOADERCONF
-	fi
-
-	# Always write arch.conf. This is the permanent unsigned fallback entry.
-	# Removing it would leave no viable boot path if UKI signing or enrollment fails.
-	# When Secure Boot is active, sd-boot auto-discovers signed UKIs from /boot/EFI/Linux/
-	# and they take default priority via @saved; arch.conf stays selectable manually.
-	{
-		echo "title Arch Linux"
-		echo "linux /vmlinuz-linux"
-		[[ -n "\$MICROCODE_INITRD_LINE" ]] && echo "\$MICROCODE_INITRD_LINE"
-		echo "initrd /initramfs-linux.img"
-		echo "options \$(build_kernel_cmdline)"
-	} > /boot/loader/entries/arch.conf
-
-	echo "[DEBUG] systemd-boot arch.conf:"
-	cat /boot/loader/entries/arch.conf
-else
-	log_chroot_step "Installing GRUB"
-
-	# BIOS+GPT safety guard: grub-install --target=i386-pc cannot embed on a GPT
-	# disk unless a dedicated 1 MiB bios_grub partition exists.
-	if [[ \$BOOT_MODE == "bios" ]]; then
-		GRUB_DISK_LABEL="\$(parted -s "\$TARGET_DISK" print 2>/dev/null | awk '/Partition Table:/ {print \$3}' || true)"
-		if [[ "\$GRUB_DISK_LABEL" == "gpt" ]]; then
-			if ! parted -s "\$TARGET_DISK" print 2>/dev/null | grep -qi 'bios_grub'; then
-				echo "[FAIL] BIOS install on GPT disk requires a bios_grub partition. None found on \$TARGET_DISK."
-				echo "[FAIL] Create a 1 MiB unformatted partition with the bios_grub flag and retry."
-				exit 1
-			fi
-			echo "[INFO] bios_grub partition confirmed on GPT disk - proceeding with GRUB embed."
-		fi
-	fi
-
-	grub_cmdline="root=UUID=\$ROOT_UUID"
-	if [[ \$TARGET_FILESYSTEM == "btrfs" ]]; then
-		grub_cmdline="\$grub_cmdline rootfstype=btrfs rootflags=\$TARGET_ROOT_MOUNT_OPTIONS"
-	fi
-	if grep -q '^GRUB_CMDLINE_LINUX=' /etc/default/grub; then
-		sed -i "s#^GRUB_CMDLINE_LINUX=.*#GRUB_CMDLINE_LINUX=\"\$grub_cmdline\"#" /etc/default/grub
-	else
-		printf '%s\n' "GRUB_CMDLINE_LINUX=\"\$grub_cmdline\"" >> /etc/default/grub
-	fi
-	if grep -q '^GRUB_DISABLE_LINUX_UUID=' /etc/default/grub; then
-		sed -i 's/^GRUB_DISABLE_LINUX_UUID=.*/GRUB_DISABLE_LINUX_UUID=true/' /etc/default/grub
-	else
-		echo 'GRUB_DISABLE_LINUX_UUID=true' >> /etc/default/grub
-	fi
-
-	grub-install --target=i386-pc "\$TARGET_DISK"
-	grub-mkconfig -o /boot/grub/grub.cfg
-
-	echo "[DEBUG] /etc/default/grub"
-	cat /etc/default/grub
-	echo "[DEBUG] Generated grub.cfg linux lines"
-	grep -n 'linux.*/vmlinuz-linux' /boot/grub/grub.cfg || true
-fi
+$(emit_bootloader_chroot_snippet "$(normalize_bootloader "$(get_state "BOOTLOADER" 2>/dev/null || printf '')" "$boot_mode")" "$boot_mode")
 
 configure_secure_boot_mode
+$(postinstall_cleanup_chroot_snippet)
 EOF
 }
 
@@ -1698,6 +1556,7 @@ run_install() {
 	local custom_tools=""
 	local secure_boot_mode="disabled"
 	local current_secure_boot_state="unsupported"
+	local bootloader=""
 	local environment_vendor="baremetal"
 	local gpu_vendor="generic"
 	local install_scenario="wipe"
@@ -1736,6 +1595,7 @@ run_install() {
 	custom_tools="$(get_state "CUSTOM_TOOLS" 2>/dev/null || printf '')"
 	secure_boot_mode="$(get_state "SECURE_BOOT_MODE" 2>/dev/null || printf 'disabled')"
 	install_scenario="$(get_state "INSTALL_SCENARIO" 2>/dev/null || printf 'wipe')"
+	bootloader="$(normalize_bootloader "$(get_state "BOOTLOADER" 2>/dev/null || printf '')" "$(get_state "BOOT_MODE" 2>/dev/null || printf 'bios')")"
 	format_root="$(get_state "FORMAT_ROOT" 2>/dev/null || printf 'true')"
 	format_efi="$(get_state "FORMAT_EFI" 2>/dev/null || printf 'true')"
 	desktop_profile="$(get_state "DESKTOP_PROFILE" 2>/dev/null || printf 'none')"
@@ -1759,6 +1619,7 @@ run_install() {
 	set_state "GPU_VENDOR" "$gpu_vendor" || return 1
 	set_state "GPU_LABEL" "$(gpu_vendor_label "$gpu_vendor")" || return 1
 	set_state "CPU_VENDOR" "$cpu_vendor" || return 1
+	set_state "BOOTLOADER" "$(normalize_bootloader "$bootloader" "$boot_mode")" || return 1
 	case $boot_mode in
 		uefi|bios)
 			;;
@@ -1796,6 +1657,7 @@ run_install() {
 
 		log_line "Starting installation on $disk"
 		log_line "Boot mode: $boot_mode"
+		log_line "Bootloader: $(bootloader_label "$(get_state "BOOTLOADER" 2>/dev/null || printf '')" "$boot_mode")"
 		log_line "Secure Boot firmware state: $current_secure_boot_state"
 		log_line "Secure Boot mode: $secure_boot_mode"
 		log_line "Environment: $(environment_label "$environment_vendor")"
@@ -1976,7 +1838,7 @@ run_install() {
 
 		log_stage 75 "Configuring system"
 		validate_target_mount "$root_mount_device" "$expected_root_source" || exit 1
-		write_target_fstab "$filesystem" "$disk_type" "$root_mount_device" "$expected_root_source" "$efi_partition" || exit 1
+		postinstall_generate_fstab "$filesystem" "$disk_type" "$root_mount_device" "$expected_root_source" "$efi_partition" || exit 1
 		log_stage 82 "Generating fstab"
 
 		if flag_enabled "$SKIP_CHROOT"; then
@@ -2023,6 +1885,7 @@ run_install() {
 				printf 'Profile     : %s\n' "$(get_state "INSTALL_PROFILE" 2>/dev/null || printf 'unknown')"
 				printf 'Desktop     : %s\n' "$(get_state "DESKTOP_PROFILE" 2>/dev/null || printf 'none')"
 				printf 'Display Mgr : %s\n' "$(get_state "DISPLAY_MANAGER" 2>/dev/null || printf 'none')"
+				printf 'Bootloader  : %s\n' "$(get_state "BOOTLOADER" 2>/dev/null || printf 'unknown')"
 				printf 'Filesystem  : %s\n' "$filesystem"
 				printf 'Encryption  : %s\n' "$enable_luks"
 				printf 'Snapshots   : %s\n' "$snapshot_provider"

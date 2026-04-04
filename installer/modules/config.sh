@@ -50,6 +50,7 @@ sync_install_config_json() {
 	local disk_transport="$(install_config_get_or_default "DISK_TRANSPORT" "unknown")"
 	local filesystem="$(install_config_get_or_default "FILESYSTEM" "ext4")"
 	local boot_mode="$(install_config_get_or_default "BOOT_MODE" "auto")"
+	local bootloader="$(normalize_bootloader "$(install_config_get_or_default "BOOTLOADER" "")" "$boot_mode")"
 	local install_scenario="$(install_config_get_or_default "INSTALL_SCENARIO" "wipe")"
 	local efi_part="$(install_config_get_or_default "EFI_PART" "")"
 	local root_part="$(install_config_get_or_default "ROOT_PART" "")"
@@ -60,7 +61,7 @@ sync_install_config_json() {
 	local desktop_profile="$(install_config_get_or_default "DESKTOP_PROFILE" "none")"
 	local display_manager="$(normalize_display_manager "$(install_config_get_or_default "DISPLAY_MANAGER" "sddm")")"
 	local display_session="$(normalize_display_session "$(install_config_get_or_default "DISPLAY_SESSION" "wayland")")"
-	local greeter="$(normalize_greeter "$(install_config_get_or_default "GREETER" "tuigreet")")"
+	local greeter="$(normalize_greeter "$(install_config_get_or_default "GREETER" "none")")"
 	local environment_vendor="$(install_config_get_or_default "ENVIRONMENT_VENDOR" "unknown")"
 	local environment_type="$(install_config_get_or_default "ENVIRONMENT_TYPE" "unknown")"
 	local cpu_vendor="$(install_config_get_or_default "CPU_VENDOR" "unknown")"
@@ -83,6 +84,7 @@ sync_install_config_json() {
     "type": "$(install_config_escape "$disk_type")",
     "filesystem": "$(install_config_escape "$filesystem")",
     "bootMode": "$(install_config_escape "$boot_mode")",
+	"bootloader": "$(install_config_escape "$bootloader")",
     "scenario": "$(install_config_escape "$install_scenario")",
     "efiPartition": "$(install_config_escape "$efi_part")",
     "rootPartition": "$(install_config_escape "$root_part")"

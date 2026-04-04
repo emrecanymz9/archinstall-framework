@@ -82,8 +82,8 @@ The installer intentionally keeps the live ISO minimal. Heavy packages belong in
 - SSD, HDD, and NVMe mount-option detection
 - disk-space validation on `/mnt` before `pacstrap`
 - disk manager with full-wipe, free-space, dual-boot, and manual strategies
-- UEFI with systemd-boot or BIOS with GRUB
-- Secure Boot modes: `Disabled`, `Assisted`, `Advanced`
+- bootloader support for `systemd-boot`, `GRUB`, and `Limine`
+- Secure Boot modes: `Disabled`, `Setup Foundation`
 - hardware abstraction for VMware, VirtualBox, QEMU/KVM, and common GPU vendors
 - CPU microcode auto-detected and installed (`intel-ucode` or `amd-ucode`)
 - GPU-aware graphics packages for Intel, AMD, NVIDIA, and virtualized desktops
@@ -109,6 +109,18 @@ The installer intentionally keeps the live ISO minimal. Heavy packages belong in
 - pacman-key and mirror bootstrap hardening
 - install log at `/tmp/archinstall_install.log`
 - mixed-gauge dialog progress view with recent log lines
+
+## Project Layout
+
+Canonical installer layout:
+
+- `installer/core/`
+- `installer/modules/`
+- `installer/features/`
+- `installer/boot/`
+- `installer/postinstall/`
+
+Compatibility wrappers remain in older module paths where needed, but new bootloader, feature, and post-install behavior lives in those directories.
 
 Additional documentation:
 
@@ -229,6 +241,21 @@ Current display-manager behavior:
 - greetd launches the explicitly selected Plasma session command
 - invalid or missing display-manager binaries leave the system on TTY with a manual start hint
 
+## Bootloaders
+
+Supported bootloaders:
+
+- `systemd-boot`
+- `GRUB`
+- `Limine`
+
+`BOOTLOADER` is stored in installer state and defaults deterministically from boot mode:
+
+- `uefi` -> `systemd-boot`
+- `bios` -> `grub`
+
+Limine support writes `/boot/limine.cfg`, reuses the shared kernel command-line builder, and supports the same root UUID, LUKS, and btrfs rootflags flow as the other bootloaders.
+
 ## Package Set
 
 The target install always includes the base packages requested in this hardening pass:
@@ -255,6 +282,16 @@ Required packages are resolved in layers:
 6. Snapshot tools: `snapper`, `snap-pac`, `grub-btrfs` (BIOS only)
 7. Optional: `steam`, `zram-generator`, LUKS2 tools, Secure Boot tools
 8. Plugin-contributed packages from the plugin loader
+
+## Post-Install Pipeline
+
+After pacstrap, the installer runs a structured post-install phase inside the chroot:
+
+1. `finalize.sh` applies hostname, locale, timezone, sudo, and user configuration.
+2. `enable_services.sh` enables NetworkManager, iwd, the selected display manager, and snapper timers when needed.
+3. the selected bootloader is installed.
+4. Secure Boot setup runs when requested.
+5. `cleanup.sh` removes installer temp files from the target.
 
 ## Filesystem Notes
 
