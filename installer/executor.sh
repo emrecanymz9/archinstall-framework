@@ -278,7 +278,7 @@ build_pacstrap_package_list() {
 	local -n package_ref=${4:?package reference is required}
 	local desktop_profile=${5:-none}
 	local display_manager=${6:-none}
-	local display_mode=${7:-auto}
+	local display_session=${7:-wayland}
 	local install_profile=${8:-daily}
 	local editor_choice=${9:-nano}
 	local include_vscode=${10:-false}
@@ -286,13 +286,13 @@ build_pacstrap_package_list() {
 	local environment_vendor=${12:-baremetal}
 	local gpu_vendor=${13:-generic}
 	local secure_boot_mode=${14:-disabled}
-	local greeter_frontend=${15:-tuigreet}
+	local greeter=${15:-tuigreet}
 	local snapshot_provider="$(get_state "SNAPSHOT_PROVIDER" 2>/dev/null || printf 'none')"
 	local enable_luks="$(get_state "ENABLE_LUKS" 2>/dev/null || printf 'false')"
 
 	package_ref=()
 	if declare -F resolve_package_strategy >/dev/null 2>&1; then
-		resolve_package_strategy "$boot_mode" "$filesystem" "$enable_zram" "$install_profile" "$editor_choice" "$include_vscode" "$custom_tools" "$desktop_profile" "$display_manager" "$display_mode" "$environment_vendor" "$gpu_vendor" "$secure_boot_mode" "$greeter_frontend" "$snapshot_provider" "$enable_luks" package_ref || return 1
+		resolve_package_strategy "$boot_mode" "$filesystem" "$enable_zram" "$install_profile" "$editor_choice" "$include_vscode" "$custom_tools" "$desktop_profile" "$display_manager" "$display_session" "$environment_vendor" "$gpu_vendor" "$secure_boot_mode" "$greeter" "$snapshot_provider" "$enable_luks" package_ref || return 1
 		return 0
 	fi
 
@@ -919,9 +919,9 @@ build_chroot_script() {
 	local enable_zram=${6:?zram flag is required}
 	local desktop_profile=${7:-none}
 	local display_manager=${8:-none}
-	local display_mode=${9:-auto}
-	local resolved_display_mode=${10:-wayland}
-	local greeter_frontend=""
+	local display_session=${9:-wayland}
+	local resolved_display_session=${10:-wayland}
+	local greeter=""
 	local hostname=""
 	local timezone=""
 	local locale=""
@@ -944,9 +944,9 @@ build_chroot_script() {
 	local quoted_enable_zram=""
 	local quoted_desktop_profile=""
 	local quoted_display_manager=""
-	local quoted_greeter_frontend=""
-	local quoted_display_mode=""
-	local quoted_resolved_display_mode=""
+	local quoted_greeter=""
+	local quoted_display_session=""
+	local quoted_resolved_display_session=""
 	local install_profile=""
 	local editor_choice=""
 	local include_vscode=""
@@ -997,7 +997,7 @@ build_chroot_script() {
 	luks_mapper_name="$(get_state "LUKS_MAPPER_NAME" 2>/dev/null || printf 'cryptroot')"
 	luks_partition_uuid="$(get_state "LUKS_PART_UUID" 2>/dev/null || printf '')"
 	mkinitcpio_hooks="$(luks_mkinitcpio_hooks 2>/dev/null || printf 'base udev autodetect modconf block filesystems keyboard fsck')"
-	greeter_frontend="$(get_state "GREETER_FRONTEND" 2>/dev/null || printf 'tuigreet')"
+	greeter="$(get_state "GREETER" 2>/dev/null || printf 'tuigreet')"
 
 	if [[ -z $user_password ]]; then
 		print_install_error "The installer user password is not set. Configure the install profile before starting."
@@ -1023,9 +1023,9 @@ build_chroot_script() {
 	printf -v quoted_enable_zram '%q' "$enable_zram"
 	printf -v quoted_desktop_profile '%q' "$desktop_profile"
 	printf -v quoted_display_manager '%q' "$display_manager"
-	printf -v quoted_greeter_frontend '%q' "$greeter_frontend"
-	printf -v quoted_display_mode '%q' "$display_mode"
-	printf -v quoted_resolved_display_mode '%q' "$resolved_display_mode"
+	printf -v quoted_greeter '%q' "$greeter"
+	printf -v quoted_display_session '%q' "$display_session"
+	printf -v quoted_resolved_display_session '%q' "$resolved_display_session"
 	printf -v quoted_install_profile '%q' "$install_profile"
 	printf -v quoted_editor_choice '%q' "$editor_choice"
 	printf -v quoted_include_vscode '%q' "$include_vscode"
@@ -1061,9 +1061,9 @@ TARGET_ROOT_MOUNT_OPTIONS=$quoted_root_mount_options
 TARGET_ENABLE_ZRAM=$quoted_enable_zram
 TARGET_DESKTOP_PROFILE=$quoted_desktop_profile
 TARGET_DISPLAY_MANAGER=$quoted_display_manager
-TARGET_GREETER_FRONTEND=$quoted_greeter_frontend
-TARGET_DISPLAY_MODE=$quoted_display_mode
-TARGET_RESOLVED_DISPLAY_MODE=$quoted_resolved_display_mode
+TARGET_GREETER=$quoted_greeter
+TARGET_DISPLAY_SESSION=$quoted_display_session
+TARGET_RESOLVED_DISPLAY_SESSION=$quoted_resolved_display_session
 TARGET_INSTALL_PROFILE=$quoted_install_profile
 TARGET_EDITOR_CHOICE=$quoted_editor_choice
 TARGET_INCLUDE_VSCODE=$quoted_include_vscode
@@ -1156,6 +1156,35 @@ enable_service_if_present() {
 	else
 		echo "[WARN] Optional service not present: \$service_name"
 	fi
+}
+
+build_pacman_opts_array() {
+	local -a opts=()
+	read -r -a opts <<< "\${PACMAN_OPTS:---noconfirm --needed}"
+	printf '%s\0' "\${opts[@]}"
+}
+
+install_packages_if_missing() {
+	local package_name=""
+	local missing=()
+	local -a pacman_opts=()
+
+	while IFS= read -r -d '' package_name; do
+		[[ -n \$package_name ]] || continue
+		if ! pacman -Q "\$package_name" >/dev/null 2>&1; then
+			missing+=("\$package_name")
+		fi
+	done < <(printf '%s\0' "\$@")
+
+	if (( \${#missing[@]} == 0 )); then
+		return 0
+	fi
+
+	while IFS= read -r -d '' package_name; do
+		pacman_opts+=("\$package_name")
+	done < <(build_pacman_opts_array)
+
+	pacman -S "\${pacman_opts[@]}" "\${missing[@]}"
 }
 
 write_secure_boot_notice() {
@@ -1364,8 +1393,16 @@ plasma_session_command() {
 	esac
 }
 
-PLASMA_SESSION_COMMAND="\$(plasma_session_command "\$TARGET_RESOLVED_DISPLAY_MODE")"
-PLASMA_GREETD_COMMAND="startplasma-wayland"
+TARGET_DISPLAY_SESSION="\$(printf '%s' "\$TARGET_DISPLAY_SESSION" | tr '[:upper:]' '[:lower:]')"
+case "\$TARGET_DISPLAY_SESSION" in
+	wayland|x11)
+		;;
+	*)
+		TARGET_DISPLAY_SESSION="wayland"
+		;;
+esac
+SESSION_CMD="\$(plasma_session_command "\$TARGET_DISPLAY_SESSION")"
+TARGET_RESOLVED_DISPLAY_SESSION="\$TARGET_DISPLAY_SESSION"
 
 write_x11_fallback_helper
 
@@ -1375,7 +1412,7 @@ build_greetd_command() {
 			printf 'qtgreet\n'
 			;;
 		*)
-			printf 'tuigreet --remember --remember-session --sessions /usr/share/wayland-sessions --cmd %s\n' "\$PLASMA_GREETD_COMMAND"
+			printf 'tuigreet --time --cmd %s\n' "\$SESSION_CMD"
 			;;
 	esac
 }
@@ -1387,59 +1424,42 @@ fi
 
 if [[ \$TARGET_DESKTOP_PROFILE == "kde" ]]; then
 	log_chroot_step "Configuring KDE services"
+	install_packages_if_missing plasma-desktop plasma-workspace sddm || true
 	enable_service_if_present bluetooth.service
 	install -d -m 0755 /etc/systemd/user/default.target.wants
 	ln -sf /usr/lib/systemd/user/pipewire.service /etc/systemd/user/default.target.wants/pipewire.service
 	ln -sf /usr/lib/systemd/user/pipewire-pulse.service /etc/systemd/user/default.target.wants/pipewire-pulse.service
 	ln -sf /usr/lib/systemd/user/wireplumber.service /etc/systemd/user/default.target.wants/wireplumber.service
 
-	# Disable all known display managers before enabling the selected one.
-	# This prevents conflicts if the user re-runs install or changes DM selection.
-	log_chroot_step "Disabling any previously enabled display managers"
-	for _dm_svc in sddm.service greetd.service lightdm.service gdm.service lxdm.service; do
-		systemctl disable "\$_dm_svc" 2>/dev/null || true
-	done
+	log_chroot_step "Enforcing graphical target"
+	systemctl set-default graphical.target || true
 
 	case \$TARGET_DISPLAY_MANAGER in
 		greetd)
 			log_chroot_step "Configuring greetd"
-			if [[ \$TARGET_GREETER_FRONTEND == "qtgreet" ]] && ! command -v qtgreet >/dev/null 2>&1; then
-				echo "[WARN] qtgreet was selected but is not installed. Falling back to tuigreet if available."
-				TARGET_GREETER_FRONTEND="tuigreet"
-			fi
-			if [[ \$TARGET_GREETER_FRONTEND == "qtgreet" ]] && command -v qtgreet >/dev/null 2>&1; then
-				install -d -m 0755 /etc/greetd
-				cat > /etc/greetd/config.toml <<EOT
-[terminal]
-vt = 1
-
-[default_session]
-command = "\$(build_greetd_command qtgreet)"
-user = "greeter"
-EOT
-				systemctl enable greetd.service
-				write_display_manager_fallback_notice "archinstall-startplasma-x11"
-			elif command -v tuigreet >/dev/null 2>&1; then
-				install -d -m 0755 /etc/greetd
-				cat > /etc/greetd/config.toml <<EOT
-[terminal]
-vt = 1
-
-[default_session]
-command = "\$(build_greetd_command tuigreet)"
-user = "greeter"
-EOT
-				systemctl enable greetd.service
-				write_display_manager_fallback_notice "archinstall-startplasma-x11"
+			if [[ \$TARGET_GREETER == "qtgreet" ]]; then
+				install_packages_if_missing greetd greetd-qtgreet || true
 			else
-				echo "[WARN] No supported greetd frontend is installed in the target system. Leaving the system on TTY."
-				write_display_manager_fallback_notice "archinstall-startplasma-x11"
+				TARGET_GREETER="tuigreet"
+				install_packages_if_missing greetd greetd-tuigreet || true
 			fi
+			install -d -m 0755 /etc/greetd
+			cat > /etc/greetd/config.toml <<EOT
+[terminal]
+vt = 1
+
+[default_session]
+command = "\$(build_greetd_command "\$TARGET_GREETER")"
+user = "greeter"
+EOT
+			systemctl disable sddm.service 2>/dev/null || true
+			systemctl enable greetd.service || true
+			write_display_manager_fallback_notice "\$SESSION_CMD"
 			;;
 		sddm)
 			log_chroot_step "Configuring SDDM"
+			install_packages_if_missing sddm sddm-kcm || true
 			if command -v sddm >/dev/null 2>&1; then
-				# Create SDDM configuration directory and set a sane default theme
 				install -d -m 0755 /etc/sddm.conf.d
 				cat > /etc/sddm.conf.d/kde_settings.conf <<'SDDMCONF'
 [Autologin]
@@ -1458,15 +1478,26 @@ Current=breeze
 MaximumUid=60000
 MinimumUid=1000
 SDDMCONF
-				systemctl enable sddm.service
-				write_display_manager_fallback_notice "\$PLASMA_SESSION_COMMAND"
+				cat > /etc/sddm.conf.d/session.conf <<EOT
+[Autologin]
+Session=$(if [[ "\$TARGET_DISPLAY_SESSION" == "x11" ]]; then printf 'plasma.desktop'; else printf 'plasmawayland.desktop'; fi)
+EOT
+				rm -f /etc/greetd/config.toml 2>/dev/null || true
+				systemctl disable greetd.service 2>/dev/null || true
+				systemctl enable sddm.service || true
+				write_display_manager_fallback_notice "\$SESSION_CMD"
 			else
 				echo "[WARN] sddm binary not found in target system. Skipping SDDM configuration."
-				write_display_manager_fallback_notice "archinstall-startplasma-x11"
+				write_display_manager_fallback_notice "\$SESSION_CMD"
 			fi
 			;;
 		*)
-			write_display_manager_fallback_notice "archinstall-startplasma-x11"
+			TARGET_DISPLAY_MANAGER="sddm"
+			install_packages_if_missing sddm sddm-kcm || true
+			rm -f /etc/greetd/config.toml 2>/dev/null || true
+			systemctl disable greetd.service 2>/dev/null || true
+			systemctl enable sddm.service || true
+			write_display_manager_fallback_notice "\$SESSION_CMD"
 			;;
 	esac
 fi
@@ -1575,8 +1606,8 @@ run_chroot_configuration() {
 	local enable_zram=${6:?zram flag is required}
 	local desktop_profile=${7:-none}
 	local display_manager=${8:-none}
-	local display_mode=${9:-auto}
-	local resolved_display_mode=${10:-wayland}
+	local display_session=${9:-wayland}
+	local resolved_display_session=${10:-wayland}
 	local root_partition=${11:-}
 	local expected_root_source=${12:-}
 	local chroot_status=1
@@ -1592,10 +1623,10 @@ run_chroot_configuration() {
 	log_mount_state
 
 	if install_ui_uses_dialog; then
-		build_chroot_script "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_mode" "$resolved_display_mode" | run_arch_chroot_with_timeout /mnt /bin/bash -s 2>&1 | sanitize_stream | tee_install_logs >/dev/null
+		build_chroot_script "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_session" "$resolved_display_session" | run_arch_chroot_with_timeout /mnt /bin/bash -s 2>&1 | sanitize_stream | tee_install_logs >/dev/null
 		chroot_status=${PIPESTATUS[1]:-1}
 	else
-		build_chroot_script "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_mode" "$resolved_display_mode" | run_arch_chroot_with_timeout /mnt /bin/bash -s 2>&1 | sanitize_stream | tee_install_logs
+		build_chroot_script "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_session" "$resolved_display_session" | run_arch_chroot_with_timeout /mnt /bin/bash -s 2>&1 | sanitize_stream | tee_install_logs
 		chroot_status=${PIPESTATUS[1]:-1}
 	fi
 
@@ -1634,9 +1665,9 @@ run_install() {
 	local format_efi="true"
 	local desktop_profile=""
 	local display_manager=""
-	local greeter_frontend="tuigreet"
-	local display_mode=""
-	local resolved_display_mode=""
+	local greeter="tuigreet"
+	local display_session="wayland"
+	local resolved_display_session="wayland"
 	local enable_luks="false"
 	local luks_mapper_name="cryptroot"
 	local snapshot_provider="none"
@@ -1668,8 +1699,8 @@ run_install() {
 	format_efi="$(get_state "FORMAT_EFI" 2>/dev/null || printf 'true')"
 	desktop_profile="$(get_state "DESKTOP_PROFILE" 2>/dev/null || printf 'none')"
 	display_manager="$(get_state "DISPLAY_MANAGER" 2>/dev/null || printf 'none')"
-	greeter_frontend="$(get_state "GREETER_FRONTEND" 2>/dev/null || printf 'tuigreet')"
-	display_mode="$(get_state "DISPLAY_MODE" 2>/dev/null || printf 'auto')"
+	greeter="$(get_state "GREETER" 2>/dev/null || printf 'tuigreet')"
+	display_session="$(get_state "DISPLAY_SESSION" 2>/dev/null || printf 'wayland')"
 	enable_luks="$(get_state "ENABLE_LUKS" 2>/dev/null || printf 'false')"
 	luks_mapper_name="$(get_state "LUKS_MAPPER_NAME" 2>/dev/null || printf 'cryptroot')"
 	snapshot_provider="$(get_state "SNAPSHOT_PROVIDER" 2>/dev/null || printf 'none')"
@@ -1708,7 +1739,7 @@ run_install() {
 		run_hooks pre_install "$disk" || true
 	fi
 
-	build_pacstrap_package_list "$boot_mode" "$filesystem" "$enable_zram" pacstrap_packages "$desktop_profile" "$display_manager" "$display_mode" "$install_profile" "$editor_choice" "$include_vscode" "$custom_tools" "$environment_vendor" "$gpu_vendor" "$secure_boot_mode" "$greeter_frontend"
+	build_pacstrap_package_list "$boot_mode" "$filesystem" "$enable_zram" pacstrap_packages "$desktop_profile" "$display_manager" "$display_session" "$install_profile" "$editor_choice" "$include_vscode" "$custom_tools" "$environment_vendor" "$gpu_vendor" "$secure_boot_mode" "$greeter"
 
 	: > "$ARCHINSTALL_LOG" || {
 		print_install_error "Could not write the install log: $ARCHINSTALL_LOG"
@@ -1735,57 +1766,20 @@ run_install() {
 		log_line "Zram: $enable_zram"
 		log_line "Install profile: $install_profile"
 		log_line "Desktop profile: $desktop_profile"
-		log_line "Display mode: $display_mode"
+		log_line "Display session: $display_session"
 		log_line "Display manager: $display_manager"
-		log_line "Greeter frontend: $greeter_frontend"
+		log_line "Greeter: $greeter"
 		log_line "Encryption: $enable_luks"
 		log_line "Snapshot provider: $snapshot_provider"
 		log_line "Safe mode: $INSTALL_SAFE_MODE"
 
-		resolve_display_mode() {
-			local requested_mode=${1:-auto}
-			local detected_virtualization="false"
-			local has_drm_device="false"
-			local has_gpu="false"
-
-			case $requested_mode in
-				wayland|x11)
-					printf '%s\n' "$requested_mode"
-					return 0
-					;;
-				auto)
-					;;
-				*)
-					printf 'wayland\n'
-					return 0
-					;;
-			esac
-
-			if [[ $environment_vendor != "baremetal" ]]; then
-				detected_virtualization="true"
-			fi
-			if compgen -G '/dev/dri/card*' >/dev/null 2>&1; then
-				has_drm_device="true"
-			fi
-			if command -v lspci >/dev/null 2>&1 && lspci | grep -Eiq 'vga|3d|display'; then
-				has_gpu="true"
-			fi
-
-			if [[ $detected_virtualization == "true" ]]; then
-				printf 'x11\n'
-				return 0
-			fi
-			if [[ $has_drm_device == "true" || $has_gpu == "true" ]]; then
-				printf 'wayland\n'
-				return 0
-			fi
-
-			printf 'x11\n'
-		}
-
-		resolved_display_mode="$(resolve_display_mode "$display_mode")"
-		set_state "RESOLVED_DISPLAY_MODE" "$resolved_display_mode" || exit 1
-		log_line "Resolved display mode: $resolved_display_mode"
+		resolved_display_session="$(normalize_display_session "$display_session")"
+		set_state "DISPLAY_SESSION" "$resolved_display_session" || exit 1
+		set_state "DISPLAY_MODE" "$resolved_display_session" || exit 1
+		set_state "RESOLVED_DISPLAY_MODE" "$resolved_display_session" || exit 1
+		set_state "GREETER" "$greeter" || exit 1
+		set_state "GREETER_FRONTEND" "$greeter" || exit 1
+		log_line "Resolved display session: $resolved_display_session"
 		if flag_enabled "$DEV_MODE"; then
 			log_line "DEV_MODE enabled: SKIP_PARTITION=$SKIP_PARTITION SKIP_PACSTRAP=$SKIP_PACSTRAP SKIP_CHROOT=$SKIP_CHROOT"
 		fi
@@ -1944,7 +1938,7 @@ run_install() {
 			fi
 			prepare_chroot_mounts "$root_mount_device" "$expected_root_source" || exit 1
 			log_stage 88 "Running chroot configuration"
-			run_chroot_configuration "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_mode" "$resolved_display_mode" "$root_mount_device" "$expected_root_source" || exit 1
+			run_chroot_configuration "$boot_mode" "$disk" "$root_uuid" "$filesystem" "$root_mount_options" "$enable_zram" "$desktop_profile" "$display_manager" "$display_session" "$resolved_display_session" "$root_mount_device" "$expected_root_source" || exit 1
 			log_stage 95 "Finalizing installation"
 			if type run_hooks >/dev/null 2>&1; then
 				run_hooks post_chroot "$disk" "$root_partition" || true

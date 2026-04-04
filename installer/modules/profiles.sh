@@ -271,9 +271,15 @@ profile_default_desktop_profile() {
 }
 
 profile_default_display_manager() {
-	case ${1:-daily} in
-		daily)
-			printf 'greetd\n'
+	local install_profile=${1:-daily}
+	local desktop_profile=${2:-$(profile_default_desktop_profile "$install_profile")}
+
+	case "$install_profile:$desktop_profile" in
+		daily:kde)
+			printf 'sddm\n'
+			;;
+		*:kde)
+			printf 'sddm\n'
 			;;
 		*)
 			printf 'none\n'
@@ -281,13 +287,13 @@ profile_default_display_manager() {
 	esac
 }
 
-profile_default_display_mode() {
+profile_default_display_session() {
 	case ${1:-daily} in
-		daily)
-			printf 'auto\n'
+		daily|dev|custom)
+			printf 'wayland\n'
 			;;
 		*)
-			printf 'auto\n'
+			printf 'wayland\n'
 			;;
 	esac
 }

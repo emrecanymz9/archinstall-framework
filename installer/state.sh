@@ -9,6 +9,39 @@ STATE_ENVIRONMENT=ENVIRONMENT_VENDOR
 STATE_FILESYSTEM=FILESYSTEM
 STATE_PROFILE=INSTALL_PROFILE
 
+normalize_display_manager() {
+	case ${1:-sddm} in
+		sddm|greetd|none)
+			printf '%s\n' "$1"
+			;;
+		*)
+			printf 'sddm\n'
+			;;
+	esac
+}
+
+normalize_greeter() {
+	case ${1:-tuigreet} in
+		tuigreet|qtgreet)
+			printf '%s\n' "$1"
+			;;
+		*)
+			printf 'tuigreet\n'
+			;;
+	esac
+}
+
+normalize_display_session() {
+	case ${1:-wayland} in
+		wayland|x11)
+			printf '%s\n' "$1"
+			;;
+		*)
+			printf 'wayland\n'
+			;;
+	esac
+}
+
 normalize_disk_type() {
 	local value=${1-}
 	local normalized=""
@@ -64,9 +97,20 @@ set_state() {
 	local value=${2-}
 	local temp_file
 
-	if [[ $key == "DISK_TYPE" ]]; then
-		value="$(normalize_disk_type "$value")"
-	fi
+	case $key in
+		DISK_TYPE)
+			value="$(normalize_disk_type "$value")"
+			;;
+		DISPLAY_MANAGER)
+			value="$(normalize_display_manager "$value")"
+			;;
+		GREETER|GREETER_FRONTEND)
+			value="$(normalize_greeter "$value")"
+			;;
+		DISPLAY_SESSION|DISPLAY_MODE|RESOLVED_DISPLAY_MODE)
+			value="$(normalize_display_session "$value")"
+			;;
+	esac
 
 	ensure_state_file
 	temp_file="$(mktemp "${ARCHINSTALL_STATE_FILE}.XXXXXX")" || return 1
@@ -99,7 +143,7 @@ get_state() {
 	local key=${1:?state key is required}
 
 	ensure_state_file
-	awk -F '\t' -v key="$key" '
+	if awk -F '\t' -v key="$key" '
 		$1 == key {
 			line = $0
 			sub(/^[^\t]*\t/, "", line)
@@ -112,7 +156,27 @@ get_state() {
 				exit 1
 			}
 		}
-	' "$ARCHINSTALL_STATE_FILE"
+	' "$ARCHINSTALL_STATE_FILE"; then
+		return 0
+	fi
+
+	case $key in
+		GREETER)
+			awk -F '\t' '$1 == "GREETER_FRONTEND" { line = $0; sub(/^[^\t]*\t/, "", line); print line; found = 1; exit } END { if (!found) exit 1 }' "$ARCHINSTALL_STATE_FILE"
+			;;
+		GREETER_FRONTEND)
+			awk -F '\t' '$1 == "GREETER" { line = $0; sub(/^[^\t]*\t/, "", line); print line; found = 1; exit } END { if (!found) exit 1 }' "$ARCHINSTALL_STATE_FILE"
+			;;
+		DISPLAY_SESSION)
+			awk -F '\t' '$1 == "DISPLAY_MODE" || $1 == "RESOLVED_DISPLAY_MODE" { line = $0; sub(/^[^\t]*\t/, "", line); print line; found = 1; exit } END { if (!found) exit 1 }' "$ARCHINSTALL_STATE_FILE"
+			;;
+		DISPLAY_MODE|RESOLVED_DISPLAY_MODE)
+			awk -F '\t' '$1 == "DISPLAY_SESSION" { line = $0; sub(/^[^\t]*\t/, "", line); print line; found = 1; exit } END { if (!found) exit 1 }' "$ARCHINSTALL_STATE_FILE"
+			;;
+		*)
+			return 1
+			;;
+	esac
 }
 
 unset_state() {

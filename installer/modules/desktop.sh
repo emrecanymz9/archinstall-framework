@@ -15,18 +15,15 @@ desktop_profile_label() {
 }
 
 display_mode_label() {
-	case ${1:-auto} in
-		auto)
-			printf 'Auto (prefer Wayland, fallback X11)\n'
-			;;
+	case ${1:-wayland} in
 		wayland)
 			printf 'Wayland\n'
 			;;
 		x11)
-			printf 'X11 (manual fallback only)\n'
+			printf 'X11\n'
 			;;
 		*)
-			printf '%s\n' "$1"
+			printf 'Wayland\n'
 			;;
 	esac
 }
@@ -85,7 +82,7 @@ select_desktop_profile() {
 
 select_display_manager() {
 	local desktop_profile=${1:-none}
-	local selected="none"
+	local selected="sddm"
 
 	if [[ $desktop_profile != "kde" ]]; then
 		printf 'none\n'
@@ -93,8 +90,8 @@ select_display_manager() {
 	fi
 
 	menu "Display Manager" "Choose the display manager for KDE Plasma." 16 76 4 \
-		"greetd" "greetd — minimal Wayland-first display manager" \
-		"sddm"   "SDDM — Qt-based display manager, recommended for KDE"
+		"sddm"   "SDDM - recommended default for KDE" \
+		"greetd" "greetd - minimal display manager with selectable greeter"
 	selected="$DIALOG_RESULT"
 	case $DIALOG_STATUS in
 		0)
@@ -139,18 +136,17 @@ select_greeter_frontend() {
 
 select_display_mode() {
 	local desktop_profile=${1:-none}
-	local current_mode=${2:-auto}
-	local selected="auto"
+	local current_mode=${2:-wayland}
+	local selected="wayland"
 
 	if [[ $desktop_profile != "kde" ]]; then
-		printf 'auto\n'
+		printf 'wayland\n'
 		return 0
 	fi
 
-	menu "Display Mode" "Choose the preferred KDE session mode.\n\ngreetd always starts Wayland and leaves X11 available only as a manual fallback helper.\n\nCurrent: $(display_mode_label "$current_mode")" 16 78 4 \
-		"auto" "Prefer Wayland, fall back to X11 for VMs or weak graphics" \
+	menu "Display Mode" "Choose the KDE session mode.\n\nCurrent: $(display_mode_label "$current_mode")" 16 78 4 \
 		"wayland" "Force startplasma-wayland" \
-		"x11" "Use X11 only through the manual fallback helper"
+		"x11" "Force startplasma-x11"
 	selected="$DIALOG_RESULT"
 	case $DIALOG_STATUS in
 		0)
@@ -169,7 +165,7 @@ select_display_mode() {
 desktop_profile_packages() {
 	local desktop_profile=${1:-none}
 	local display_manager=${2:-none}
-	local display_mode=${3:-auto}
+	local display_mode=${3:-wayland}
 	local -n package_ref=${4:?package reference is required}
 	local greeter_frontend=${5:-tuigreet}
 
@@ -206,9 +202,11 @@ desktop_profile_packages() {
 				bluez
 				bluez-utils
 				xorg-server
+				sddm
+				sddm-kcm
 			)
 			case $display_mode in
-				auto|wayland|x11)
+				wayland|x11)
 					;;
 				*)
 					return 1
@@ -216,10 +214,22 @@ desktop_profile_packages() {
 			esac
 			case $display_manager in
 				greetd)
-					package_ref+=(greetd greetd-tuigreet)
+					package_ref+=(greetd)
+					case $greeter_frontend in
+						qtgreet)
+							package_ref+=(greetd-qtgreet)
+							;;
+						*)
+							package_ref+=(greetd-tuigreet)
+							;;
+					esac
 					;;
 				sddm)
-					package_ref+=(sddm sddm-kcm)
+					;;
+				none)
+					;;
+				*)
+					return 1
 					;;
 			esac
 			;;

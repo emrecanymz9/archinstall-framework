@@ -10,11 +10,11 @@ resolve_package_strategy() {
 	local custom_tools=${7:-}
 	local desktop_profile=${8:-none}
 	local display_manager=${9:-none}
-	local display_mode=${10:-auto}
+	local display_session=${10:-wayland}
 	local environment_vendor=${11:-baremetal}
 	local gpu_vendor=${12:-generic}
 	local secure_boot_mode=${13:-disabled}
-	local greeter_frontend=${14:-tuigreet}
+	local greeter=${14:-tuigreet}
 	local snapshot_provider=${15:-none}
 	local enable_luks=${16:-false}
 	local -n package_ref=${17:?package reference is required}
@@ -37,7 +37,7 @@ resolve_package_strategy() {
 	append_unique_packages package_ref "${hardware_packages[@]}"
 	append_unique_packages package_ref "${secure_boot_packages_ref[@]}"
 
-	if desktop_profile_packages "$desktop_profile" "$display_manager" "$display_mode" desktop_packages "$greeter_frontend"; then
+	if desktop_profile_packages "$desktop_profile" "$display_manager" "$display_session" desktop_packages "$greeter"; then
 		append_unique_packages package_ref "${desktop_packages[@]}"
 	fi
 

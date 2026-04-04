@@ -212,20 +212,20 @@ render_install_progress_text() {
 	local boot_mode=${4:-auto}
 	local filesystem=${5:-ext4}
 	local desktop_profile=${6:-none}
-	local display_mode=${7:-auto}
+	local display_session=${7:-wayland}
 	local secure_boot_state="$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")"
 	local environment_label_value="${ARCHINSTALL_ENV_SUMMARY:-$(safe_runtime_environment_summary)}"
 	local excerpt=""
 
 	excerpt="$(progress_log_excerpt "$progress_log")"
-	printf 'Installing system... %s%%\n\nCurrent step: %s\nBoot mode: %s\nEnvironment: %s\nFilesystem: %s\nDesktop: %s\nDisplay mode: %s\n\nLatest logs:\n%s\n' \
+	printf 'Installing system... %s%%\n\nCurrent step: %s\nBoot mode: %s\nEnvironment: %s\nFilesystem: %s\nDesktop: %s\nDisplay session: %s\n\nLatest logs:\n%s\n' \
 		"$percent" \
 		"$(sanitize_dialog_text "$current_step")" \
 		"$(sanitize_dialog_text "$(boot_mode_status_label "$boot_mode" "$secure_boot_state")")" \
 		"$(sanitize_dialog_text "$environment_label_value")" \
 		"$(sanitize_dialog_text "$filesystem")" \
 		"$(sanitize_dialog_text "$(desktop_profile_label "$desktop_profile")")" \
-		"$(sanitize_dialog_text "$(display_mode_label "$display_mode")")" \
+		"$(sanitize_dialog_text "$(display_mode_label "$display_session")")" \
 		"$excerpt"
 }
 
@@ -283,7 +283,7 @@ write_install_progress_dialog() {
 	local boot_mode=${4:-auto}
 	local filesystem=${5:-ext4}
 	local desktop_profile=${6:-none}
-	local display_mode=${7:-auto}
+	local display_session=${7:-wayland}
 	local progress_log=${8:?progress log is required}
 	local message=""
 
@@ -291,7 +291,7 @@ write_install_progress_dialog() {
 		return 1
 	fi
 
-	message="$(render_install_progress_text "$progress_log" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode")"
+	message="$(render_install_progress_text "$progress_log" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_session")"
 	{
 		printf 'XXX\n'
 		printf '%s\n' "$percent"
@@ -306,10 +306,10 @@ finalize_install_progress_dialog() {
 	local boot_mode=${3:-auto}
 	local filesystem=${4:-ext4}
 	local desktop_profile=${5:-none}
-	local display_mode=${6:-auto}
+	local display_session=${6:-wayland}
 
 	if [[ -n ${ARCHINSTALL_PROGRESS_WRITER_FD:-} ]]; then
-		write_install_progress_dialog "$progress_fifo" 100 "Installation complete" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode" "$progress_log" || true
+		write_install_progress_dialog "$progress_fifo" 100 "Installation complete" "$boot_mode" "$filesystem" "$desktop_profile" "$display_session" "$progress_log" || true
 		sleep 1
 	fi
 }
@@ -321,13 +321,13 @@ show_install_progress_tty() {
 	local boot_mode=${4:-auto}
 	local filesystem=${5:-ext4}
 	local desktop_profile=${6:-none}
-	local display_mode=${7:-auto}
+	local display_session=${7:-wayland}
 	local progress_key=""
 	local excerpt=""
 	local secure_boot_state="$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")"
 	local environment_label_value="$(safe_runtime_environment_summary)"
 
-	progress_key="${percent}:${current_step}:${display_mode}"
+	progress_key="${percent}:${current_step}:${display_session}"
 	if [[ ${ARCHINSTALL_LAST_TTY_PROGRESS_KEY:-} == "$progress_key" ]]; then
 		return 0
 	fi
@@ -342,7 +342,7 @@ show_install_progress_tty() {
 	printf 'Environment: %s\n' "$environment_label_value"
 	printf 'Filesystem: %s\n' "$filesystem"
 	printf 'Desktop: %s\n' "$(desktop_profile_label "$desktop_profile")"
-	printf 'Display mode: %s\n\n' "$(display_mode_label "$display_mode")"
+	printf 'Display session: %s\n\n' "$(display_mode_label "$display_session")"
 	printf 'Latest logs:\n%s\n' "$excerpt"
 }
 
@@ -794,7 +794,7 @@ run_install_with_dialog() {
 	local boot_mode=""
 	local filesystem=""
 	local desktop_profile=""
-	local display_mode=""
+	local display_session=""
 	local MAX_RETRY=3
 	local RETRY_COUNT=0
 	local tty_fallback_active=false
@@ -823,7 +823,7 @@ run_install_with_dialog() {
 	boot_mode="$(state_or_default "BOOT_MODE" "auto")"
 	filesystem="$(state_or_default "FILESYSTEM" "ext4")"
 	desktop_profile="$(state_or_default "DESKTOP_PROFILE" "none")"
-	display_mode="$(state_or_default "DISPLAY_MODE" "auto")"
+	display_session="$(state_or_default "DISPLAY_SESSION" "wayland")"
 	expected_steps="$(estimate_install_step_count "$boot_mode" "$desktop_profile")"
 	progress_fifo="$(mktemp -u /tmp/archinstall_progress_fifo.XXXXXX)"
 	progress_error_log="$(mktemp /tmp/archinstall_progress_error.XXXXXX 2>/dev/null || printf '/tmp/archinstall_progress_error.log')"
@@ -838,7 +838,7 @@ run_install_with_dialog() {
 		if open_install_progress_writer "$progress_fifo" && start_install_progress_dialog "$progress_fifo" "$progress_error_log"; then
 			progress_dialog_pid=$ARCHINSTALL_PROGRESS_DIALOG_PID
 			log_debug "progress system started writer_fd=$ARCHINSTALL_PROGRESS_WRITER_FD dialog_pid=$progress_dialog_pid"
-			write_install_progress_dialog "$progress_fifo" 0 "Starting installer" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode" "$progress_log" || true
+			write_install_progress_dialog "$progress_fifo" 0 "Starting installer" "$boot_mode" "$filesystem" "$desktop_profile" "$display_session" "$progress_log" || true
 		else
 			log_debug "progress system startup failed; falling back to tty"
 			set_ui_mode tty
@@ -860,7 +860,7 @@ run_install_with_dialog() {
 		if [[ $tty_fallback_active == true || ${UI_MODE:-dialog} == "tty" ]]; then
 			log_debug "progress switching to tty mode"
 			stop_progress_dialog
-			show_install_progress_tty "$log_file" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode"
+			show_install_progress_tty "$log_file" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_session"
 		else
 			if (( progress_dialog_pid <= 0 )) || ! kill -0 "$progress_dialog_pid" 2>/dev/null; then
 				RETRY_COUNT=$((RETRY_COUNT + 1))
@@ -873,7 +873,7 @@ run_install_with_dialog() {
 					set_ui_mode tty
 					tty_fallback_active=true
 					apply_runtime_mode || true
-					show_install_progress_tty "$log_file" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode"
+					show_install_progress_tty "$log_file" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_session"
 					continue
 				fi
 				stop_progress_dialog
@@ -885,12 +885,12 @@ run_install_with_dialog() {
 					set_ui_mode tty
 					tty_fallback_active=true
 					apply_runtime_mode || true
-					show_install_progress_tty "$log_file" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode"
+					show_install_progress_tty "$log_file" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_session"
 					continue
 				fi
 			fi
 
-			if write_install_progress_dialog "$progress_fifo" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode" "$progress_log"; then
+			if write_install_progress_dialog "$progress_fifo" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_session" "$progress_log"; then
 				RETRY_COUNT=0
 			else
 				RETRY_COUNT=$((RETRY_COUNT + 1))
@@ -901,7 +901,7 @@ run_install_with_dialog() {
 					set_ui_mode tty
 					tty_fallback_active=true
 					apply_runtime_mode || true
-					show_install_progress_tty "$log_file" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode"
+					show_install_progress_tty "$log_file" "$percent" "$current_step" "$boot_mode" "$filesystem" "$desktop_profile" "$display_session"
 				fi
 			fi
 		fi
@@ -910,7 +910,7 @@ run_install_with_dialog() {
 
 	log_debug "run_install process exited"
 	if [[ ${UI_MODE:-dialog} == "dialog" && $tty_fallback_active == false ]]; then
-		finalize_install_progress_dialog "$progress_fifo" "$progress_log" "$boot_mode" "$filesystem" "$desktop_profile" "$display_mode"
+		finalize_install_progress_dialog "$progress_fifo" "$progress_log" "$boot_mode" "$filesystem" "$desktop_profile" "$display_session"
 	fi
 	cleanup_progress_dialog
 	wait "$install_pid"
@@ -1101,7 +1101,7 @@ configure_install_profile() {
 	local desktop_profile=""
 	local display_manager=""
 	local greeter_frontend="tuigreet"
-	local display_mode=""
+	local display_session=""
 	local enable_luks="false"
 	local luks_password=""
 	local snapshot_provider="none"
@@ -1136,25 +1136,25 @@ configure_install_profile() {
 	case $install_profile in
 		daily)
 			desktop_profile="kde"
-			display_mode="auto"
-			display_manager="greetd"
+			display_session="wayland"
+			display_manager="sddm"
 			greeter_frontend="tuigreet"
 			editor_choice="kate"
 			include_vscode="false"
 			;;
 		dev)
 			desktop_profile="$(select_desktop_profile)" || return 1
-			display_mode="$(select_display_mode "$desktop_profile" "$(state_or_default "DISPLAY_MODE" "auto")")" || return 1
+			display_session="$(select_display_mode "$desktop_profile" "$(state_or_default "DISPLAY_SESSION" "wayland")")" || return 1
 			display_manager="$(select_display_manager "$desktop_profile")" || return 1
-			greeter_frontend="$(select_greeter_frontend "$desktop_profile" "$(state_or_default "GREETER_FRONTEND" "tuigreet")")" || return 1
+			greeter_frontend="$(select_greeter_frontend "$desktop_profile" "$(state_or_default "GREETER" "tuigreet")")" || return 1
 			editor_choice="$(select_editor_choice "$(state_or_default "EDITOR_CHOICE" "micro")")" || return 1
 			include_vscode="$(select_boolean_value "VS Code" "Include Visual Studio Code in the DEV profile?" "$(state_or_default "INCLUDE_VSCODE" "false")" "Install code" "Skip code")" || return 1
 			;;
 		custom)
 			desktop_profile="$(select_desktop_profile)" || return 1
-			display_mode="$(select_display_mode "$desktop_profile" "$(state_or_default "DISPLAY_MODE" "auto")")" || return 1
+			display_session="$(select_display_mode "$desktop_profile" "$(state_or_default "DISPLAY_SESSION" "wayland")")" || return 1
 			display_manager="$(select_display_manager "$desktop_profile")" || return 1
-			greeter_frontend="$(select_greeter_frontend "$desktop_profile" "$(state_or_default "GREETER_FRONTEND" "tuigreet")")" || return 1
+			greeter_frontend="$(select_greeter_frontend "$desktop_profile" "$(state_or_default "GREETER" "tuigreet")")" || return 1
 			editor_choice="$(select_editor_choice "$(state_or_default "EDITOR_CHOICE" "nano")")" || return 1
 			local _saved_cl
 			_saved_cl="$(state_or_default "CUSTOM_CHECKLIST" "")"
@@ -1226,7 +1226,7 @@ configure_install_profile() {
 	esac
 
 	if [[ $desktop_profile == "none" ]]; then
-		display_mode="auto"
+		display_session="wayland"
 		display_manager="none"
 		greeter_frontend="tuigreet"
 	fi
@@ -1249,8 +1249,10 @@ configure_install_profile() {
 	set_state "SNAPSHOT_PROVIDER" "$snapshot_provider" || return 1
 	set_state "ENABLE_ZRAM" "$enable_zram" || return 1
 	set_state "DESKTOP_PROFILE" "$desktop_profile" || return 1
-	set_state "DISPLAY_MODE" "$display_mode" || return 1
+	set_state "DISPLAY_SESSION" "$display_session" || return 1
+	set_state "DISPLAY_MODE" "$display_session" || return 1
 	set_state "DISPLAY_MANAGER" "$display_manager" || return 1
+	set_state "GREETER" "$greeter_frontend" || return 1
 	set_state "GREETER_FRONTEND" "$greeter_frontend" || return 1
 	set_state "BOOT_MODE" "$boot_mode" || return 1
 	INSTALL_USER_PASSWORD="$user_password"
@@ -1260,7 +1262,7 @@ configure_install_profile() {
 		sync_install_config_json >/dev/null 2>&1 || true
 	fi
 
-	msg "Profile Saved" "Installation profile updated.\n\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nInstall profile: $(install_profile_label "$install_profile")\nEditor: $(editor_choice_label "$editor_choice")\nVS Code: $include_vscode\nSecure Boot mode: $(secure_boot_mode_label "$secure_boot_mode")\nFilesystem: $filesystem\nEncryption: $enable_luks\nSnapshots: $(snapshot_provider_label "$snapshot_provider")\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay mode: $(display_mode_label "$display_mode")\nDisplay manager: $(display_manager_label "$display_manager")\nGreeter frontend: $(greeter_frontend_label "$greeter_frontend")\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nUser password: set\nRoot password: set"
+	msg "Profile Saved" "Installation profile updated.\n\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nInstall profile: $(install_profile_label "$install_profile")\nEditor: $(editor_choice_label "$editor_choice")\nVS Code: $include_vscode\nSecure Boot mode: $(secure_boot_mode_label "$secure_boot_mode")\nFilesystem: $filesystem\nEncryption: $enable_luks\nSnapshots: $(snapshot_provider_label "$snapshot_provider")\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay session: $(display_mode_label "$display_session")\nDisplay manager: $(display_manager_label "$display_manager")\nGreeter: $(greeter_frontend_label "$greeter_frontend")\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nUser password: set\nRoot password: set"
 }
 
 validate_install_profile() {
@@ -1309,10 +1311,10 @@ show_state_summary() {
 	local filesystem
 	local enable_zram
 	local desktop_profile
-	local display_mode
+	local display_session
 	local resolved_display_mode
 	local display_manager
-	local greeter_frontend
+	local greeter
 	local disk_type
 	local install_scenario
 	local enable_luks
@@ -1341,10 +1343,10 @@ show_state_summary() {
 	snapshot_provider="$(state_or_default "SNAPSHOT_PROVIDER" "none")"
 	enable_zram="$(state_or_default "ENABLE_ZRAM" "false")"
 	desktop_profile="$(state_or_default "DESKTOP_PROFILE" "none")"
-	display_mode="$(state_or_default "DISPLAY_MODE" "auto")"
-	resolved_display_mode="$(state_or_default "RESOLVED_DISPLAY_MODE" "auto")"
+	display_session="$(state_or_default "DISPLAY_SESSION" "wayland")"
+	resolved_display_mode="$(state_or_default "RESOLVED_DISPLAY_MODE" "wayland")"
 	display_manager="$(state_or_default "DISPLAY_MANAGER" "none")"
-	greeter_frontend="$(state_or_default "GREETER_FRONTEND" "tuigreet")"
+	greeter="$(state_or_default "GREETER" "tuigreet")"
 	secure_boot_state="$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")"
 	secure_boot_mode="$(state_or_default "SECURE_BOOT_MODE" "disabled")"
 	environment_summary_value="$(safe_runtime_environment_summary)"
@@ -1355,7 +1357,7 @@ show_state_summary() {
 	[[ -n $INSTALL_USER_PASSWORD ]] && user_password_state="set"
 	[[ -n $INSTALL_ROOT_PASSWORD ]] && root_password_state="set"
 
-	msg "Installer State" "Saved state:\n\nEnvironment: $environment_summary_value\nGPU: $gpu_label_value\nDisk: $disk\nDisk type: $(post_install_disk_type_label)\nDisk strategy: $install_scenario\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nSecure Boot mode: $(secure_boot_mode_label "$secure_boot_mode")\nEFI: $efi_partition\nRoot: $root_partition\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nInstall profile: $(install_profile_label "$install_profile_value")\nFilesystem: $filesystem\nEncryption: $enable_luks\nSnapshots: $(snapshot_provider_label "$snapshot_provider")\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay mode: $(display_mode_label "$display_mode")\nResolved mode: $(display_mode_label "$resolved_display_mode")\nDisplay manager: $(display_manager_label "$display_manager")\nGreeter frontend: $(greeter_frontend_label "$greeter_frontend")\nSafe mode: $INSTALL_SAFE_MODE\nUser password: $user_password_state\nRoot password: $root_password_state\nDEV_MODE: $DEV_MODE\nUI mode: $INSTALL_UI_MODE" 29 82
+	msg "Installer State" "Saved state:\n\nEnvironment: $environment_summary_value\nGPU: $gpu_label_value\nDisk: $disk\nDisk type: $(post_install_disk_type_label)\nDisk strategy: $install_scenario\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nSecure Boot mode: $(secure_boot_mode_label "$secure_boot_mode")\nEFI: $efi_partition\nRoot: $root_partition\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nInstall profile: $(install_profile_label "$install_profile_value")\nFilesystem: $filesystem\nEncryption: $enable_luks\nSnapshots: $(snapshot_provider_label "$snapshot_provider")\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay session: $(display_mode_label "$display_session")\nResolved session: $(display_mode_label "$resolved_display_mode")\nDisplay manager: $(display_manager_label "$display_manager")\nGreeter: $(greeter_frontend_label "$greeter")\nSafe mode: $INSTALL_SAFE_MODE\nUser password: $user_password_state\nRoot password: $root_password_state\nDEV_MODE: $DEV_MODE\nUI mode: $INSTALL_UI_MODE" 29 82
 }
 
 confirm_installation() {
@@ -1377,7 +1379,7 @@ confirm_installation() {
 
 	validate_install_profile || return 1
 
-	message="$(installer_context_header)\n\nThis will prepare a bootable Arch Linux system on:\n\n$disk\n\nDisk type: $(post_install_disk_type_label)\nDisk strategy: $(state_or_default "INSTALL_SCENARIO" "wipe")\nBoot mode: $(boot_mode_status_label "$(state_or_default "BOOT_MODE" "bios")" "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")\nSecure Boot mode: $(secure_boot_mode_label "$(state_or_default "SECURE_BOOT_MODE" "disabled")")\nHostname: $(state_or_default "HOSTNAME" "archlinux")\nTimezone: $(state_or_default "TIMEZONE" "Europe/Istanbul")\nLocale: $(state_or_default "LOCALE" "en_US.UTF-8")\nKeyboard: $(state_or_default "KEYMAP" "us")\nUser: $(state_or_default "USERNAME" "archuser")\nInstall profile: $(install_profile_label "$(state_or_default "INSTALL_PROFILE" "daily")")\nFilesystem: $(state_or_default "FILESYSTEM" "ext4")\nEncryption: $(state_or_default "ENABLE_LUKS" "false")\nSnapshots: $(snapshot_provider_label "$(state_or_default "SNAPSHOT_PROVIDER" "none")")\nZram: $(state_or_default "ENABLE_ZRAM" "false")\nDesktop: $(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")\nDisplay mode: $(display_mode_label "$(state_or_default "DISPLAY_MODE" "auto")")\nDisplay manager: $(display_manager_label "$(state_or_default "DISPLAY_MANAGER" "none")")\nGreeter frontend: $(greeter_frontend_label "$(state_or_default "GREETER_FRONTEND" "tuigreet")")\nSafe mode: $(state_or_default "INSTALL_SAFE_MODE" "$INSTALL_SAFE_MODE")\n\nDestructive steps may erase existing data."
+	message="$(installer_context_header)\n\nThis will prepare a bootable Arch Linux system on:\n\n$disk\n\nDisk type: $(post_install_disk_type_label)\nDisk strategy: $(state_or_default "INSTALL_SCENARIO" "wipe")\nBoot mode: $(boot_mode_status_label "$(state_or_default "BOOT_MODE" "bios")" "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")\nSecure Boot mode: $(secure_boot_mode_label "$(state_or_default "SECURE_BOOT_MODE" "disabled")")\nHostname: $(state_or_default "HOSTNAME" "archlinux")\nTimezone: $(state_or_default "TIMEZONE" "Europe/Istanbul")\nLocale: $(state_or_default "LOCALE" "en_US.UTF-8")\nKeyboard: $(state_or_default "KEYMAP" "us")\nUser: $(state_or_default "USERNAME" "archuser")\nInstall profile: $(install_profile_label "$(state_or_default "INSTALL_PROFILE" "daily")")\nFilesystem: $(state_or_default "FILESYSTEM" "ext4")\nEncryption: $(state_or_default "ENABLE_LUKS" "false")\nSnapshots: $(snapshot_provider_label "$(state_or_default "SNAPSHOT_PROVIDER" "none")")\nZram: $(state_or_default "ENABLE_ZRAM" "false")\nDesktop: $(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")\nDisplay session: $(display_mode_label "$(state_or_default "DISPLAY_SESSION" "wayland")")\nDisplay manager: $(display_manager_label "$(state_or_default "DISPLAY_MANAGER" "none")")\nGreeter: $(greeter_frontend_label "$(state_or_default "GREETER" "tuigreet")")\nSafe mode: $(state_or_default "INSTALL_SAFE_MODE" "$INSTALL_SAFE_MODE")\n\nDestructive steps may erase existing data."
 	if flag_enabled "$DEV_MODE"; then
 		message+="\n\nDev mode flags:\nSKIP_PARTITION=$SKIP_PARTITION\nSKIP_PACSTRAP=$SKIP_PACSTRAP\nSKIP_CHROOT=$SKIP_CHROOT\nINSTALL_UI_MODE=$INSTALL_UI_MODE"
 	fi

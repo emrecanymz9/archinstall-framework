@@ -56,9 +56,9 @@ sync_install_config_json() {
 	local snapshot_provider="$(install_config_get_or_default "SNAPSHOT_PROVIDER" "none")"
 	local install_profile="$(install_config_get_or_default "INSTALL_PROFILE" "daily")"
 	local desktop_profile="$(install_config_get_or_default "DESKTOP_PROFILE" "none")"
-	local display_manager="$(install_config_get_or_default "DISPLAY_MANAGER" "none")"
-	local display_mode="$(install_config_get_or_default "DISPLAY_MODE" "auto")"
-	local greeter_frontend="$(install_config_get_or_default "GREETER_FRONTEND" "tuigreet")"
+	local display_manager="$(normalize_display_manager "$(install_config_get_or_default "DISPLAY_MANAGER" "sddm")")"
+	local display_session="$(normalize_display_session "$(install_config_get_or_default "DISPLAY_SESSION" "wayland")")"
+	local greeter="$(normalize_greeter "$(install_config_get_or_default "GREETER" "tuigreet")")"
 	local environment_vendor="$(install_config_get_or_default "ENVIRONMENT_VENDOR" "unknown")"
 	local environment_type="$(install_config_get_or_default "ENVIRONMENT_TYPE" "unknown")"
 	local cpu_vendor="$(install_config_get_or_default "CPU_VENDOR" "unknown")"
@@ -91,8 +91,8 @@ sync_install_config_json() {
     "install": "$(install_config_escape "$install_profile")",
     "desktop": "$(install_config_escape "$desktop_profile")",
     "displayManager": "$(install_config_escape "$display_manager")",
-    "displayMode": "$(install_config_escape "$display_mode")",
-    "greeterFrontend": "$(install_config_escape "$greeter_frontend")"
+		"displaySession": "$(install_config_escape "$display_session")",
+		"greeter": "$(install_config_escape "$greeter")"
   },
   "runtime": {
     "environmentVendor": "$(install_config_escape "$environment_vendor")",
