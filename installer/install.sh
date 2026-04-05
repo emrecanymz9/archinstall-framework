@@ -1208,8 +1208,7 @@ select_package_bundle() {
 				"editor-kate" "Editor: kate" "$(package_checklist_state "$saved_selection" "editor-kate" true)" \
 				"fastfetch" "System info tool" "$(package_checklist_state "$saved_selection" "fastfetch" true)" \
 				"vscode" "Visual Studio Code (code)" "$(package_checklist_state "$saved_selection" "vscode" true)" \
-				"manual-packages" "Add manual packages" "$(package_checklist_state "$saved_selection" "manual-packages" false)"
-				|| return 1
+				"manual-packages" "Add manual packages" "$(package_checklist_state "$saved_selection" "manual-packages" false)" || return 1
 			;;
 		custom)
 			checklist_box "Package Selection" "$checklist_prompt" 22 80 12 \
@@ -1221,8 +1220,7 @@ select_package_bundle() {
 				"keepassxc" "Password manager" "$(package_checklist_state "$saved_selection" "keepassxc" true)" \
 				"fastfetch" "System info tool" "$(package_checklist_state "$saved_selection" "fastfetch" true)" \
 				"vscode" "Visual Studio Code (code)" "$(package_checklist_state "$saved_selection" "vscode" true)" \
-				"manual-packages" "Add manual packages" "$(package_checklist_state "$saved_selection" "manual-packages" false)"
-				|| return 1
+				"manual-packages" "Add manual packages" "$(package_checklist_state "$saved_selection" "manual-packages" false)" || return 1
 			;;
 		*)
 			return 1
