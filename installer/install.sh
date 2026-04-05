@@ -1690,6 +1690,8 @@ main() {
 	local RETRY_COUNT=0
 	local -a dynamic_entries=()
 
+	preflight_checks || exit 1
+
 	if ! require_dialog >/dev/null 2>&1; then
 		set_ui_mode tty
 		log_ui_error "[UI ERROR] dialog is unavailable at startup; using TTY fallback"
