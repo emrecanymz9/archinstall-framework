@@ -40,6 +40,38 @@ os_probe_candidate_filesystem() {
 	esac
 }
 
+partition_filesystem_value() {
+	local partition=${1:?partition is required}
+	local filesystem=""
+
+	filesystem="$(lsblk -fpno FSTYPE "$partition" 2>/dev/null | head -n 1 || true)"
+	filesystem="$(printf '%s' "$filesystem" | sed 's/^ *//;s/ *$//')"
+	if [[ -n $filesystem ]]; then
+		printf '%s\n' "${filesystem,,}"
+		return 0
+	fi
+
+	filesystem="$(blkid -o value -s TYPE "$partition" 2>/dev/null || true)"
+	filesystem="$(printf '%s' "$filesystem" | sed 's/^ *//;s/ *$//')"
+	if [[ -n $filesystem ]]; then
+		printf '%s\n' "${filesystem,,}"
+		return 0
+	fi
+
+	return 1
+}
+
+list_disk_partitions() {
+	local disk=${1:?disk is required}
+	local partition=""
+	local part_type=""
+
+	while read -r partition part_type; do
+		[[ $part_type == "part" ]] || continue
+		printf '%s\n' "$partition"
+	done < <(lsblk -fpno NAME,TYPE "$disk" 2>/dev/null)
+}
+
 read_os_release_field() {
 	local os_release_path=${1:?os-release path is required}
 	local field_name=${2:?field name is required}
@@ -106,21 +138,29 @@ detect_partition_installed_systems() {
 	local mountpoint=""
 	local mount_mode=""
 	local os_name=""
+	local blkid_summary=""
+	local fallback_name=""
+
+	if [[ -z $filesystem ]]; then
+		filesystem="$(partition_filesystem_value "$partition" 2>/dev/null || true)"
+	fi
 
 	mount_info="$(partition_probe_mountpoint "$partition" "$filesystem" 2>/dev/null || true)"
 	[[ -n $mount_info ]] || return 0
 	IFS=$'\t' read -r mountpoint mount_mode <<< "$mount_info"
+	blkid_summary="$(blkid "$partition" 2>/dev/null | head -n 1 || true)"
+	fallback_name="${filesystem:-unknown}"
 
 	if [[ -f $mountpoint/etc/os-release ]]; then
 		os_name="$(read_os_release_field "$mountpoint/etc/os-release" PRETTY_NAME 2>/dev/null || true)"
 		if [[ -z $os_name ]]; then
 			os_name="$(read_os_release_field "$mountpoint/etc/os-release" NAME 2>/dev/null || true)"
 		fi
-		printf '%s\n' "${os_name:-Unknown Linux} (${filesystem:-unknown})"
+		printf '%s\n' "${os_name:-Detected Linux} on $partition (${fallback_name})${blkid_summary:+ - $blkid_summary}"
 	fi
 
 	if [[ -f $mountpoint/EFI/Microsoft/Boot/bootmgfw.efi ]]; then
-		printf '%s\n' 'Windows (EFI)'
+		printf '%s\n' "Windows (EFI) on $partition (${fallback_name})${blkid_summary:+ - $blkid_summary}"
 	fi
 
 	cleanup_partition_probe_mountpoint "$mountpoint" "$mount_mode"
@@ -129,18 +169,20 @@ detect_partition_installed_systems() {
 detect_disk_installed_systems() {
 	local disk=${1:?disk is required}
 	local partition=""
-	local part_type=""
 	local filesystem=""
 	local entry=""
 	local -a entries=()
+	local -a disk_partitions=()
 
-	while read -r partition part_type filesystem; do
-		[[ $part_type == "part" ]] || continue
+	mapfile -t disk_partitions < <(list_disk_partitions "$disk")
+	for partition in "${disk_partitions[@]}"; do
+		[[ -n $partition ]] || continue
+		filesystem="$(partition_filesystem_value "$partition" 2>/dev/null || true)"
 		while IFS= read -r entry; do
 			[[ -n $entry ]] || continue
 			entries+=("$entry")
 		done < <(detect_partition_installed_systems "$partition" "$filesystem")
-	done < <(lsblk -lnpo NAME,TYPE,FSTYPE "$disk" 2>/dev/null)
+	done
 
 	printf '%s\n' "${entries[@]}"
 }

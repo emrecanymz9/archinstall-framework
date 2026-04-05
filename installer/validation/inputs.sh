@@ -129,9 +129,9 @@ prompt_password() {
 		fi
 		prompt_text+="\n\nConstraints:\n- entry is non-interactive\n- non-empty passwords require confirmation"
 		if [[ $allow_empty == "true" ]]; then
-			prompt_text+="\n- blank input clears the password"
+			prompt_text+="\n- blank input clears the password only after confirmation"
 		fi
-		prompt_text+="\n- non-empty values must be 8 to 72 characters"
+		prompt_text+="\n- non-empty values must be 1 to 72 characters"
 		prompt_text+="\n- ':' is not allowed"
 		if [[ -n $validation_error ]]; then
 			prompt_text+="\n\nError: $validation_error"
@@ -153,8 +153,12 @@ prompt_password() {
 
 		if [[ -z $first ]]; then
 			if [[ $allow_empty == "true" ]]; then
-				printf ''
-				return 0
+				if confirm "$title" "Leave this password empty?\n\nThis account will not have a password set." 12 72; then
+					printf ''
+					return 0
+				fi
+				validation_error="Password was left empty without confirmation."
+				continue
 			fi
 			validation_error="A password is required."
 			continue
@@ -162,11 +166,6 @@ prompt_password() {
 
 		if [[ $first == *:* ]]; then
 			validation_error="Passwords cannot contain ':'."
-			continue
-		fi
-
-		if (( ${#first} < 8 )); then
-			validation_error="Password must be at least 8 characters long."
 			continue
 		fi
 

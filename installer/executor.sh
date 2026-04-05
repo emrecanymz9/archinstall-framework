@@ -196,21 +196,44 @@ join_by_comma() {
 }
 
 run_arch_chroot_with_timeout() {
-	timeout 300 arch-chroot "$@"
+	local chroot_timeout=${ARCHINSTALL_CHROOT_TIMEOUT:-0}
+
+	if [[ $chroot_timeout =~ ^[0-9]+$ ]] && (( chroot_timeout > 0 )); then
+		timeout "$chroot_timeout" arch-chroot "$@"
+		return $?
+	fi
+
+	arch-chroot "$@"
 }
 
 log_arch_chroot_failure() {
 	local status=${1:-1}
+	local chroot_timeout=${ARCHINSTALL_CHROOT_TIMEOUT:-0}
 
 	case $status in
 		124)
-			log_line "[FAIL] arch-chroot timed out after 300 seconds"
-			print_install_error "arch-chroot timed out after 300 seconds. Cleanup will continue."
+			log_line "[FAIL] arch-chroot timed out after ${chroot_timeout:-0} seconds"
+			print_install_error "arch-chroot timed out after ${chroot_timeout:-0} seconds. Cleanup will continue."
 			;;
 		*)
 			log_line "[FAIL] arch-chroot exited with status $status"
 			;;
 	esac
+}
+
+lazy_unmount_path() {
+	local target_path=${1:?target path is required}
+
+	if mountpoint -q "$target_path" 2>> "$ARCHINSTALL_LOG"; then
+		log_line "[DEBUG] Lazy unmounting $target_path"
+		umount -l "$target_path" >> "$ARCHINSTALL_LOG" 2>&1 || true
+	fi
+}
+
+cleanup_chroot_api_mounts() {
+	lazy_unmount_path /mnt/sys
+	lazy_unmount_path /mnt/proc
+	lazy_unmount_path /mnt/dev
 }
 
 ext4_mount_options() {
@@ -438,8 +461,9 @@ cleanup_mounts() {
 		findmnt -R /mnt >> "$ARCHINSTALL_LOG" 2>&1 || true
 		log_line "[DEBUG] Killing processes using /mnt before unmount"
 		fuser -km /mnt >> "$ARCHINSTALL_LOG" 2>&1 || true
+		cleanup_chroot_api_mounts
 	fi
-	umount -R /mnt >> "$ARCHINSTALL_LOG" 2>&1 || true
+	umount -l -R /mnt >> "$ARCHINSTALL_LOG" 2>&1 || true
 	if declare -F close_luks_root_device >/dev/null 2>&1; then
 		close_luks_root_device "$(get_state "LUKS_MAPPER_NAME" 2>/dev/null || printf 'cryptroot')" >> "$ARCHINSTALL_LOG" 2>&1 || true
 	fi
@@ -1148,6 +1172,17 @@ build_chroot_script() {
 
 	cat <<EOF
 set -euo pipefail
+
+	cleanup_chroot_jobs() {
+		local job_pid=""
+
+		for job_pid in 4(jobs -pr 2>/dev/null || true); do
+			kill "4job_pid" >/dev/null 2>&1 || true
+		done
+		wait >/dev/null 2>&1 || true
+	}
+
+	trap cleanup_chroot_jobs EXIT
 
 # shellcheck source=/dev/null
 source /root/.install_env
