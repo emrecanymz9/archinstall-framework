@@ -54,8 +54,22 @@ log_chroot_step "Creating user accounts and setting passwords"
 if ! id -u "$TARGET_USERNAME" >/dev/null 2>&1; then
 	useradd -m -G wheel -s /bin/bash "$TARGET_USERNAME"
 fi
-echo "$TARGET_USERNAME:$TARGET_USER_PASSWORD" | chpasswd
-echo "root:$TARGET_ROOT_PASSWORD" | chpasswd
+if ! id -u "$TARGET_USERNAME" >/dev/null 2>&1; then
+	echo "[FAIL] useradd did not create user '$TARGET_USERNAME'"
+	exit 1
+fi
+if [[ -n $TARGET_USER_PASSWORD ]]; then
+	echo "$TARGET_USERNAME:$TARGET_USER_PASSWORD" | chpasswd
+else
+	passwd -d "$TARGET_USERNAME"
+	echo "[INFO] No password set for $TARGET_USERNAME; account is password-locked until set manually"
+fi
+if [[ -n $TARGET_ROOT_PASSWORD ]]; then
+	echo "root:$TARGET_ROOT_PASSWORD" | chpasswd
+else
+	passwd -d root
+	echo "[INFO] No password set for root; root account is password-locked until set manually"
+fi
 
 log_chroot_step "Configuring sudo permissions"
 if grep -q '^# %wheel ALL=(ALL:ALL) ALL' /etc/sudoers; then

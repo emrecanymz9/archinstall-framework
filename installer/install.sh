@@ -1015,16 +1015,60 @@ prompt_required_input() {
 	return 1
 }
 
+# prompt_username: validates against POSIX username rules before returning.
+# Loops until the user provides a valid name or presses Back/ESC.
+prompt_username() {
+	local title=${1:-"Username"}
+	local initial_value=${2:-"archuser"}
+	local value=""
+	local status=0
+
+	while true; do
+		input_box "$title" \
+			"Create the primary user account.\n\nMust start with a letter or underscore.\nAllowed: lowercase letters, digits, underscores, hyphens.\nMax 32 characters.\n\nExample: archuser" \
+			"$initial_value" 14 76
+		value="$DIALOG_RESULT"
+		status=$DIALOG_STATUS
+
+		case $status in
+			1|255)
+				return 1
+				;;
+			0)
+				;;
+			*)
+				return 1
+				;;
+		esac
+
+		if [[ -z $value ]]; then
+			msg "$title" "Username cannot be empty."
+			continue
+		fi
+
+		if [[ ! $value =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+			msg "$title" "Invalid username: '$value'\n\nMust start with a lowercase letter or underscore.\nOnly lowercase letters, digits, underscores, and hyphens are allowed.\nMaximum length is 32 characters."
+			initial_value="$value"
+			continue
+		fi
+
+		printf '%s\n' "$value"
+		return 0
+	done
+}
+
+# prompt_password: collects a password with confirmation.
+# An empty password is allowed; the caller decides how to handle it.
+# Returns the password (possibly empty) via stdout.
+# Returns 1 only when the user presses Back/ESC to cancel entirely.
 prompt_password() {
 	local title=${1:?title is required}
 	local first=""
 	local second=""
 	local status=0
-	local MAX_RETRY=3
-	local RETRY_COUNT=0
 
-	while (( RETRY_COUNT < MAX_RETRY )); do
-		password_box "$title" "Enter the password." 12 76
+	while true; do
+		password_box "$title" "Enter the password. Leave blank to set no password." 12 76
 		first="$DIALOG_RESULT"
 		status=$DIALOG_STATUS
 		case $status in
@@ -1039,12 +1083,15 @@ prompt_password() {
 		esac
 
 		if [[ -z $first ]]; then
-			RETRY_COUNT=$((RETRY_COUNT + 1))
-			msg "$title" "The password cannot be empty."
+			# Empty password: confirm the user meant to leave it blank
+			if confirm "$title" "No password will be set for this account.\n\nThe account will be password-locked until a password is set manually.\n\nProceed with no password?" 12 76; then
+				printf ''
+				return 0
+			fi
 			continue
 		fi
 
-		password_box "$title" "Re-enter the password." 12 76
+		password_box "$title" "Re-enter the password to confirm." 12 76
 		second="$DIALOG_RESULT"
 		status=$DIALOG_STATUS
 		case $status in
@@ -1059,17 +1106,13 @@ prompt_password() {
 		esac
 
 		if [[ $first != "$second" ]]; then
-			RETRY_COUNT=$((RETRY_COUNT + 1))
-			msg "$title" "Passwords did not match."
+			msg "$title" "Passwords did not match. Please try again."
 			continue
 		fi
 
 		printf '%s\n' "$first"
 		return 0
 	done
-
-	error_box "$title" "Password retry limit reached. Returning to the previous menu."
-	return 1
 }
 
 prompt_password_or_keep() {
@@ -1238,7 +1281,7 @@ configure_packages_stage() {
 	timezone="$(select_timezone_value "$(state_or_default "TIMEZONE" "Europe/Istanbul")")" || return 1
 	locale="$(select_locale_value "$(state_or_default "LOCALE" "en_US.UTF-8")")" || return 1
 	keymap="$(select_keyboard_layout_value "$(state_or_default "KEYMAP" "us")")" || return 1
-	username="$(prompt_required_input "Username" "Create the primary user account." "$(state_or_default "USERNAME" "archuser")")" || return 1
+	username="$(prompt_username "Username" "$(state_or_default "USERNAME" "archuser")")" || return 1
 	user_password="$(prompt_password_or_keep "User Password" "$INSTALL_USER_PASSWORD")" || return 1
 	root_password="$(prompt_password_or_keep "Root Password" "$INSTALL_ROOT_PASSWORD")" || return 1
 
