@@ -3,6 +3,13 @@
 apply_disk() {
 	log_line "Starting installation on $disk"
 	log_line "Install scenario: $install_scenario"
+
+	if [[ -z $disk || ! -b $disk ]]; then
+		print_install_error "Disk validation failed: '${disk:-unset}' is not a valid block device."
+		log_line "[FAIL] apply_disk: invalid disk '${disk:-unset}'"
+		return 1
+	fi
+
 	disk_type="$(normalize_disk_type "$(detect_disk_type "$disk")")"
 	set_state "DISK_MODEL" "$(disk_model_value "$disk")" || return 1
 	set_state "DISK_TRANSPORT" "$(disk_transport_value "$disk")" || return 1
@@ -10,6 +17,18 @@ apply_disk() {
 	log_line "Disk type: $disk_type"
 
 	run_step "Unmounting any previous install target" cleanup_mounts || return 1
+
+	if mountpoint -q /mnt 2>/dev/null; then
+		print_install_error "/mnt is still mounted after cleanup. Cannot proceed with disk operations."
+		log_line "[FAIL] apply_disk: /mnt still mounted after cleanup_mounts"
+		return 1
+	fi
+
+	if [[ -d /mnt/etc || -d /mnt/boot ]]; then
+		print_install_error "/mnt contains previous installation data (/mnt/etc or /mnt/boot). Clean /mnt before retrying."
+		log_line "[FAIL] /mnt is not clean: refusing to proceed"
+		return 1
+	fi
 
 	if flag_enabled "$SKIP_PARTITION"; then
 		log_line "Skipping partitioning and formatting because SKIP_PARTITION=$SKIP_PARTITION"

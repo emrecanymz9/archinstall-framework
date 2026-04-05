@@ -317,6 +317,36 @@ require_root() {
 	return 1
 }
 
+preflight_checks() {
+	log_line "[PREFLIGHT] Running pre-install checks"
+	local missing_critical=()
+	local cmd
+
+	for cmd in pacstrap arch-chroot lsblk parted genfstab; do
+		command -v "$cmd" >/dev/null 2>&1 || missing_critical+=("$cmd")
+	done
+
+	if [[ ${#missing_critical[@]} -gt 0 ]]; then
+		print_install_error "Preflight check failed: required commands not found: ${missing_critical[*]}"
+		log_line "[PREFLIGHT] FAIL — missing: ${missing_critical[*]}"
+		return 1
+	fi
+
+	if ! ping -c 1 -W 3 archlinux.org >/dev/null 2>&1; then
+		log_line "[PREFLIGHT] WARNING: no internet connectivity detected"
+		print_install_error "Preflight warning: no internet connectivity. Package installation may fail."
+	fi
+
+	if mountpoint -q /mnt 2>/dev/null; then
+		print_install_error "Preflight check failed: /mnt is already mounted. Clean up before starting the installation."
+		log_line "[PREFLIGHT] FAIL — /mnt is already mounted"
+		return 1
+	fi
+
+	log_line "[PREFLIGHT] All checks passed"
+	return 0
+}
+
 require_commands() {
 	local cmd
 	local missing=()
@@ -430,6 +460,14 @@ print_install_error() {
 	printf '[!] %s\n' "$1" >&2
 }
 
+error_exit() {
+	local message=${1:-"Fatal error"}
+
+	print_install_error "$message"
+	log_line "[FATAL] $message"
+	exit 1
+}
+
 run_logged_command() {
 	log_line "Command: $(render_command "$@")"
 
@@ -462,8 +500,15 @@ cleanup_mounts() {
 		log_line "[DEBUG] Killing processes using /mnt before unmount"
 		fuser -km /mnt >> "$ARCHINSTALL_LOG" 2>&1 || true
 		cleanup_chroot_api_mounts
+		if ! umount -R /mnt >> "$ARCHINSTALL_LOG" 2>&1; then
+			log_line "[WARN] umount -R /mnt failed; attempting lazy unmount"
+			if ! umount -l -R /mnt >> "$ARCHINSTALL_LOG" 2>&1; then
+				log_line "[FAIL] Could not unmount /mnt after fuser kill and lazy fallback"
+				print_install_error "Failed to unmount /mnt. Resolve manually before retrying the installation."
+				return 1
+			fi
+		fi
 	fi
-	umount -l -R /mnt >> "$ARCHINSTALL_LOG" 2>&1 || true
 	if declare -F close_luks_root_device >/dev/null 2>&1; then
 		close_luks_root_device "$(get_state "LUKS_MAPPER_NAME" 2>/dev/null || printf 'cryptroot')" >> "$ARCHINSTALL_LOG" 2>&1 || true
 	fi
@@ -1326,7 +1371,7 @@ run_install() {
 	local bootloader=""
 	local environment_vendor="baremetal"
 	local gpu_vendor="generic"
-	local install_scenario="wipe"
+	local install_scenario=""
 	local format_root="true"
 	local format_efi="true"
 	local desktop_profile=""
@@ -1351,6 +1396,7 @@ run_install() {
 	fi
 
 	require_commands || return 1
+	preflight_checks || return 1
 
 	disk="$(get_state "DISK" 2>/dev/null || true)"
 	boot_mode="$(get_state "BOOT_MODE" 2>/dev/null || true)"
@@ -1361,7 +1407,18 @@ run_install() {
 	include_vscode="$(get_state "INCLUDE_VSCODE" 2>/dev/null || printf 'false')"
 	custom_tools="$(get_state "CUSTOM_TOOLS" 2>/dev/null || printf '')"
 	secure_boot_mode="$(get_state "SECURE_BOOT_MODE" 2>/dev/null || printf 'disabled')"
-	install_scenario="$(get_state "INSTALL_SCENARIO" 2>/dev/null || printf 'wipe')"
+	install_scenario="$(get_state "INSTALL_SCENARIO" 2>/dev/null || true)"
+	if [[ -z $install_scenario ]]; then
+		print_install_error "INSTALL_SCENARIO is not set. Complete the Partition step before starting the installation."
+		return 1
+	fi
+	case $install_scenario in
+		wipe|dual-boot|free-space|manual) ;;
+		*)
+			print_install_error "Invalid INSTALL_SCENARIO: '$install_scenario'. Expected: wipe, dual-boot, free-space, or manual."
+			return 1
+			;;
+	esac
 	bootloader="$(normalize_bootloader "$(get_state "BOOTLOADER" 2>/dev/null || printf '')" "$(get_state "BOOT_MODE" 2>/dev/null || printf 'bios')")"
 	format_root="$(get_state "FORMAT_ROOT" 2>/dev/null || printf 'true')"
 	format_efi="$(get_state "FORMAT_EFI" 2>/dev/null || printf 'true')"
