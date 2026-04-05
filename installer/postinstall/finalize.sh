@@ -77,16 +77,15 @@ set_account_password() {
 		return 0
 	fi
 
-		: > "$stderr_log"
-		passwd -d "$account_name" 2>"$stderr_log"
-	passwd -d "$account_name"
+	: > "$stderr_log"
+	passwd -d "$account_name" 2>"$stderr_log"
 	status=$?
-		if [[ -s $stderr_log ]]; then
-			while IFS= read -r line; do
-				echo "[DEBUG] passwd stderr ($account_name): $line"
-			done < "$stderr_log"
-		fi
-		rm -f "$stderr_log"
+	if [[ -s $stderr_log ]]; then
+		while IFS= read -r line; do
+			echo "[DEBUG] passwd stderr ($account_name): $line"
+		done < "$stderr_log"
+	fi
+	rm -f "$stderr_log"
 	echo "[DEBUG] passwd -d exit code for $account_name: $status"
 	if [[ $status -ne 0 ]]; then
 		echo "[FAIL] passwd -d failed for account: $account_name"
@@ -96,33 +95,32 @@ set_account_password() {
 	return 0
 }
 
+log_chroot_step "Ensuring password packages are installed"
+if ! install_packages_if_missing shadow pambase; then
+	echo "[FAIL] Could not install required password packages: shadow pambase"
+	exit 1
+fi
 
-	log_chroot_step "Ensuring password packages are installed"
-	if ! install_packages_if_missing shadow pambase; then
-		echo "[FAIL] Could not install required password packages: shadow pambase"
-		exit 1
+if command -v getent >/dev/null 2>&1; then
+	id shadow >/dev/null 2>&1 || true
+	if ! getent group shadow >/dev/null 2>&1; then
+		echo "[WARN] group 'shadow' does not exist; creating it"
+		if ! groupadd -r shadow; then
+			echo "[FAIL] Could not create required group: shadow"
+			exit 1
+		fi
 	fi
 fi
 
-	if command -v getent >/dev/null 2>&1; then
-		id shadow >/dev/null 2>&1 || true
-		if ! getent group shadow >/dev/null 2>&1; then
-			echo "[WARN] group 'shadow' does not exist; creating it"
-			if ! groupadd -r shadow; then
-				echo "[FAIL] Could not create required group: shadow"
-				exit 1
-			fi
-		fi
-	fi
 echo "[DEBUG] Validating /etc/shadow before password operations"
 if [[ ! -f /etc/shadow ]]; then
 	echo "[FAIL] /etc/shadow is missing inside the target chroot"
 	exit 1
-	echo "[DEBUG] id shadow output:"
-	id shadow 2>&1 || true
-	echo "[DEBUG] ls -l /etc/shadow output before normalization:"
-	ls -l /etc/shadow 2>&1 || true
 fi
+echo "[DEBUG] id shadow output:"
+id shadow 2>&1 || true
+echo "[DEBUG] ls -l /etc/shadow output before normalization:"
+ls -l /etc/shadow 2>&1 || true
 if ! chown root:shadow /etc/shadow; then
 	echo "[FAIL] Could not set owner root:shadow on /etc/shadow"
 	exit 1
