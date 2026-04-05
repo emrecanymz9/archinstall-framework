@@ -321,6 +321,7 @@ preflight_checks() {
 	log_line "[PREFLIGHT] Running pre-install checks"
 	local missing_critical=()
 	local cmd
+	local mnt_contents=""
 
 	for cmd in pacstrap arch-chroot lsblk parted genfstab; do
 		command -v "$cmd" >/dev/null 2>&1 || missing_critical+=("$cmd")
@@ -341,6 +342,15 @@ preflight_checks() {
 		print_install_error "Preflight check failed: /mnt is already mounted. Clean up before starting the installation."
 		log_line "[PREFLIGHT] FAIL — /mnt is already mounted"
 		return 1
+	fi
+
+	if [[ -d /mnt ]]; then
+		mnt_contents="$(ls -A /mnt 2>/dev/null || true)"
+		if [[ -n $mnt_contents ]]; then
+			print_install_error "/mnt is not empty. Previous installation residue detected. Please unmount or clean /mnt before continuing."
+			log_line "[PREFLIGHT] FAIL — /mnt is not empty before install"
+			return 1
+		fi
 	fi
 
 	log_line "[PREFLIGHT] All checks passed"

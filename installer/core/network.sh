@@ -16,11 +16,12 @@ initialize_pacman_environment() {
 		cp /etc/pacman.d/mirrorlist "$mirrorlist_backup" 2>/dev/null || true
 	fi
 	if command -v reflector >/dev/null 2>&1; then
-		if ! run_optional_step_with_retry "Refreshing pacman mirrors" 3 timeout 60 reflector --latest 10 --protocol https --connection-timeout 5 --download-timeout 15 --sort rate --save /etc/pacman.d/mirrorlist; then
+		if ! run_optional_step_with_retry "Refreshing pacman mirrors" 3 timeout 60 reflector --latest 10 --protocol https --connection-timeout 5 --download-timeout 15 --timeout 15 --sort rate --save /etc/pacman.d/mirrorlist; then
 			if [[ -f $mirrorlist_backup ]]; then
 				cp "$mirrorlist_backup" /etc/pacman.d/mirrorlist 2>/dev/null || true
 			fi
-			log_line "[WARN] Reflector mirror refresh failed; continuing with the existing mirrorlist"
+			print_install_error "Reflector mirror refresh failed. Continuing with the existing mirrorlist backup."
+			log_line "[WARN] Reflector mirror refresh failed; falling back to the existing mirrorlist"
 		fi
 	fi
 	run_pacman_step_with_retry "Refreshing pacman package databases" 3 -Syy
