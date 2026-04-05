@@ -26,8 +26,8 @@ safe_source_module() {
 	return 1
 }
 
-# shellcheck source=installer/ui.sh
-source "$SCRIPT_DIR/ui.sh"
+# shellcheck source=installer/ui/dialog.sh
+source "$SCRIPT_DIR/ui/dialog.sh"
 # shellcheck source=installer/state.sh
 source "$SCRIPT_DIR/state.sh"
 # shellcheck source=installer/core/hooks.sh
@@ -36,12 +36,12 @@ safe_source_module "$SCRIPT_DIR/core/hooks.sh" || true
 safe_source_module "$SCRIPT_DIR/core/module-registry.sh" || true
 # shellcheck source=installer/core/plugin-loader.sh
 safe_source_module "$SCRIPT_DIR/core/plugin-loader.sh" || true
-# shellcheck source=installer/modules/config.sh
-safe_source_module "$SCRIPT_DIR/modules/config.sh" || true
-# shellcheck source=installer/modules/system.sh
-safe_source_module "$SCRIPT_DIR/modules/system.sh" || true
-# shellcheck source=installer/modules/hardware.sh
-safe_source_module "$SCRIPT_DIR/modules/hardware.sh" || true
+# shellcheck source=installer/core/config.sh
+safe_source_module "$SCRIPT_DIR/core/config.sh" || true
+# shellcheck source=installer/core/system.sh
+safe_source_module "$SCRIPT_DIR/core/system.sh" || true
+# shellcheck source=installer/core/hardware.sh
+safe_source_module "$SCRIPT_DIR/core/hardware.sh" || true
 # shellcheck source=installer/executor.sh
 safe_source_module "$SCRIPT_DIR/executor.sh" || {
 	printf 'failed to source %s/executor.sh\n' "$SCRIPT_DIR" >&2
@@ -49,20 +49,22 @@ safe_source_module "$SCRIPT_DIR/executor.sh" || {
 }
 # shellcheck source=installer/disk.sh
 safe_source_module "$SCRIPT_DIR/disk.sh" || true
-# shellcheck source=installer/modules/system/network.sh
-safe_source_module "$SCRIPT_DIR/modules/system/network.sh" || true
-# shellcheck source=installer/modules/desktop.sh
-safe_source_module "$SCRIPT_DIR/modules/desktop.sh" || true
+# shellcheck source=installer/core/network.sh
+safe_source_module "$SCRIPT_DIR/core/network.sh" || true
+# shellcheck source=installer/core/desktop.sh
+safe_source_module "$SCRIPT_DIR/core/desktop.sh" || true
 # shellcheck source=installer/features/secureboot.sh
 safe_source_module "$SCRIPT_DIR/features/secureboot.sh" || true
-# shellcheck source=installer/modules/profiles.sh
-safe_source_module "$SCRIPT_DIR/modules/profiles.sh" || true
-# shellcheck source=installer/modules/profile.sh
-safe_source_module "$SCRIPT_DIR/modules/profile.sh" || true
-# shellcheck source=installer/modules/packages.sh
-safe_source_module "$SCRIPT_DIR/modules/packages.sh" || true
-# shellcheck source=installer/modules/luks.sh
-safe_source_module "$SCRIPT_DIR/modules/luks.sh" || true
+# shellcheck source=installer/core/profiles.sh
+safe_source_module "$SCRIPT_DIR/core/profiles.sh" || true
+# shellcheck source=installer/validation/profile.sh
+safe_source_module "$SCRIPT_DIR/validation/profile.sh" || true
+# shellcheck source=installer/validation/inputs.sh
+safe_source_module "$SCRIPT_DIR/validation/inputs.sh" || true
+# shellcheck source=installer/core/packages.sh
+safe_source_module "$SCRIPT_DIR/core/packages.sh" || true
+# shellcheck source=installer/core/luks.sh
+safe_source_module "$SCRIPT_DIR/core/luks.sh" || true
 # shellcheck source=installer/features/snapshots.sh
 safe_source_module "$SCRIPT_DIR/features/snapshots.sh" || true
 
@@ -993,223 +995,6 @@ select_zram_preference() {
 			return 0
 			;;
 	esac
-}
-
-prompt_required_input() {
-	local title=${1:?title is required}
-	local prompt=${2:?prompt is required}
-	local initial_value=${3-}
-	local value=""
-	local status=0
-	local dialog_body=""
-	local validation_error=""
-
-	while true; do
-		dialog_body="$prompt"
-		if [[ -n $validation_error ]]; then
-			dialog_body+="\n\nError: $validation_error"
-		fi
-
-		input_box "$title" "$dialog_body" "$initial_value" 12 76
-		value="$DIALOG_RESULT"
-		status=$DIALOG_STATUS
-		case $status in
-			0)
-				if [[ -n $value ]]; then
-					printf '%s\n' "$value"
-					return 0
-				fi
-				validation_error="A value is required."
-				;;
-			1|255)
-				return 1
-				;;
-			*)
-				return 1
-				;;
-		esac
-		initial_value="$value"
-	done
-}
-
-prompt_username() {
-	local title=${1:-"Username"}
-	local initial_value=${2:-"archuser"}
-	local value=""
-	local status=0
-	local dialog_body=""
-	local validation_error=""
-
-	while true; do
-		dialog_body="Create the primary user account.\n\nConstraints:\n- must start with a lowercase letter or underscore\n- allowed: lowercase letters, digits, underscores, hyphens\n- maximum length: 32 characters\n\nExample: archuser"
-		if [[ -n $validation_error ]]; then
-			dialog_body+="\n\nError: $validation_error"
-		fi
-
-		input_box "$title" \
-			"$dialog_body" \
-			"$initial_value" 14 76
-		value="$DIALOG_RESULT"
-		status=$DIALOG_STATUS
-
-		case $status in
-			1|255)
-				return 1
-				;;
-			0)
-				;;
-			*)
-				return 1
-				;;
-		esac
-
-		if [[ -z $value ]]; then
-			validation_error="Username cannot be empty."
-			initial_value="$value"
-			continue
-		fi
-
-		if [[ ! $value =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
-			validation_error="Invalid username: '$value'"
-			initial_value="$value"
-			continue
-		fi
-
-		printf '%s\n' "$value"
-		return 0
-	done
-}
-
-password_mode_for_value() {
-	case ${2:-true}:${1-} in
-		false:)
-			printf 'unset\n'
-			;;
-		true:)
-			printf 'empty\n'
-			;;
-		*)
-			printf 'set\n'
-			;;
-	esac
-}
-
-password_mode_label() {
-	case ${1:-unset} in
-		set)
-			printf 'set\n'
-			;;
-		empty)
-			printf 'empty (password cleared)\n'
-			;;
-		*)
-			printf 'not configured\n'
-			;;
-	esac
-}
-
-prompt_password() {
-	local title=${1:?title is required}
-	local allow_empty=${2:-true}
-	local first=""
-	local second=""
-	local status=0
-	local validation_error=""
-	local prompt_text=""
-
-	while true; do
-		prompt_text="Enter the password."
-		if [[ $allow_empty == "true" ]]; then
-			prompt_text+=" Leave blank to skip password setup."
-		else
-			prompt_text+=" A password is required for this setting."
-		fi
-		prompt_text+="\n\nConstraints:\n- entry is non-interactive\n- non-empty passwords require confirmation"
-		if [[ $allow_empty == "true" ]]; then
-			prompt_text+="\n- blank input clears the password"
-		fi
-		prompt_text+="\n- non-empty values must be 8 to 72 characters"
-		prompt_text+="\n- ':' is not allowed"
-		if [[ -n $validation_error ]]; then
-			prompt_text+="\n\nError: $validation_error"
-		fi
-
-		password_box "$title" "$prompt_text" 15 76
-		first="$DIALOG_RESULT"
-		status=$DIALOG_STATUS
-		case $status in
-			0)
-				;;
-			1|255)
-				return 1
-				;;
-			*)
-				return 1
-				;;
-		esac
-
-		if [[ -z $first ]]; then
-			if [[ $allow_empty == "true" ]]; then
-				printf ''
-				return 0
-			fi
-			validation_error="A password is required."
-			continue
-		fi
-
-		if [[ $first == *:* ]]; then
-			validation_error="Passwords cannot contain ':'."
-			continue
-		fi
-
-		if (( ${#first} < 8 )); then
-			validation_error="Password must be at least 8 characters long."
-			continue
-		fi
-
-		if (( ${#first} > 72 )); then
-			validation_error="Password must be 72 characters or fewer."
-			continue
-		fi
-
-		password_box "$title" "Re-enter the password to confirm." 12 76
-		second="$DIALOG_RESULT"
-		status=$DIALOG_STATUS
-		case $status in
-			0)
-				;;
-			1|255)
-				return 1
-				;;
-			*)
-				return 1
-				;;
-		esac
-
-		if [[ $first != "$second" ]]; then
-			validation_error="Passwords did not match. Please try again."
-			continue
-		fi
-
-		printf '%s\n' "$first"
-		return 0
-	done
-}
-
-prompt_password_or_keep() {
-	local title=${1:?title is required}
-	local current_password=${2-}
-	local current_mode=${3:-unset}
-	local allow_empty=${4:-true}
-
-	if [[ $current_mode != "unset" ]]; then
-		if confirm "$title" "A password configuration is already loaded for this session.\n\nCurrent state: $(password_mode_label "$current_mode")\n\nKeep it?" 12 72; then
-			printf '%s\n' "$current_password"
-			return 0
-		fi
-	fi
-
-	prompt_password "$title" "$allow_empty"
 }
 
 configure_partition_stage() {

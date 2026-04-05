@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
-if [[ -r "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/../modules/gpu/detect.sh" ]]; then
-	# shellcheck source=installer/modules/gpu/detect.sh
-	source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/../modules/gpu/detect.sh"
+if [[ -r "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/../core/gpu/detect.sh" ]]; then
+	# shellcheck source=installer/core/gpu/detect.sh
+	source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/../core/gpu/detect.sh"
 fi
 
 gpu_driver_packages() {

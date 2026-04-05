@@ -3,12 +3,12 @@
 HARDWARE_MODULE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ -r "$HARDWARE_MODULE_DIR/detect.sh" ]]; then
-	# shellcheck source=installer/modules/detect.sh
+	# shellcheck source=installer/core/detect.sh
 	source "$HARDWARE_MODULE_DIR/detect.sh" >/dev/null 2>&1
 fi
 
 if [[ -r "$HARDWARE_MODULE_DIR/gpu/detect.sh" ]]; then
-	# shellcheck source=installer/modules/gpu/detect.sh
+	# shellcheck source=installer/core/gpu/detect.sh
 	source "$HARDWARE_MODULE_DIR/gpu/detect.sh" >/dev/null 2>&1
 fi
 

@@ -14,22 +14,35 @@ Completed in this pass:
 - removed runtime `unknown` disk output in favor of `hdd|ssd|nvme|vm`
 - separated disk target selection from partition strategy selection
 - replaced the old `disk/config/install/state` menu with a staged installer flow
-- removed dead system wrapper modules that were no longer part of the active architecture
+- removed the ambiguous `modules/` directory in favor of `core`, `ui`, `validation`, `boot`, and `postinstall`
 - corrected target log export to `/var/log/archinstall.log` and `/home/$USER/install.log`
-- refreshed the architecture, features, and state docs
+- hardened password application, shadow handling, and chroot environment injection
+- added greetd session wrapper, validation, and failure logging
+- refreshed the architecture, features, state, and chroot docs
 
 ## Near-Term Roadmap
 
 1. Validate the full installer on a real Arch ISO boot, including KDE login and display-manager startup.
 2. Add focused shell validation in CI or a reproducible Linux test environment.
-3. Continue pruning unused modules and tighten plugin extension points around the new staged flow.
+3. Tighten plugin extension points around the new staged flow and directory layout.
 4. Expand desktop support only after the current KDE path is stable end to end.
 
 ## Remaining Issues
 
 - Full Bash runtime validation was not completed in this workspace because the current host is Windows, not an Arch ISO shell.
 - The installer still depends on real hardware or VM testing for disk operations, pacstrap, and chroot behavior.
-- Bootloader selection remains deterministic by boot mode; there is not yet a dedicated bootloader screen in the staged UI.
+- Disk shrink and free-space reuse paths still need more runtime validation than syntax checks can provide.
+- Limine Secure Boot remains experimental and should be treated as an advanced path.
+
+## Testing Expectations
+
+Minimum validation on an Arch ISO VM:
+
+1. verify the system boots without manual intervention
+2. verify LUKS unlock works when enabled
+3. verify the graphical login appears when `greetd` or `sddm` is selected
+4. verify root and user login work on first boot
+5. verify `/var/log/greetd-boot.log` is created when greetd fails
 
 ## Exit Criteria For This Phase
 

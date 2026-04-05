@@ -2,20 +2,20 @@
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# shellcheck source=installer/ui.sh
-source "$SCRIPT_DIR/ui.sh"
+# shellcheck source=installer/ui/dialog.sh
+source "$SCRIPT_DIR/ui/dialog.sh"
 # shellcheck source=installer/state.sh
 source "$SCRIPT_DIR/state.sh" >/dev/null 2>&1
-# shellcheck source=installer/modules/system.sh
-source "$SCRIPT_DIR/modules/system.sh" >/dev/null 2>&1
-# shellcheck source=installer/modules/detect.sh
-source "$SCRIPT_DIR/modules/detect.sh" >/dev/null 2>&1
-# shellcheck source=installer/modules/disk/layout.sh
-source "$SCRIPT_DIR/modules/disk/layout.sh" >/dev/null 2>&1
-# shellcheck source=installer/modules/disk/space.sh
-source "$SCRIPT_DIR/modules/disk/space.sh" >/dev/null 2>&1
-# shellcheck source=installer/modules/disk/manager.sh
-source "$SCRIPT_DIR/modules/disk/manager.sh" >/dev/null 2>&1
+# shellcheck source=installer/core/system.sh
+source "$SCRIPT_DIR/core/system.sh" >/dev/null 2>&1
+# shellcheck source=installer/core/detect.sh
+source "$SCRIPT_DIR/core/detect.sh" >/dev/null 2>&1
+# shellcheck source=installer/core/disk/layout.sh
+source "$SCRIPT_DIR/core/disk/layout.sh" >/dev/null 2>&1
+# shellcheck source=installer/core/disk/space.sh
+source "$SCRIPT_DIR/core/disk/space.sh" >/dev/null 2>&1
+# shellcheck source=installer/core/disk/manager.sh
+source "$SCRIPT_DIR/core/disk/manager.sh" >/dev/null 2>&1
 
 get_archiso_boot_disk() {
 	local boot_source

@@ -37,8 +37,8 @@ safe_source_module() {
 	return 1
 }
 
-# shellcheck source=installer/ui.sh
-source "$SCRIPT_DIR/ui.sh"
+# shellcheck source=installer/ui/dialog.sh
+source "$SCRIPT_DIR/ui/dialog.sh"
 # shellcheck source=installer/state.sh
 source "$SCRIPT_DIR/state.sh"
 # shellcheck source=installer/core/hooks.sh
@@ -47,32 +47,32 @@ safe_source_module "$SCRIPT_DIR/core/hooks.sh" || true
 safe_source_module "$SCRIPT_DIR/core/module-registry.sh" || true
 # shellcheck source=installer/core/plugin-loader.sh
 safe_source_module "$SCRIPT_DIR/core/plugin-loader.sh" || true
-# shellcheck source=installer/modules/config.sh
-safe_source_module "$SCRIPT_DIR/modules/config.sh" || true
-# shellcheck source=installer/modules/system.sh
-safe_source_module "$SCRIPT_DIR/modules/system.sh" || true
-# shellcheck source=installer/modules/bootloader.sh
-safe_source_module "$SCRIPT_DIR/modules/bootloader.sh" || true
-# shellcheck source=installer/modules/hardware.sh
-safe_source_module "$SCRIPT_DIR/modules/hardware.sh" || true
-# shellcheck source=installer/modules/desktop.sh
-safe_source_module "$SCRIPT_DIR/modules/desktop.sh" || true
-# shellcheck source=installer/modules/display/manager.sh
-safe_source_module "$SCRIPT_DIR/modules/display/manager.sh" || true
+# shellcheck source=installer/core/config.sh
+safe_source_module "$SCRIPT_DIR/core/config.sh" || true
+# shellcheck source=installer/core/system.sh
+safe_source_module "$SCRIPT_DIR/core/system.sh" || true
+# shellcheck source=installer/boot/loader.sh
+safe_source_module "$SCRIPT_DIR/boot/loader.sh" || true
+# shellcheck source=installer/core/hardware.sh
+safe_source_module "$SCRIPT_DIR/core/hardware.sh" || true
+# shellcheck source=installer/core/desktop.sh
+safe_source_module "$SCRIPT_DIR/core/desktop.sh" || true
+# shellcheck source=installer/postinstall/display-manager.sh
+safe_source_module "$SCRIPT_DIR/postinstall/display-manager.sh" || true
 # shellcheck source=installer/features/secureboot.sh
 safe_source_module "$SCRIPT_DIR/features/secureboot.sh" || true
 # shellcheck source=installer/features/display.sh
 safe_source_module "$SCRIPT_DIR/features/display.sh" || true
 # shellcheck source=installer/features/gpu.sh
 safe_source_module "$SCRIPT_DIR/features/gpu.sh" || true
-# shellcheck source=installer/modules/profiles.sh
-safe_source_module "$SCRIPT_DIR/modules/profiles.sh" || true
-# shellcheck source=installer/modules/system/network.sh
-safe_source_module "$SCRIPT_DIR/modules/system/network.sh" || true
-# shellcheck source=installer/modules/packages.sh
-safe_source_module "$SCRIPT_DIR/modules/packages.sh" || true
-# shellcheck source=installer/modules/luks.sh
-safe_source_module "$SCRIPT_DIR/modules/luks.sh" || true
+# shellcheck source=installer/core/profiles.sh
+safe_source_module "$SCRIPT_DIR/core/profiles.sh" || true
+# shellcheck source=installer/core/network.sh
+safe_source_module "$SCRIPT_DIR/core/network.sh" || true
+# shellcheck source=installer/core/packages.sh
+safe_source_module "$SCRIPT_DIR/core/packages.sh" || true
+# shellcheck source=installer/core/luks.sh
+safe_source_module "$SCRIPT_DIR/core/luks.sh" || true
 # shellcheck source=installer/features/snapshots.sh
 safe_source_module "$SCRIPT_DIR/features/snapshots.sh" || true
 # shellcheck source=installer/features/steam.sh
@@ -85,14 +85,14 @@ safe_source_module "$SCRIPT_DIR/postinstall/services.sh" || true
 safe_source_module "$SCRIPT_DIR/postinstall/logs.sh" || true
 # shellcheck source=installer/postinstall/cleanup.sh
 safe_source_module "$SCRIPT_DIR/postinstall/cleanup.sh" || true
-# shellcheck source=installer/modules/disk/layout.sh
-safe_source_module "$SCRIPT_DIR/modules/disk/layout.sh" || true
-# shellcheck source=installer/modules/disk/space.sh
-safe_source_module "$SCRIPT_DIR/modules/disk/space.sh" || true
-# shellcheck source=installer/modules/system/network.sh
-safe_source_module "$SCRIPT_DIR/modules/system/network.sh" || true
-# shellcheck source=installer/modules/gpu/driver.sh
-safe_source_module "$SCRIPT_DIR/modules/gpu/driver.sh" || true
+# shellcheck source=installer/core/disk/layout.sh
+safe_source_module "$SCRIPT_DIR/core/disk/layout.sh" || true
+# shellcheck source=installer/core/disk/space.sh
+safe_source_module "$SCRIPT_DIR/core/disk/space.sh" || true
+# shellcheck source=installer/core/network.sh
+safe_source_module "$SCRIPT_DIR/core/network.sh" || true
+# shellcheck source=installer/core/gpu/driver.sh
+safe_source_module "$SCRIPT_DIR/core/gpu/driver.sh" || true
 # shellcheck source=installer/core/pipeline.sh
 safe_source_module "$SCRIPT_DIR/core/pipeline.sh" || true
 

@@ -50,6 +50,37 @@ cat > /etc/hosts <<'EOT'
 EOT
 sed -i "s/TARGET_HOSTNAME/$TARGET_HOSTNAME/g" /etc/hosts
 
+set_account_password() {
+	local account_name=${1:?account name is required}
+	local account_password=${2-}
+	local status=0
+
+	echo "[DEBUG] Preparing password operation for account: $account_name"
+	if [[ -n $account_password ]]; then
+		echo "[DEBUG] Applying password with chpasswd for account: $account_name"
+		echo "$account_name:$account_password" | chpasswd
+		status=$?
+		echo "[DEBUG] chpasswd exit code for $account_name: $status"
+		if [[ $status -ne 0 ]]; then
+			echo "[FAIL] chpasswd failed for account: $account_name"
+			return "$status"
+		fi
+		echo "[DEBUG] Password applied successfully for account: $account_name"
+		return 0
+	fi
+
+	echo "[DEBUG] No password provided for account: $account_name; clearing password entry"
+	passwd -d "$account_name"
+	status=$?
+	echo "[DEBUG] passwd -d exit code for $account_name: $status"
+	if [[ $status -ne 0 ]]; then
+		echo "[FAIL] passwd -d failed for account: $account_name"
+		return "$status"
+	fi
+	echo "[DEBUG] Password entry cleared for account: $account_name"
+	return 0
+}
+
 log_chroot_step "Creating user accounts and setting passwords"
 if ! id -u "$TARGET_USERNAME" >/dev/null 2>&1; then
 	useradd -m -G wheel -s /bin/bash "$TARGET_USERNAME"
@@ -58,24 +89,30 @@ if ! id -u "$TARGET_USERNAME" >/dev/null 2>&1; then
 	echo "[FAIL] useradd did not create user '$TARGET_USERNAME'"
 	exit 1
 fi
-if [[ -n $TARGET_USER_PASSWORD ]]; then
-	if ! echo "$TARGET_USERNAME:$TARGET_USER_PASSWORD" | chpasswd; then
-		echo "[FAIL] chpasswd failed for user '$TARGET_USERNAME'"
-		exit 1
-	fi
-else
-	passwd -d "$TARGET_USERNAME"
-	echo "[INFO] No password set for $TARGET_USERNAME; password entry cleared"
+
+echo "[DEBUG] Validating /etc/shadow before password operations"
+if [[ ! -f /etc/shadow ]]; then
+	echo "[FAIL] /etc/shadow is missing inside the target chroot"
+	exit 1
 fi
-if [[ -n $TARGET_ROOT_PASSWORD ]]; then
-	if ! echo "root:$TARGET_ROOT_PASSWORD" | chpasswd; then
-		echo "[FAIL] chpasswd failed for root"
-		exit 1
-	fi
-else
-	passwd -d root
-	echo "[INFO] No password set for root; password entry cleared"
+if ! chown root:shadow /etc/shadow; then
+	echo "[FAIL] Could not set owner root:shadow on /etc/shadow"
+	exit 1
 fi
+if ! chmod 640 /etc/shadow; then
+	echo "[FAIL] Could not set mode 640 on /etc/shadow"
+	exit 1
+fi
+echo "[DEBUG] /etc/shadow permissions normalized"
+
+if ! id -u root >/dev/null 2>&1; then
+	echo "[FAIL] root account is missing inside the target chroot"
+	exit 1
+fi
+
+echo "[DEBUG] Password execution order: user creation -> root password -> user password"
+set_account_password root "$TARGET_ROOT_PASSWORD" || exit 1
+set_account_password "$TARGET_USERNAME" "$TARGET_USER_PASSWORD" || exit 1
 
 log_chroot_step "Configuring sudo permissions"
 if grep -q '^# %wheel ALL=(ALL:ALL) ALL' /etc/sudoers; then

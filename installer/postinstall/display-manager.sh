@@ -32,10 +32,10 @@ EOT
 plasma_session_command() {
 	case ${1:-wayland} in
 		x11)
-			printf 'startplasma-x11\n'
+			printf '/usr/local/bin/archinstall-start-session x11\n'
 			;;
 		*)
-			printf 'startplasma-wayland\n'
+			printf '/usr/local/bin/archinstall-start-session wayland\n'
 			;;
 	esac
 }
@@ -46,12 +46,79 @@ build_greetd_command() {
 
 	case $greeter in
 		qtgreet)
-			printf 'qtgreet\n'
+			printf '/usr/bin/qtgreet\n'
 			;;
 		*)
-			printf 'tuigreet --time --cmd %s\n' "$session_command"
+			printf '/usr/bin/tuigreet --time --cmd %s\n' "$session_command"
 			;;
 	esac
+}
+
+write_session_launcher() {
+	install -d -m 0755 /usr/local/bin
+	cat > /usr/local/bin/archinstall-start-session <<'EOT'
+#!/usr/bin/env bash
+set -euo pipefail
+
+case ${1:-wayland} in
+	x11)
+		exec dbus-run-session startplasma-x11
+		;;
+	wayland|*)
+		exec dbus-run-session startplasma-wayland
+		;;
+esac
+EOT
+	chmod 0755 /usr/local/bin/archinstall-start-session
+}
+
+write_greetd_failure_logger() {
+	install -d -m 0755 /etc/systemd/system
+	cat > /etc/systemd/system/archinstall-greetd-failure.service <<'EOT'
+[Unit]
+Description=ArchInstall greetd failure logger
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -lc 'printf "[%s] greetd failed to start\n" "$(date "+%F %T")" >> /var/log/greetd-boot.log; systemctl status greetd --no-pager >> /var/log/greetd-boot.log 2>&1; journalctl -u greetd -b --no-pager >> /var/log/greetd-boot.log 2>&1 || true'
+EOT
+
+	install -d -m 0755 /etc/systemd/system/greetd.service.d
+	cat > /etc/systemd/system/greetd.service.d/archinstall.conf <<'EOT'
+[Unit]
+OnFailure=archinstall-greetd-failure.service
+
+[Service]
+ExecStartPre=/bin/bash -lc 'test -f /etc/greetd/config.toml'
+EOT
+}
+
+validate_greetd_setup() {
+	local greeter=${1:-tuigreet}
+
+	if [[ ! -f /etc/greetd/config.toml ]]; then
+		echo "[FAIL] /etc/greetd/config.toml is missing"
+		return 1
+	fi
+	case $greeter in
+		qtgreet)
+			if [[ ! -x /usr/bin/qtgreet ]]; then
+				echo "[FAIL] /usr/bin/qtgreet is missing"
+				return 1
+			fi
+			;;
+		*)
+			if [[ ! -x /usr/bin/tuigreet ]]; then
+				echo "[FAIL] /usr/bin/tuigreet is missing"
+				return 1
+			fi
+			;;
+	esac
+	if [[ ! -x /usr/local/bin/archinstall-start-session ]]; then
+		echo "[FAIL] /usr/local/bin/archinstall-start-session is missing"
+		return 1
+	fi
+	return 0
 }
 
 install_greetd() {
@@ -66,6 +133,8 @@ install_greetd() {
 		install_packages_if_missing greetd greetd-tuigreet || true
 	fi
 	install -d -m 0755 /etc/greetd
+	write_session_launcher
+	write_greetd_failure_logger
 	cat > /etc/greetd/config.toml <<EOT
 [terminal]
 vt = 1
@@ -74,6 +143,11 @@ vt = 1
 command = "$(build_greetd_command "$greeter" "$session_command")"
 user = "greeter"
 EOT
+	if ! validate_greetd_setup "$greeter"; then
+		echo "[FAIL] greetd validation failed after configuration"
+		exit 1
+	fi
+	echo "[DEBUG] greetd config written to /etc/greetd/config.toml"
 	rm -f /etc/sddm.conf.d/session.conf 2>/dev/null || true
 	write_display_manager_fallback_notice "$session_command"
 }

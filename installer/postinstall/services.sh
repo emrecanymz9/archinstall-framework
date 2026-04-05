@@ -12,6 +12,18 @@ enable_service_if_present() {
 	fi
 }
 
+ensure_greetd_ready() {
+	if [[ ! -f /etc/greetd/config.toml ]]; then
+		echo "[FAIL] greetd selected but /etc/greetd/config.toml is missing"
+		return 1
+	fi
+	if ! grep -q 'startplasma-wayland\|startplasma-x11\|archinstall-start-session' /etc/greetd/config.toml; then
+		echo "[FAIL] greetd config does not contain a valid Plasma session command"
+		return 1
+	fi
+	return 0
+}
+
 configure_vm_services() {
 	case $TARGET_ENVIRONMENT_VENDOR in
 		vmware)
@@ -60,7 +72,17 @@ NMCONFIGEOF
 		greetd)
 			systemctl disable sddm.service 2>/dev/null || true
 			systemctl disable display-manager.service 2>/dev/null || true
-			enable_service_if_present greetd.service
+			ensure_greetd_ready || exit 1
+			echo "[DEBUG] Enabling greetd.service"
+			if ! systemctl enable greetd.service; then
+				echo "[FAIL] systemctl enable greetd.service failed"
+				exit 1
+			fi
+			if ! systemctl is-enabled greetd.service >/dev/null 2>&1; then
+				echo "[FAIL] greetd.service is not enabled after configuration"
+				exit 1
+			fi
+			echo "[DEBUG] greetd.service enabled successfully"
 			;;
 		sddm)
 			systemctl disable greetd.service 2>/dev/null || true

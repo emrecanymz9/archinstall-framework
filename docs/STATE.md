@@ -10,6 +10,7 @@ Every install decision must exist in persisted state before the pipeline starts.
 
 - `BOOT_MODE`
 - `BOOTLOADER`
+- `BOOT_EXPERIENCE_LEVEL`
 - `CURRENT_SECURE_BOOT_STATE`
 - `CURRENT_SECURE_BOOT_SETUP_MODE`
 - `ENVIRONMENT_VENDOR`
@@ -67,6 +68,8 @@ Every install decision must exist in persisted state before the pipeline starts.
 - Disk selection and partition strategy are separate states.
 - Guided partitioning must write `INSTALL_SCENARIO` before installation can begin.
 - Display values must remain explicit; invalid values should be rejected rather than auto-corrected during apply.
+- Bootloader selection must remain compatible with firmware mode and Secure Boot mode.
 - New code should only read and write canonical keys.
 - Chroot execution must derive runtime variables from persisted state through `/root/.install_env`; the environment file is a runtime projection, not a second source of truth.
 - Required values such as locale and username must be validated before chroot handoff.
+- Password handling state is session-scoped and must be validated before execution; chroot should only consume already-validated runtime values.

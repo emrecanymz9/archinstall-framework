@@ -38,6 +38,27 @@ executor -> writes /mnt/root/.install_env
 - source `/root/.install_env` before reading runtime variables
 - fail fast when required values are missing or invalid
 - treat sourced environment values as the only supported runtime input channel
+- apply passwords, display-manager setup, and service enablement only after the environment is loaded
+
+## Password Application
+
+Password application is a chroot-only responsibility.
+
+Current order:
+
+1. create the primary user
+2. normalize `/etc/shadow` ownership and mode
+3. set root password
+4. set user password
+
+Current implementation rules:
+
+- non-empty passwords use `chpasswd`
+- empty passwords use `passwd -d`
+- password operations log their exit codes
+- any password failure aborts the install
+
+This ordering prevents late chroot failures caused by missing users, bad shadow permissions, or password writes occurring before account creation.
 
 ## Required Pattern
 
@@ -68,6 +89,7 @@ This pattern is forbidden even when it appears to work. It couples host-side exp
 - missing validation before chroot can turn empty state values into destructive or invalid commands
 - mixing persisted state reads with ad hoc shell interpolation makes failures harder to trace
 - adding new chroot snippets without sourcing `/root/.install_env` creates inconsistent execution paths
+- running password or display-manager logic outside chroot breaks the runtime contract
 
 ## Engineering Constraint
 

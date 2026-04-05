@@ -3,7 +3,7 @@
 SYSTEM_MODULE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ -r "$SYSTEM_MODULE_DIR/detect.sh" ]]; then
-	# shellcheck source=installer/modules/detect.sh
+	# shellcheck source=installer/core/detect.sh
 	source "$SYSTEM_MODULE_DIR/detect.sh" >/dev/null 2>&1
 fi
 

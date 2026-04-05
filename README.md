@@ -116,12 +116,21 @@ The installer intentionally keeps the live ISO minimal. Heavy packages belong in
 Canonical installer layout:
 
 - `installer/core/`
-- `installer/modules/`
+- `installer/ui/`
+- `installer/validation/`
 - `installer/features/`
 - `installer/boot/`
 - `installer/postinstall/`
 
-Compatibility wrappers are no longer part of the active target architecture. New code should only use the canonical directories above.
+The old `installer/modules/` bucket was removed. New code should use the responsibility-specific directories above.
+
+Responsibility split:
+
+- `ui`: dialog and terminal interaction only
+- `validation`: input rules and state gating only
+- `core`: execution planning, runtime helpers, package resolution, and disk orchestration
+- `boot`: bootloader abstraction, capability rules, and boot-time package requirements
+- `postinstall`: chroot execution, user/password application, display-manager setup, services, and cleanup
 
 Additional documentation:
 
@@ -193,6 +202,19 @@ Repository cleanup:
 make clean
 ```
 
+## Recommended Paths
+
+Recommended installs:
+
+- UEFI: `systemd-boot` + UKI-oriented Secure Boot foundation + optional LUKS2
+- BIOS: `GRUB`
+
+Operational guidance:
+
+- choose `systemd-boot` for the simplest UEFI path and the cleanest Secure Boot workflow
+- choose `GRUB` for BIOS systems and conservative compatibility-first installs
+- choose `Limine` only when you explicitly want an advanced boot path
+
 ## Chroot Safety Rules
 
 All variables used inside chroot MUST be passed via `/root/.install_env` and sourced at runtime. Direct variable interpolation inside heredoc (for example, `arch-chroot /mnt <<EOF`) is FORBIDDEN.
@@ -253,12 +275,42 @@ Supported bootloaders:
 - `GRUB`
 - `Limine`
 
-`BOOTLOADER` is stored in installer state and defaults deterministically from boot mode:
+The installer no longer relies on a hardcoded boot matrix. Boot selection is capability-based.
 
-- `uefi` -> `systemd-boot`
-- `bios` -> `grub`
+Selection rules:
+
+- `systemd-boot`: recommended for UEFI and the preferred path for Secure Boot foundation mode
+- `GRUB`: compatible fallback for BIOS and mixed-firmware installs; Secure Boot support is available but more complex
+- `Limine`: advanced option for UEFI or BIOS; Secure Boot remains experimental/manual
+
+The UI shows recommendation tags and compatibility information instead of silently hiding alternatives.
+
+Current defaults:
+
+- UEFI: `systemd-boot`
+- BIOS: `grub`
 
 Limine support writes `/boot/limine.cfg`, reuses the shared kernel command-line builder, and supports the same root UUID, LUKS, and btrfs rootflags flow as the other bootloaders.
+
+## Password Handling
+
+System password handling is fully non-interactive.
+
+Rules:
+
+- the primary user is created first inside chroot
+- root password is applied after account creation
+- user password is applied after root password
+- non-empty passwords are applied with `chpasswd`
+- empty passwords clear the password entry with `passwd -d`
+- `/etc/shadow` ownership and mode are normalized before password application
+
+Failure protection:
+
+- password operations run only inside chroot
+- missing user creation fails the install
+- failing `chpasswd` or `passwd -d` fails the install
+- password debug information is written into the install log
 
 ## Package Set
 
@@ -289,12 +341,25 @@ Optional layers include:
 
 After pacstrap, the installer runs a structured post-install phase inside the chroot:
 
-1. `finalize.sh` applies hostname, locale, timezone, sudo, and user configuration.
-2. `services.sh` enables NetworkManager, iwd, the selected display manager, and snapper timers when needed.
-3. the selected bootloader is installed.
-4. Secure Boot setup runs when requested.
-5. host-side log export writes `/var/log/archinstall.log` and `/home/$USER/install.log` into the target.
-6. `cleanup.sh` removes installer temp files from the target.
+1. `finalize.sh` applies hostname, locale, timezone, `/etc/shadow` normalization, user creation, root password, user password, and sudo configuration.
+2. `display-manager.sh` writes greetd or SDDM configuration inside chroot.
+3. `services.sh` enables NetworkManager, iwd, the selected display manager, and snapshot timers when needed.
+4. greetd installs a failure logger that writes boot-time diagnostics to `/var/log/greetd-boot.log` when the service fails.
+5. the selected bootloader is installed.
+6. Secure Boot setup runs when requested.
+7. host-side log export writes `/var/log/archinstall.log` and `/home/$USER/install.log` into the target.
+8. `cleanup.sh` removes installer temp files from the target.
+
+## Display Manager
+
+Current graphical login behavior:
+
+- `greetd` is configured inside chroot through `postinstall/display-manager.sh`
+- `services.sh` validates `/etc/greetd/config.toml` before enabling `greetd.service`
+- greetd uses `/usr/local/bin/archinstall-start-session` as the session wrapper
+- Wayland launches through `dbus-run-session startplasma-wayland`
+- X11 launches through `dbus-run-session startplasma-x11`
+- greetd failures write diagnostics to `/var/log/greetd-boot.log`
 
 ## Filesystem Notes
 
@@ -407,6 +472,37 @@ The manifest includes hostname, timezone, locale, filesystem, boot mode, disk la
 - choose `Wayland` or `X11` explicitly on the `Display manager` screen
 - invalid display values are rejected instead of being auto-corrected during apply
 
+### greetd is enabled but the system still boots to TTY
+
+- inspect `/var/log/greetd-boot.log`
+- inspect `systemctl status greetd`
+- verify `/etc/greetd/config.toml` exists
+- verify `/usr/local/bin/archinstall-start-session` exists and is executable
+
+## Known Issues
+
+- full install validation still requires VM or real-hardware testing
+- disk shrink and free-space reuse paths need more runtime coverage than syntax validation can provide
+- `Limine` Secure Boot remains experimental and is not the recommended path
+
+## Testing
+
+Recommended VM validation flow:
+
+1. boot the Arch ISO in a VM
+2. run the staged installer with a clean virtual disk
+3. test one UEFI install with `systemd-boot`
+4. test one BIOS install with `GRUB`
+5. repeat with LUKS enabled
+
+Required checks after install:
+
+- bootloader reaches the installed system without manual intervention
+- LUKS unlock works when enabled
+- graphical login appears when a display manager was selected
+- root login works when a root password was configured
+- user login works on first boot
+
 ## Layout
 
 ```text
@@ -414,13 +510,13 @@ installer/
   install.sh      Staged installer UI entry point
   executor.sh     Install core and chroot configuration
   disk.sh         Disk discovery, disk selection, and partition strategy entrypoints
-  core/           Pipeline, hooks, and registries
-  modules/        Package, hardware, and execution helpers
+  core/           Runtime orchestration, package resolution, disk helpers, and hardware/runtime helpers
+  ui/             Reusable dialog wrappers only
+  validation/     Input and state validation helpers only
   features/       Decision logic for display, Secure Boot, snapshots, and Steam
-  boot/           systemd-boot, GRUB, and Limine snippets
-  postinstall/    Finalize, services, logs, and cleanup
+  boot/           Bootloader logic and boot path selection helpers
+  postinstall/    Chroot operations, display-manager setup, services, logs, and cleanup
   state.sh        Shared installer state helpers
-  ui.sh           Reusable dialog wrappers
 config/
   packages.conf  Package policy for core, required, and optional layers
   system.conf    Compatibility fallback for older callers

@@ -8,13 +8,14 @@
 
 ## Canonical Structure
 
-- `installer/core/`: hooks, registries, and pipeline execution.
-- `installer/modules/`: execution helpers and package composition.
+- `installer/core/`: runtime execution, package resolution, disk helpers, runtime detection, and orchestrated system mutation.
+- `installer/ui/`: dialog wrappers only. No system mutation belongs here.
+- `installer/validation/`: input validation and state-gating helpers.
 - `installer/features/`: decision logic only.
-- `installer/boot/`: bootloader-specific snippets.
-- `installer/postinstall/`: finalization, service enablement, log export, and cleanup.
+- `installer/boot/`: bootloader abstraction, capability rules, and bootloader-specific snippets.
+- `installer/postinstall/`: finalization, display-manager configuration, service enablement, log export, and cleanup.
 
-Unused compatibility wrappers were removed from the active architecture. New code should only depend on the canonical paths above.
+The ambiguous `installer/modules/` directory was removed. Runtime helpers now live under `installer/core/`, dialog code under `installer/ui/`, and input validation under `installer/validation/`.
 
 ## UI Flow
 
@@ -32,8 +33,10 @@ The `Disk` step only selects the device. The `Partition` step is the only place 
 
 ## Runtime Rules
 
+- Execution flow is now explicit: `ui -> validation -> core -> postinstall`.
 - Runtime and hardware detection refresh into state before the pipeline runs.
 - The executor consumes persisted state and does not invent user intent.
+- UI code must not run system mutation commands.
 - Disk metadata persists as `DISK_MODEL`, `DISK_TRANSPORT`, and `DISK_TYPE`.
 - `DISK_TYPE` is normalized to `hdd|ssd|nvme|vm`.
 - Display state persists as `DISPLAY_MANAGER`, `GREETER`, and `DISPLAY_SESSION`.
@@ -97,6 +100,13 @@ The install pipeline remains ordered and explicit:
 6. `apply_features`
 7. `apply_postinstall`
 
+The runtime handoff is layered:
+
+1. UI collects input
+2. validation normalizes and rejects bad state
+3. core applies disk, package, and runtime execution
+4. postinstall performs chroot-only mutation
+
 ## Package Resolution
 
 Package resolution is deterministic and split into two phases:
@@ -114,7 +124,7 @@ Decision layer:
 
 Execution layer:
 
-- `installer/modules/display/manager.sh`
+- `installer/postinstall/display-manager.sh`
 
 Allowed values:
 
@@ -124,6 +134,15 @@ Allowed values:
 
 `postinstall/services.sh` is the only place that enables or disables display-manager services, and it always enforces a single graphical target strategy.
 
+Current greetd flow:
+
+- `postinstall/display-manager.sh` writes `/etc/greetd/config.toml`
+- greetd sessions run through `/usr/local/bin/archinstall-start-session`
+- Wayland uses `dbus-run-session startplasma-wayland`
+- X11 uses `dbus-run-session startplasma-x11`
+- `postinstall/services.sh` validates the greetd config before enabling `greetd.service`
+- greetd failures are logged to `/var/log/greetd-boot.log`
+
 ## Boot System
 
 All boot logic lives under:
@@ -132,11 +151,52 @@ All boot logic lives under:
 - `installer/boot/grub.sh`
 - `installer/boot/limine.sh`
 
+The boot system is capability-based rather than hardcoded.
+
+Bootloader capabilities are evaluated against:
+
+- firmware mode
+- Secure Boot mode
+- LUKS usage
+- user-selected experience level
+
+Operational guidance:
+
+- `systemd-boot`: recommended for UEFI and the primary Secure Boot foundation path
+- `GRUB`: advanced but broadly compatible, especially for BIOS
+- `Limine`: advanced and experimental for Secure Boot use cases
+
 The executor injects the selected boot snippet; it does not scatter bootloader install logic through unrelated modules.
+
+## Password System
+
+Password application is part of postinstall, not UI.
+
+Execution order inside chroot:
+
+1. create the primary user
+2. normalize `/etc/shadow` ownership and mode
+3. apply root password
+4. apply user password
+
+Application rules:
+
+- non-empty passwords use `chpasswd`
+- empty passwords use `passwd -d`
+- failed password operations abort the install
+- password operations log before execution, after execution, and on failure
+
+Failure scenarios addressed by the current implementation:
+
+- missing or invalid chroot state
+- bad `/etc/shadow` ownership or mode
+- password application attempted before user creation
+- late chpasswd failures that would otherwise leave the system half-configured
 
 ## Postinstall
 
-- `installer/postinstall/finalize.sh`: locale, hostname, users, sudo, mkinitcpio.
+- `installer/postinstall/finalize.sh`: locale, hostname, `/etc/shadow`, users, passwords, sudo, mkinitcpio.
+- `installer/postinstall/display-manager.sh`: chroot display-manager configuration.
 - `installer/postinstall/services.sh`: service enablement and display-manager exclusivity.
 - `installer/postinstall/logs.sh`: export the install log to `/var/log/archinstall.log` and `/home/$USER/install.log`.
 - `installer/postinstall/cleanup.sh`: cleanup steps.

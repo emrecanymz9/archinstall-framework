@@ -27,6 +27,9 @@ Disk types are normalized to:
 - staged installer flow: `Disk -> Partition -> Desktop -> Display manager -> Packages -> Summary -> Install`
 - short on-screen tips for destructive or confusing steps
 - dialog-first UI with TTY fallback
+- inline validation for usernames, passwords, and package input
+- checklist dialogs default to the confirmation button to reduce navigation friction
+- invalid input reopens the same dialog instead of dropping to an empty screen
 
 ## Storage And Recovery
 
@@ -37,7 +40,7 @@ Disk types are normalized to:
 - manual partition reuse
 - ext4 and btrfs
 - optional LUKS2 root encryption
-- snapper on btrfs installs
+- bootloader-aware snapshot selection (`snapper` or `timeshift`)
 - 1 GiB EFI sizing on guided installs
 
 ## Desktop And Display
@@ -50,10 +53,10 @@ Disk types are normalized to:
 
 ## Boot
 
-- `systemd-boot`
-- `grub`
-- `limine`
-- Secure Boot foundation mode
+- capability-based selection for `systemd-boot`, `grub`, and `limine`
+- recommendation tags in the UI (`recommended`, `advanced`, `experimental`)
+- Secure Boot foundation mode with a UKI-oriented path for `systemd-boot`
+- explicit advanced-path behavior for GRUB and Limine when Secure Boot is involved
 
 ## Package System
 
@@ -67,5 +70,16 @@ Disk types are normalized to:
 ## Postinstall
 
 - service enablement in one place
+- display-manager configuration inside chroot
 - graphical target enforcement
+- greetd validation before service enablement
+- greetd failure logging to `/var/log/greetd-boot.log`
 - log export to `/var/log/archinstall.log` and `/home/$USER/install.log`
+
+## Password Handling
+
+- user creation before password application
+- root and user passwords applied non-interactively with `chpasswd`
+- empty passwords handled through `passwd -d`
+- `/etc/shadow` ownership and mode normalized before password writes
+- password failures abort the install instead of degrading silently
