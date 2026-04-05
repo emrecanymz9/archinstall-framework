@@ -15,6 +15,8 @@ SKIP_PARTITION=${SKIP_PARTITION:-false}
 SKIP_PACSTRAP=${SKIP_PACSTRAP:-false}
 SKIP_CHROOT=${SKIP_CHROOT:-false}
 INSTALL_UI_MODE=${INSTALL_UI_MODE:-plain}
+DRY_RUN="${DRY_RUN:-false}"
+FAILPOINT="${FAILPOINT:-}"
 
 safe_source_module() {
 	local module_path=${1:?module path is required}
@@ -123,6 +125,18 @@ install_ui_uses_dialog() {
 	[[ ${INSTALL_UI_MODE:-plain} == "dialog" ]]
 }
 
+maybe_fail() {
+	local name="${1:?failpoint name is required}"
+
+	if [[ -n $FAILPOINT && $FAILPOINT == "$name" ]]; then
+		print_install_error "Injected failure at: $name"
+		log_line "[FAILPOINT] Injected failure at: $name"
+		return 1
+	fi
+
+	return 0
+}
+
 build_pacman_opts_array() {
 	local -n options_ref=${1:?options reference is required}
 
@@ -196,6 +210,14 @@ join_by_comma() {
 }
 
 run_arch_chroot_with_timeout() {
+	if [[ $DRY_RUN == "true" ]]; then
+		print_install_info "[DRY-RUN] arch-chroot $*"
+		log_line "[DRY-RUN] arch-chroot $*"
+		maybe_fail "chroot" || return 1
+		cat > /dev/null
+		return 0
+	fi
+
 	local chroot_timeout=${ARCHINSTALL_CHROOT_TIMEOUT:-0}
 
 	if [[ $chroot_timeout =~ ^[0-9]+$ ]] && (( chroot_timeout > 0 )); then
@@ -219,6 +241,24 @@ log_arch_chroot_failure() {
 			log_line "[FAIL] arch-chroot exited with status $status"
 			;;
 	esac
+}
+
+chroot_safe() {
+	if [[ $DRY_RUN == "true" ]]; then
+		print_install_info "[DRY-RUN] chroot: $*"
+		log_line "[DRY-RUN] chroot: $*"
+		maybe_fail "chroot" || return 1
+		return 0
+	fi
+
+	timeout 300 arch-chroot /mnt /bin/bash -c "$*"
+	local status=$?
+
+	if [[ $status -ne 0 ]]; then
+		print_install_error "chroot failed: $*"
+		log_line "[FAIL] chroot failed with status $status"
+		return 1
+	fi
 }
 
 lazy_unmount_path() {
@@ -669,6 +709,24 @@ run_step_with_retry() {
 	done
 }
 
+pacstrap_safe() {
+	if [[ $DRY_RUN == "true" ]]; then
+		print_install_info "[DRY-RUN] pacstrap $*"
+		log_line "[DRY-RUN] pacstrap $*"
+		maybe_fail "pacstrap" || return 1
+		return 0
+	fi
+
+	pacstrap "$@"
+	local status=$?
+
+	if [[ $status -ne 0 ]]; then
+		print_install_error "pacstrap failed: $*"
+		log_line "[FAIL] pacstrap failed with status $status"
+		return 1
+	fi
+}
+
 is_core_pacstrap_package() {
 	case ${1:-} in
 		base|linux|linux-firmware|mkinitcpio|sudo|networkmanager|shadow|pambase)
@@ -716,7 +774,7 @@ run_pacstrap_install() {
 
 	log_line "[DEBUG] Core pacstrap packages: ${core_packages[*]}"
 	run_step_with_retry "Installing core Arch Linux packages" 3 \
-		pacstrap -K /mnt "${core_packages[@]}" --noconfirm || return 1
+		pacstrap_safe -K /mnt "${core_packages[@]}" --noconfirm || return 1
 
 	if [[ ${#optional_packages[@]} -eq 0 ]]; then
 		log_line "[DEBUG] No optional packages were requested"
@@ -732,7 +790,7 @@ run_pacstrap_install() {
 
 	log_line "[DEBUG] Optional pacstrap package list: ${validated_optional_packages[*]}"
 	run_step_with_retry "Installing optional Arch Linux packages" 3 \
-		pacstrap /mnt "${validated_optional_packages[@]}" --noconfirm
+		pacstrap_safe /mnt "${validated_optional_packages[@]}" --noconfirm
 }
 
 get_partition_uuid() {
