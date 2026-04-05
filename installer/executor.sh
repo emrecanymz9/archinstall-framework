@@ -1075,48 +1075,83 @@ build_chroot_script() {
 	printf -v quoted_luks_partition_uuid '%q' "$luks_partition_uuid"
 	printf -v quoted_mkinitcpio_hooks '%q' "$mkinitcpio_hooks"
 
+	# Fail fast: locale and username must be set before entering chroot
+	if [[ -z $locale ]]; then
+		print_install_error "Locale is not set. Configure the install profile before starting."
+		return 1
+	fi
+	if [[ -z $username ]]; then
+		print_install_error "Username is not set. Configure the install profile before starting."
+		return 1
+	fi
+	if [[ ! $username =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+		print_install_error "Username '${username}' is not valid. Use only lowercase letters, digits, underscores, and hyphens."
+		return 1
+	fi
+
+	# Write all install variables to a file the chroot scripts source
+	local env_file=/mnt/root/.install_env
+	install -m 600 /dev/null "$env_file" || {
+		print_install_error "Could not create chroot environment file: $env_file"
+		return 1
+	}
+	{
+		printf 'BOOT_MODE=%s\n' "$quoted_boot_mode"
+		printf 'TARGET_DISK=%s\n' "$quoted_disk"
+		printf 'ROOT_UUID=%s\n' "$quoted_root_uuid"
+		printf 'TARGET_HOSTNAME=%s\n' "$quoted_hostname"
+		printf 'TARGET_TIMEZONE=%s\n' "$quoted_timezone"
+		printf 'TARGET_LOCALE=%s\n' "$quoted_locale"
+		printf 'TARGET_KEYMAP=%s\n' "$quoted_keymap"
+		printf 'TARGET_USERNAME=%s\n' "$quoted_username"
+		printf 'TARGET_USER_PASSWORD=%s\n' "$quoted_user_password"
+		printf 'TARGET_ROOT_PASSWORD=%s\n' "$quoted_root_password"
+		printf 'TARGET_FILESYSTEM=%s\n' "$quoted_filesystem"
+		printf 'TARGET_ROOT_MOUNT_OPTIONS=%s\n' "$quoted_root_mount_options"
+		printf 'TARGET_ENABLE_ZRAM=%s\n' "$quoted_enable_zram"
+		printf 'TARGET_DESKTOP_PROFILE=%s\n' "$quoted_desktop_profile"
+		printf 'TARGET_DISPLAY_MANAGER=%s\n' "$quoted_display_manager"
+		printf 'TARGET_GREETER=%s\n' "$quoted_greeter"
+		printf 'TARGET_DISPLAY_SESSION=%s\n' "$quoted_display_session"
+		printf 'TARGET_RESOLVED_DISPLAY_SESSION=%s\n' "$quoted_resolved_display_session"
+		printf 'TARGET_INSTALL_PROFILE=%s\n' "$quoted_install_profile"
+		printf 'TARGET_BOOTLOADER=%s\n' "$quoted_bootloader"
+		printf 'TARGET_EDITOR_CHOICE=%s\n' "$quoted_editor_choice"
+		printf 'TARGET_INCLUDE_VSCODE=%s\n' "$quoted_include_vscode"
+		printf 'TARGET_CUSTOM_TOOLS=%s\n' "$quoted_custom_tools"
+		printf 'TARGET_SECURE_BOOT_MODE=%s\n' "$quoted_secure_boot_mode"
+		printf 'TARGET_CURRENT_SECURE_BOOT_STATE=%s\n' "$quoted_current_secure_boot_state"
+		printf 'TARGET_SECURE_BOOT_SETUP_MODE=%s\n' "$quoted_current_secure_boot_setup_mode"
+		printf 'TARGET_ENVIRONMENT_VENDOR=%s\n' "$quoted_environment_vendor"
+		printf 'TARGET_ENVIRONMENT_TYPE=%s\n' "$quoted_environment_type"
+		printf 'TARGET_GPU_VENDOR=%s\n' "$quoted_gpu_vendor"
+		printf 'TARGET_SNAPSHOT_PROVIDER=%s\n' "$quoted_snapshot_provider"
+		printf 'TARGET_INSTALL_STEAM=%s\n' "$quoted_install_steam"
+		printf 'TARGET_LUKS_ENABLED=%s\n' "$quoted_enable_luks"
+		printf 'TARGET_LUKS_MAPPER_NAME=%s\n' "$quoted_luks_mapper_name"
+		printf 'LUKS_UUID=%s\n' "$quoted_luks_partition_uuid"
+		printf 'TARGET_MKINITCPIO_HOOKS=%s\n' "$quoted_mkinitcpio_hooks"
+		printf "PACMAN_OPTS='%s'\n" "${PACMAN_OPTS:---noconfirm --needed}"
+		printf 'export BOOT_MODE TARGET_DISK ROOT_UUID TARGET_HOSTNAME TARGET_TIMEZONE TARGET_LOCALE TARGET_KEYMAP\n'
+		printf 'export TARGET_USERNAME TARGET_USER_PASSWORD TARGET_ROOT_PASSWORD\n'
+		printf 'export TARGET_FILESYSTEM TARGET_ROOT_MOUNT_OPTIONS TARGET_ENABLE_ZRAM\n'
+		printf 'export TARGET_DESKTOP_PROFILE TARGET_DISPLAY_MANAGER TARGET_GREETER TARGET_DISPLAY_SESSION TARGET_RESOLVED_DISPLAY_SESSION\n'
+		printf 'export TARGET_INSTALL_PROFILE TARGET_BOOTLOADER TARGET_EDITOR_CHOICE TARGET_INCLUDE_VSCODE TARGET_CUSTOM_TOOLS\n'
+		printf 'export TARGET_SECURE_BOOT_MODE TARGET_CURRENT_SECURE_BOOT_STATE TARGET_SECURE_BOOT_SETUP_MODE\n'
+		printf 'export TARGET_ENVIRONMENT_VENDOR TARGET_ENVIRONMENT_TYPE TARGET_GPU_VENDOR\n'
+		printf 'export TARGET_SNAPSHOT_PROVIDER TARGET_INSTALL_STEAM\n'
+		printf 'export TARGET_LUKS_ENABLED TARGET_LUKS_MAPPER_NAME LUKS_UUID TARGET_MKINITCPIO_HOOKS PACMAN_OPTS\n'
+	} >> "$env_file"
+	log_line "[DEBUG] Chroot environment file written to $env_file"
+
 	cat <<EOF
 set -euo pipefail
 
-BOOT_MODE=$quoted_boot_mode
-TARGET_DISK=$quoted_disk
-ROOT_UUID=$quoted_root_uuid
-TARGET_HOSTNAME=$quoted_hostname
-TARGET_TIMEZONE=$quoted_timezone
-TARGET_LOCALE=$quoted_locale
-TARGET_KEYMAP=$quoted_keymap
-TARGET_USERNAME=$quoted_username
-TARGET_USER_PASSWORD=$quoted_user_password
-TARGET_ROOT_PASSWORD=$quoted_root_password
-TARGET_FILESYSTEM=$quoted_filesystem
-TARGET_ROOT_MOUNT_OPTIONS=$quoted_root_mount_options
-TARGET_ENABLE_ZRAM=$quoted_enable_zram
-TARGET_DESKTOP_PROFILE=$quoted_desktop_profile
-TARGET_DISPLAY_MANAGER=$quoted_display_manager
-TARGET_GREETER=$quoted_greeter
-TARGET_DISPLAY_SESSION=$quoted_display_session
-TARGET_RESOLVED_DISPLAY_SESSION=$quoted_resolved_display_session
-TARGET_INSTALL_PROFILE=$quoted_install_profile
-TARGET_BOOTLOADER=$quoted_bootloader
-TARGET_EDITOR_CHOICE=$quoted_editor_choice
-TARGET_INCLUDE_VSCODE=$quoted_include_vscode
-TARGET_CUSTOM_TOOLS=$quoted_custom_tools
-TARGET_SECURE_BOOT_MODE=$quoted_secure_boot_mode
-TARGET_CURRENT_SECURE_BOOT_STATE=$quoted_current_secure_boot_state
-TARGET_SECURE_BOOT_SETUP_MODE=$quoted_current_secure_boot_setup_mode
-TARGET_ENVIRONMENT_VENDOR=$quoted_environment_vendor
-TARGET_ENVIRONMENT_TYPE=$quoted_environment_type
-TARGET_GPU_VENDOR=$quoted_gpu_vendor
-TARGET_SNAPSHOT_PROVIDER=$quoted_snapshot_provider
-TARGET_INSTALL_STEAM=$quoted_install_steam
-TARGET_LUKS_ENABLED=$quoted_enable_luks
-TARGET_LUKS_MAPPER_NAME=$quoted_luks_mapper_name
-LUKS_UUID=$quoted_luks_partition_uuid
-TARGET_MKINITCPIO_HOOKS=$quoted_mkinitcpio_hooks
-export PACMAN_OPTS='${PACMAN_OPTS:---noconfirm --needed}'
+# shellcheck source=/dev/null
+source /root/.install_env
 
 log_chroot_step() {
-	echo "[STEP] $1"
+	echo "[STEP] \$1"
 }
 
 $(postinstall_finalize_chroot_snippet)
