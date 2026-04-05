@@ -63,7 +63,7 @@ list_disks() {
 
 		model="$(disk_model_value "$name")"
 		transport="$(disk_transport_label "$(disk_transport_value "$name")")"
-		disk_type="$(disk_type_label "$(detect_disk_type "$name" 2>/dev/null || printf 'unknown')")"
+		disk_type="$(disk_type_label "$(detect_disk_type "$name" 2>/dev/null || printf 'hdd')")"
 		size_gib="$(disk_size_gib "$name")"
 		label="$(disk_label_value "$name")"
 		alerts="$(detect_disk_os_presence "$name")"
@@ -73,7 +73,26 @@ list_disks() {
 	done < <(lsblk -dnpr -o NAME,SIZE,TYPE 2>/dev/null)
 }
 
-select_disk() {
+clear_saved_partition_state() {
+	unset_state "INSTALL_SCENARIO"
+	unset_state "FORMAT_ROOT"
+	unset_state "FORMAT_EFI"
+	unset_state "EFI_PART"
+	unset_state "ROOT_PART"
+}
+
+persist_selected_disk_state() {
+	local selected_disk=${1:?selected disk is required}
+
+	set_state "DISK" "$selected_disk" || return 1
+	set_state "DISK_MODEL" "$(disk_model_value "$selected_disk")" || return 1
+	set_state "DISK_TRANSPORT" "$(disk_transport_value "$selected_disk")" || return 1
+	set_state "DISK_TYPE" "$(detect_disk_type "$selected_disk" 2>/dev/null || printf 'hdd')" || return 1
+	clear_saved_partition_state
+	return 0
+}
+
+select_install_target_disk() {
 	local rows
 	local args=()
 	local row
@@ -84,12 +103,7 @@ select_disk() {
 	local disk_alerts_value
 	local disk_partitions
 	local selected_disk
-	local boot_mode
-	local strategy
 	local status
-	local action_status=1
-	local layout_state=""
-	local -a strategy_args=()
 
 	mapfile -t rows < <(list_disks)
 	if [[ ${#rows[@]} -eq 0 ]]; then
@@ -102,62 +116,15 @@ select_disk() {
 		args+=("$disk_name" "$disk_size | $disk_model | label=$disk_label | $disk_alerts_value | $disk_partitions")
 	done
 
-	menu "Disk Selection" "Choose a disk to manage for installation.\n\nThe installer will show the detected partitions and let you choose a safe strategy next." 20 100 10 "${args[@]}"
+	menu "Disk" "Choose the disk you want to install to.\n\nTip: this screen only selects the device. Partitioning happens on the next screen." 20 100 10 "${args[@]}"
 	selected_disk="$DIALOG_RESULT"
 	status=$DIALOG_STATUS
-	boot_mode="$(state_or_default "BOOT_MODE" "$(detect_boot_mode 2>/dev/null || printf 'bios')")"
 
 	case $status in
 		0)
+			persist_selected_disk_state "$selected_disk" || return 1
 			show_disk_analysis "$selected_disk"
-			layout_state="$(disk_layout_state "$selected_disk")"
-			strategy_args=(
-				"wipe" "Auto partition (recommended): full disk wipe and guided layout"
-			)
-			if [[ $layout_state == "empty" || $layout_state == "corrupt" || $layout_state == "unreadable" ]]; then
-				strategy_args+=("initialize" "Initialize disk (create GPT)")
-			fi
-			strategy_args+=(
-				"free-space" "Auto partition free space on the selected disk"
-				"dual-boot" "Auto partition free space while preserving detected Windows partitions"
-				"manual" "Manual partition (basic): choose and reuse prepared partitions"
-				"back" "Return to disk selection"
-			)
-			menu "Disk Strategy" "Choose how to use $selected_disk.\n\nBoot mode: $boot_mode\nStatus: $(disk_layout_message "$selected_disk")\nAlerts: $(disk_alerts "$selected_disk")" 20 90 10 "${strategy_args[@]}"
-			strategy="$DIALOG_RESULT"
-			case $DIALOG_STATUS in
-				0)
-					case $strategy in
-						wipe)
-							prepare_full_wipe_install "$selected_disk" "$boot_mode"
-							action_status=$?
-							;;
-						initialize)
-							initialize_disk_dialog "$selected_disk"
-							action_status=$?
-							;;
-						free-space)
-							prepare_free_space_install "$selected_disk" "$boot_mode" "free-space"
-							action_status=$?
-							;;
-						dual-boot)
-							prepare_free_space_install "$selected_disk" "$boot_mode" "dual-boot"
-							action_status=$?
-							;;
-						manual)
-							manual_partition_editor "$selected_disk" "$boot_mode"
-							action_status=$?
-							;;
-						*)
-							return 1
-							;;
-					esac
-					return "$action_status"
-					;;
-				*)
-					return 1
-					;;
-			esac
+			return 0
 			;;
 		1|255)
 			return "$status"
@@ -167,6 +134,80 @@ select_disk() {
 			return "$status"
 			;;
 	esac
+}
+
+select_partition_strategy_for_disk() {
+	local selected_disk=${1:-$(get_state "DISK" 2>/dev/null || printf '')}
+	local boot_mode=""
+	local strategy=""
+	local action_status=1
+	local layout_state=""
+	local -a strategy_args=()
+
+	if [[ -z $selected_disk ]]; then
+		msg "Disk Required" "Choose a target disk before opening the partition screen."
+		return 1
+	fi
+
+	boot_mode="$(state_or_default "BOOT_MODE" "$(detect_boot_mode 2>/dev/null || printf 'bios')")"
+	show_disk_analysis "$selected_disk"
+	layout_state="$(disk_layout_state "$selected_disk")"
+	strategy_args=(
+		"wipe" "Auto partition (recommended): erase the disk and create the guided layout"
+	)
+	if [[ $layout_state == "empty" || $layout_state == "corrupt" || $layout_state == "unreadable" ]]; then
+		strategy_args+=("initialize" "Initialize the disk label before partitioning")
+	fi
+	strategy_args+=(
+		"free-space" "Use available free space on the selected disk"
+		"dual-boot" "Preserve detected Windows partitions and use free space"
+		"manual" "Reuse or choose prepared partitions yourself"
+		"back" "Return to the previous menu"
+	)
+
+	menu "Partition" "Choose how to use $selected_disk.\n\nTip: pick wipe only when you want the installer to erase the whole disk.\n\nBoot mode: $boot_mode\nStatus: $(disk_layout_message "$selected_disk")\nAlerts: $(disk_alerts "$selected_disk")" 20 94 10 "${strategy_args[@]}"
+	strategy="$DIALOG_RESULT"
+	case $DIALOG_STATUS in
+		0)
+			case $strategy in
+				wipe)
+					prepare_full_wipe_install "$selected_disk" "$boot_mode"
+					action_status=$?
+					;;
+				initialize)
+					initialize_disk_dialog "$selected_disk"
+					action_status=$?
+					;;
+				free-space)
+					prepare_free_space_install "$selected_disk" "$boot_mode" "free-space"
+					action_status=$?
+					;;
+				dual-boot)
+					prepare_free_space_install "$selected_disk" "$boot_mode" "dual-boot"
+					action_status=$?
+					;;
+				manual)
+					manual_partition_editor "$selected_disk" "$boot_mode"
+					action_status=$?
+					;;
+				back)
+					return 1
+					;;
+				*)
+					return 1
+					;;
+			esac
+			return "$action_status"
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+select_disk() {
+	select_install_target_disk || return $?
+	select_partition_strategy_for_disk "$(get_state "DISK" 2>/dev/null || printf '')"
 }
 
 current_disk_label() {

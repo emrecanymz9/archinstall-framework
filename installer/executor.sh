@@ -91,10 +91,6 @@ safe_source_module "$SCRIPT_DIR/modules/disk/layout.sh" || true
 safe_source_module "$SCRIPT_DIR/modules/disk/space.sh" || true
 # shellcheck source=installer/modules/system/network.sh
 safe_source_module "$SCRIPT_DIR/modules/system/network.sh" || true
-# shellcheck source=installer/modules/system/audio.sh
-safe_source_module "$SCRIPT_DIR/modules/system/audio.sh" || true
-# shellcheck source=installer/modules/system/bluetooth.sh
-safe_source_module "$SCRIPT_DIR/modules/system/bluetooth.sh" || true
 # shellcheck source=installer/modules/gpu/driver.sh
 safe_source_module "$SCRIPT_DIR/modules/gpu/driver.sh" || true
 # shellcheck source=installer/core/pipeline.sh
@@ -213,61 +209,6 @@ log_arch_chroot_failure() {
 			log_line "[FAIL] arch-chroot exited with status $status"
 			;;
 	esac
-}
-
-detect_disk_type() {
-	local disk=${1:?disk is required}
-	local disk_name=""
-	local device_path=""
-	local rotational_path=""
-	local rotational_value=""
-
-	disk_name="$(basename "$disk")"
-
-	# If disk_name refers to a partition rather than a block device (e.g. sda3
-	# instead of sda), resolve to the parent device so the /sys/block path exists.
-	if [[ ! -d /sys/block/$disk_name ]]; then
-		local _parent
-		_parent="$(lsblk -no pkname "$disk" 2>/dev/null || true)"
-		_parent="${_parent//[[:space:]]/}"
-		if [[ -n $_parent && -d /sys/block/$_parent ]]; then
-			disk_name="$_parent"
-		fi
-	fi
-	device_path="/dev/$disk_name"
-	if [[ ! -b $device_path ]]; then
-		device_path="$disk"
-	fi
-
-	if [[ $disk_name == nvme* ]]; then
-		normalize_disk_type "nvme"
-		return 0
-	fi
-
-	rotational_path="/sys/block/$disk_name/queue/rotational"
-	if [[ -r $rotational_path ]]; then
-		read -r rotational_value < "$rotational_path"
-		if [[ $rotational_value == "0" ]]; then
-			normalize_disk_type "ssd"
-		else
-			normalize_disk_type "hdd"
-		fi
-		return 0
-	fi
-
-	if rotational_value="$(lsblk -dn -o ROTA "$device_path" 2>> "$ARCHINSTALL_LOG" || true)"; then
-		rotational_value="${rotational_value//[[:space:]]/}"
-		if [[ $rotational_value == "0" ]]; then
-			normalize_disk_type "ssd"
-			return 0
-		fi
-		if [[ $rotational_value == "1" ]]; then
-			normalize_disk_type "hdd"
-			return 0
-		fi
-	fi
-
-	normalize_disk_type "unknown"
 }
 
 ext4_mount_options() {
@@ -652,6 +593,17 @@ run_step_with_retry() {
 	done
 }
 
+is_core_pacstrap_package() {
+	case ${1:-} in
+		base|linux|linux-firmware|mkinitcpio|sudo|networkmanager)
+			return 0
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
 filter_valid_packages() {
 	# Remove packages that are not resolvable in the current pacman DB.
 	# pacman -Sp resolves a package name against sync DBs without downloading.
@@ -672,19 +624,39 @@ filter_valid_packages() {
 }
 
 run_pacstrap_install() {
-	local -a mandatory_packages=(base linux linux-firmware mkinitcpio sudo networkmanager)
-	local -a packages=("$@")
-	local -a validated_packages=()
+	local -a core_packages=(base linux linux-firmware mkinitcpio sudo networkmanager)
+	local -a requested_packages=("$@")
+	local -a optional_packages=()
+	local -a validated_optional_packages=()
+	local package_name=""
 
-	append_unique_items packages "${mandatory_packages[@]}"
-	log_line "[DEBUG] Mandatory pacstrap packages: ${mandatory_packages[*]}"
-	log_line "[DEBUG] Pre-validation pacstrap package list: ${packages[*]}"
-	filter_valid_packages packages validated_packages
-	log_line "[DEBUG] Final pacstrap package list: ${validated_packages[*]}"
-	# -K initialises an empty pacman keyring inside the new root so the installed
-	# system is not dependent on the live-ISO keyring state.
-	run_step_with_retry "Installing the base Arch Linux packages" 3 \
-		pacstrap -K /mnt "${validated_packages[@]}" --noconfirm
+	for package_name in "${requested_packages[@]}"; do
+		[[ -n $package_name ]] || continue
+		if is_core_pacstrap_package "$package_name"; then
+			continue
+		fi
+		append_unique_items optional_packages "$package_name"
+	done
+
+	log_line "[DEBUG] Core pacstrap packages: ${core_packages[*]}"
+	run_step_with_retry "Installing core Arch Linux packages" 3 \
+		pacstrap -K /mnt "${core_packages[@]}" --noconfirm || return 1
+
+	if [[ ${#optional_packages[@]} -eq 0 ]]; then
+		log_line "[DEBUG] No optional packages were requested"
+		return 0
+	fi
+
+	log_line "[DEBUG] Optional pacstrap package candidates: ${optional_packages[*]}"
+	filter_valid_packages optional_packages validated_optional_packages
+	if [[ ${#validated_optional_packages[@]} -eq 0 ]]; then
+		log_line "[DEBUG] No optional packages remained after validation"
+		return 0
+	fi
+
+	log_line "[DEBUG] Optional pacstrap package list: ${validated_optional_packages[*]}"
+	run_step_with_retry "Installing optional Arch Linux packages" 3 \
+		pacstrap /mnt "${validated_optional_packages[@]}" --noconfirm
 }
 
 get_partition_uuid() {
@@ -1150,8 +1122,6 @@ log_chroot_step() {
 $(postinstall_finalize_chroot_snippet)
 
 $(postinstall_services_chroot_snippet)
-
-$(postinstall_logs_chroot_snippet)
 
 $(bootloader_common_chroot_snippet)
 

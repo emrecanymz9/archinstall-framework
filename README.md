@@ -40,7 +40,9 @@ bash installer/install.sh
 
 ### Profile-Based Examples
 
-The installer is interactive. Start it, then choose the profile in `Install System -> Configure`.
+The installer is interactive. Start it, then move through the staged flow.
+
+Profile selection now happens in `Desktop`, and identity plus optional package choices happen in `Packages`.
 
 - `DAILY`: full workstation defaults with KDE and common tools
 - `DEV`: development-oriented toolset with a leaner package set
@@ -53,7 +55,7 @@ cd archinstall-framework
 bash installer/install.sh
 ```
 
-Then select `Install System`, open `Configure`, and choose `DAILY`.
+Then open `Desktop`, choose `DAILY`, review `Display manager`, then finish `Packages` and `Summary`.
 
 Example launch for a `DEV` install:
 
@@ -62,7 +64,7 @@ cd archinstall-framework
 bash installer/install.sh
 ```
 
-Then select `Install System`, open `Configure`, and choose `DEV`.
+Then open `Desktop`, choose `DEV`, review `Display manager`, then finish `Packages` and `Summary`.
 
 ### One-Line Curl Installer
 
@@ -76,12 +78,12 @@ The installer intentionally keeps the live ISO minimal. Heavy packages belong in
 
 ## Features
 
-- dialog-based install flow
+- staged install flow: `Disk -> Partition -> Desktop -> Display manager -> Packages -> Summary -> Install`
 - runtime-aware UI with boot-mode, Secure Boot, and environment detection
 - ext4 and btrfs root installs
-- SSD, HDD, and NVMe mount-option detection
+- disk typing for `NVMe SSD`, `SATA SSD`, `HDD`, and `VM Disk`
 - disk-space validation on `/mnt` before `pacstrap`
-- disk manager with full-wipe, free-space, dual-boot, and manual strategies
+- disk manager with full-wipe, free-space, dual-boot, initialize, and manual strategies
 - bootloader support for `systemd-boot`, `GRUB`, and `Limine`
 - Secure Boot modes: `Disabled`, `Setup Foundation`
 - hardware abstraction for VMware, VirtualBox, QEMU/KVM, and common GPU vendors
@@ -93,9 +95,7 @@ The installer intentionally keeps the live ISO minimal. Heavy packages belong in
 - KDE Plasma profile with both Wayland and X11 session support
 - install profiles: `DAILY`, `DEV`, `CUSTOM`
 - automatic `sudo` setup with `wheel` group support
-- deterministic display session selection: `Wayland` or `X11`
 - display managers: `greetd` with `tuigreet` or optional `qtgreet`, or `sddm` (recommended for KDE)
-- `iwd` Wi-Fi backend configured automatically when installed
 - btrfs four-subvolume layout: `@`, `@home`, `@var`, `@snapshots`
 - snapper timeline snapshots with automatic cleanup timers
 - `grub-btrfs` included only for BIOS/GRUB installs
@@ -103,7 +103,8 @@ The installer intentionally keeps the live ISO minimal. Heavy packages belong in
 - 1 GiB EFI partition enforced on new wipe/free-space installs
 - EFI validation on manual partition reuse (size and filesystem warnings)
 - BIOS + GPT safety check blocks unsafe grub-install scenarios
-- pacstrap run with `-K` (target keyring initialisation)
+- mandatory core pacstrap packages are always installed and never skipped
+- optional packages are validated only after the core bootstrap phase
 - install manifest written to user home after successful install
 - plugin hooks for packages, chroot snippets, and menu extensions
 - pacman-key and mirror bootstrap hardening
@@ -120,15 +121,14 @@ Canonical installer layout:
 - `installer/boot/`
 - `installer/postinstall/`
 
-Compatibility wrappers remain in older module paths where needed, but new bootloader, feature, and post-install behavior lives in those directories.
-
-The current repository no longer treats wrappers as part of the target architecture. Entry points now source canonical files directly.
+Compatibility wrappers are no longer part of the active target architecture. New code should only use the canonical directories above.
 
 Additional documentation:
 
 - `docs/architecture.md`
 - `docs/features.md`
 - `docs/state.md`
+- `docs/roadmap.md`
 
 ## Live ISO Rules
 
@@ -194,26 +194,13 @@ make clean
 
 ## Install Flow
 
-1. Open `Disk Setup` and choose the install target.
-2. Open `Install System`.
-3. Configure:
-   - hostname
-   - timezone
-   - locale
-   - keyboard layout
-   - username
-   - user password
-   - root password
-  - install profile
-   - filesystem
-   - zram preference
-  - Secure Boot mode
-   - desktop profile
-   - display mode
-   - display manager
-4. Confirm the destructive summary.
-5. Watch the live mixed-gauge progress window.
-6. Choose `Reboot`, `Shutdown`, or `Back` after completion.
+1. Open `Disk` and choose the target device.
+2. Open `Partition` and choose the filesystem, encryption, snapshots, zram, Secure Boot mode, and partition strategy.
+3. Open `Desktop` and choose the install profile, desktop, and Steam preference.
+4. Open `Display manager` and choose the session, display manager, and greeter.
+5. Open `Packages` and set hostname, timezone, locale, keyboard, users, editor, and optional apps.
+6. Open `Summary` and review the saved state.
+7. Start `Install`.
 
 At startup the installer applies:
 
@@ -256,40 +243,39 @@ Limine support writes `/boot/limine.cfg`, reuses the shared kernel command-line 
 
 ## Package Set
 
-The target install always includes the base packages requested in this hardening pass:
+Pacstrap is split into two phases.
+
+Core packages are always installed first and are never validated away:
 
 - `base`
-- `base-devel`
 - `linux`
 - `linux-firmware`
-- `make`
-- `networkmanager`
+- `mkinitcpio`
 - `sudo`
-- `git`
-- `dialog`
+- `networkmanager`
 
-The KDE profile additionally installs Plasma, PipeWire, Bluetooth, and the selected display manager.
+Optional packages are resolved and validated after the core bootstrap phase.
 
-Required packages are resolved in layers:
+Optional layers include:
 
-1. Required base: `sudo`, `networkmanager`, `iwd`, `iptables-nft`, `dialog`, `make`
-2. Filesystem: `btrfs-progs` (btrfs) or nothing extra (ext4)
-3. Profile packages from `DAILY`, `DEV`, or `CUSTOM`
-4. Hardware: CPU microcode (`intel-ucode` or `amd-ucode`), GPU drivers, VM guest tools
-5. Desktop profile: Plasma, PipeWire stack, Bluetooth, display manager
-6. Snapshot tools: `snapper`, `snap-pac`, `grub-btrfs` (BIOS only)
-7. Optional: `steam`, `zram-generator`, LUKS2 tools, Secure Boot tools
-8. Plugin-contributed packages from the plugin loader
+1. required system tools from `config/packages.conf`
+2. filesystem packages such as `btrfs-progs`
+3. profile packages from `DAILY`, `DEV`, or `CUSTOM`
+4. hardware packages such as CPU microcode, GPU drivers, and VM guest tools
+5. desktop packages such as Plasma, PipeWire, Bluetooth, and the selected display manager
+6. feature packages for snapshots, Steam, zram, encryption, and Secure Boot foundation mode
+7. plugin-contributed packages
 
 ## Post-Install Pipeline
 
 After pacstrap, the installer runs a structured post-install phase inside the chroot:
 
 1. `finalize.sh` applies hostname, locale, timezone, sudo, and user configuration.
-2. `enable_services.sh` enables NetworkManager, iwd, the selected display manager, and snapper timers when needed.
+2. `services.sh` enables NetworkManager, iwd, the selected display manager, and snapper timers when needed.
 3. the selected bootloader is installed.
 4. Secure Boot setup runs when requested.
-5. `cleanup.sh` removes installer temp files from the target.
+5. host-side log export writes `/var/log/archinstall.log` and `/home/$USER/install.log` into the target.
+6. `cleanup.sh` removes installer temp files from the target.
 
 ## Filesystem Notes
 
@@ -350,10 +336,11 @@ Primary log file:
 /tmp/archinstall_install.log
 ```
 
-Post-install files written to the new user's home directory:
+Post-install files written into the target system:
 
 ```text
-~/archinstall.log          full install log copy
+/var/log/archinstall.log   full install log copy
+/home/$USER/install.log    user-readable install log copy
 ~/archinstall-manifest.txt structured install manifest
 ```
 
@@ -366,8 +353,9 @@ df -h /
 df -h /mnt
 
 # After rebooting into the new system:
+cat /var/log/archinstall.log
+cat ~/install.log
 cat ~/archinstall-manifest.txt
-cat ~/archinstall.log
 ```
 
 The manifest includes hostname, timezone, locale, filesystem, boot mode, disk layout, package list, and environment details.
@@ -397,37 +385,25 @@ The manifest includes hostname, timezone, locale, filesystem, boot mode, disk la
 ### greetd works but the wrong session starts
 
 - check the saved `Display mode` value in the installer state
-- for VMs, `Auto` may intentionally resolve to X11
-- choose `Wayland` or `X11` explicitly if you need deterministic behavior
+- choose `Wayland` or `X11` explicitly on the `Display manager` screen
+- invalid display values are rejected instead of being auto-corrected during apply
 
 ## Layout
 
 ```text
 installer/
-  disk.sh        Disk discovery and selection
-  executor.sh    Install core and chroot configuration
-  install.sh     Main dialog UI entry point
-  modules/
-    bootloader.sh   Boot mode helpers
-    desktop.sh      Desktop profile helpers (display manager, DM packages)
-    hardware.sh     CPU microcode, GPU driver, and VM guest tools detection
-    network.sh      Live ISO pacman bootstrap helpers
-    packages.sh     Full package strategy resolution and deduplication
-    profile.sh      Timezone, locale, and keymap selection helpers
-    profiles.sh     Install profile definitions (DAILY, DEV, CUSTOM)
-    snapshots.sh    Snapper configuration and snapshot package resolution
-    system/
-      network.sh    Network package and service helpers
-      audio.sh      PipeWire/WirePlumber package and user-unit helpers
-      bluetooth.sh  BlueZ package and service helpers
-    disk/
-      layout.sh     Partition-path helpers
-      manager.sh    Disk workflow: wipe, free-space, dual-boot, manual
-      space.sh      Target free-space estimation and checks
-  state.sh       Shared installer state helpers
-  ui.sh          Reusable dialog wrappers
+  install.sh      Staged installer UI entry point
+  executor.sh     Install core and chroot configuration
+  disk.sh         Disk discovery, disk selection, and partition strategy entrypoints
+  core/           Pipeline, hooks, and registries
+  modules/        Package, hardware, and execution helpers
+  features/       Decision logic for display, Secure Boot, snapshots, and Steam
+  boot/           systemd-boot, GRUB, and Limine snippets
+  postinstall/    Finalize, services, logs, and cleanup
+  state.sh        Shared installer state helpers
+  ui.sh           Reusable dialog wrappers
 config/
-  packages.conf  Package policy: required, base-devel, aur-helper tiers
+  packages.conf  Package policy for core, required, and optional layers
   system.conf    Compatibility fallback for older callers
 plugins/
   example/       Reference plugin showing package + chroot hook pattern

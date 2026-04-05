@@ -110,20 +110,23 @@ normalize_disk_type() {
 	normalized="${normalized//[[:space:]_-]/}"
 
 	case $normalized in
+		vm|virtio|virtual|virtualmachine|vmware|virtualbox|qemu|kvm|hyperv)
+			printf 'vm\n'
+			;;
 		""|auto|unknown)
-			printf 'unknown\n'
+			printf 'hdd\n'
 			;;
 		hdd|rotational)
 			printf 'hdd\n'
 			;;
-			ssd|sata|satassd|ata|flash|emmc|mmc|mmcblk)
+		ssd|sata|satassd|ata|flash|emmc|mmc|mmcblk)
 			printf 'ssd\n'
 			;;
 		nvme|nvmessd|pcie)
 			printf 'nvme\n'
 			;;
 		*)
-			printf 'unknown\n'
+			printf 'hdd\n'
 			;;
 	esac
 }
@@ -139,8 +142,11 @@ disk_type_label() {
 		nvme)
 			printf 'NVMe SSD\n'
 			;;
+		vm)
+			printf 'VM Disk\n'
+			;;
 		*)
-			printf 'Unknown\n'
+			printf 'HDD\n'
 			;;
 	esac
 }
@@ -162,10 +168,10 @@ set_state() {
 		DISPLAY_MANAGER)
 			value="$(normalize_display_manager "$value")"
 			;;
-		GREETER|GREETER_FRONTEND)
+		GREETER)
 			value="$(normalize_greeter "$value")"
 			;;
-		DISPLAY_SESSION|DISPLAY_MODE|RESOLVED_DISPLAY_MODE)
+		DISPLAY_SESSION)
 			value="$(normalize_display_session "$value")"
 			;;
 		SNAPSHOT_PROVIDER)
@@ -230,23 +236,7 @@ get_state() {
 		return 0
 	fi
 
-	case $key in
-		GREETER)
-			awk -F '\t' '$1 == "GREETER_FRONTEND" { line = $0; sub(/^[^\t]*\t/, "", line); print line; found = 1; exit } END { if (!found) exit 1 }' "$ARCHINSTALL_STATE_FILE"
-			;;
-		GREETER_FRONTEND)
-			awk -F '\t' '$1 == "GREETER" { line = $0; sub(/^[^\t]*\t/, "", line); print line; found = 1; exit } END { if (!found) exit 1 }' "$ARCHINSTALL_STATE_FILE"
-			;;
-		DISPLAY_SESSION)
-			awk -F '\t' '$1 == "DISPLAY_MODE" || $1 == "RESOLVED_DISPLAY_MODE" { line = $0; sub(/^[^\t]*\t/, "", line); print line; found = 1; exit } END { if (!found) exit 1 }' "$ARCHINSTALL_STATE_FILE"
-			;;
-		DISPLAY_MODE|RESOLVED_DISPLAY_MODE)
-			awk -F '\t' '$1 == "DISPLAY_SESSION" { line = $0; sub(/^[^\t]*\t/, "", line); print line; found = 1; exit } END { if (!found) exit 1 }' "$ARCHINSTALL_STATE_FILE"
-			;;
-		*)
-			return 1
-			;;
-	esac
+	return 1
 }
 
 unset_state() {

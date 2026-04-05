@@ -335,7 +335,7 @@ get_required_packages() {
 	local -n package_ref=${2:?package reference is required}
 
 	package_ref=()
-	append_csv_packages "$(config_csv_or_default "ARCHINSTALL_REQUIRED_PACKAGES" "sudo,networkmanager,iptables-nft,dialog,make")" package_ref
+	append_csv_packages "$(config_csv_or_default "ARCHINSTALL_REQUIRED_PACKAGES" "sudo,networkmanager,iwd,iptables-nft,dialog,make,nano,git,curl,wget,ripgrep,fd,less,man-db,man-pages")" package_ref
 	append_csv_packages "$(profile_config_csv "ARCHINSTALL_REQUIRED_PACKAGES" "$install_profile" "")" package_ref
 }
 
@@ -351,11 +351,11 @@ get_user_packages() {
 
 	case $install_profile in
 		daily)
-			append_csv_packages "$(profile_config_csv "ARCHINSTALL_USER_PACKAGES" "daily" "kate,git,curl,wget,unzip,p7zip,rsync,man-db,man-pages,less,fastfetch")" package_ref
+			append_csv_packages "$(profile_config_csv "ARCHINSTALL_USER_PACKAGES" "daily" "kate,fastfetch")" package_ref
 			;;
 		dev)
 			append_csv_packages "$(editor_packages_csv "$editor_choice")" package_ref
-			append_csv_packages "$(profile_config_csv "ARCHINSTALL_USER_PACKAGES" "dev" "git,curl,wget,fastfetch,ripgrep,fd,less,man-db,man-pages")" package_ref
+			append_csv_packages "$(profile_config_csv "ARCHINSTALL_USER_PACKAGES" "dev" "fastfetch")" package_ref
 			if [[ $include_vscode == "true" ]]; then
 				append_csv_packages "$(config_csv_or_default "ARCHINSTALL_VSCODE_PACKAGES" "code")" package_ref
 			fi
@@ -369,7 +369,7 @@ get_user_packages() {
 				append_csv_packages "$_normalised_custom" package_ref
 			else
 				# Fallback when no checklist result is available (e.g. state upgrade from older version)
-				append_csv_packages "$(profile_config_csv "ARCHINSTALL_USER_PACKAGES" "custom" "git,curl,wget,fastfetch,ripgrep,fd,less,man-db,man-pages")" package_ref
+				append_csv_packages "$(profile_config_csv "ARCHINSTALL_USER_PACKAGES" "custom" "fastfetch")" package_ref
 			fi
 			if [[ $include_vscode == "true" ]]; then
 				append_csv_packages "$(config_csv_or_default "ARCHINSTALL_VSCODE_PACKAGES" "code")" package_ref

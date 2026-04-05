@@ -629,7 +629,7 @@ post_install_filesystem_label() {
 }
 
 post_install_disk_type_label() {
-	disk_type_label "$(state_or_default "DISK_TYPE" "unknown")"
+	disk_type_label "$(state_or_default "DISK_TYPE" "hdd")"
 }
 
 install_summary_text() {
@@ -1072,7 +1072,141 @@ prompt_password() {
 	return 1
 }
 
-configure_install_profile() {
+prompt_password_or_keep() {
+	local title=${1:?title is required}
+	local current_password=${2-}
+
+	if [[ -n $current_password ]]; then
+		if confirm "$title" "A password is already loaded for this session.\n\nKeep it?" 12 72; then
+			printf '%s\n' "$current_password"
+			return 0
+		fi
+	fi
+
+	prompt_password "$title"
+}
+
+configure_partition_stage() {
+	local disk=""
+	local boot_mode=""
+	local bootloader=""
+	local filesystem=""
+	local enable_luks="false"
+	local luks_password=""
+	local snapshot_provider="none"
+	local enable_zram="false"
+	local secure_boot_state=""
+	local secure_boot_mode="disabled"
+
+	disk="$(state_or_default "DISK" "")"
+	if [[ -z $disk ]]; then
+		msg "Disk Required" "Open the Disk screen first and choose the target device."
+		return 1
+	fi
+
+	filesystem="$(select_filesystem "$(state_or_default "FILESYSTEM" "ext4")")" || return 1
+	enable_luks="$(select_boolean_value "Encryption" "Enable LUKS2 encryption for the root filesystem?\n\nTip: choose this before partitioning so the disk layout is prepared correctly." "$(state_or_default "ENABLE_LUKS" "false")" "Enable LUKS2" "Disable encryption")" || return 1
+	if [[ $enable_luks == "true" ]]; then
+		luks_password="$(prompt_password_or_keep "LUKS Password" "${INSTALL_LUKS_PASSWORD:-}")" || return 1
+	fi
+	snapshot_provider="$(select_snapshot_provider "$filesystem" "$(state_or_default "INSTALL_PROFILE" "daily")" "$(state_or_default "SNAPSHOT_PROVIDER" "")")" || return 1
+	enable_zram="$(select_zram_preference "$(state_or_default "ENABLE_ZRAM" "$ZRAM")")" || return 1
+	boot_mode="$(state_or_default "BOOT_MODE" "$(detect_boot_mode 2>/dev/null || printf 'bios')")"
+	bootloader="$(normalize_bootloader "$(state_or_default "BOOTLOADER" "")" "$boot_mode")"
+	secure_boot_state="$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")"
+	secure_boot_mode="$(select_secure_boot_mode "$(state_or_default "SECURE_BOOT_MODE" "disabled")" "$boot_mode" "$secure_boot_state")" || return 1
+
+	set_state "FILESYSTEM" "$filesystem" || return 1
+	set_state "ENABLE_LUKS" "$enable_luks" || return 1
+	set_state "LUKS_MAPPER_NAME" "cryptroot" || return 1
+	set_state "SNAPSHOT_PROVIDER" "$snapshot_provider" || return 1
+	set_state "ENABLE_ZRAM" "$enable_zram" || return 1
+	set_state "BOOT_MODE" "$boot_mode" || return 1
+	set_state "BOOTLOADER" "$bootloader" || return 1
+	set_state "SECURE_BOOT_MODE" "$secure_boot_mode" || return 1
+	INSTALL_LUKS_PASSWORD="$luks_password"
+
+	select_partition_strategy_for_disk "$disk" || return 1
+	msg "Partition Saved" "Partition settings updated for $disk.\n\nFilesystem: $filesystem\nEncryption: $enable_luks\nSnapshots: $(snapshot_provider_label "$snapshot_provider")\nZram: $enable_zram\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nBootloader: $(bootloader_label "$bootloader" "$boot_mode")"
+	return 0
+}
+
+configure_desktop_stage() {
+	local install_profile=""
+	local desktop_profile="none"
+	local install_steam="false"
+	local display_session="wayland"
+	local display_manager="none"
+	local greeter="none"
+
+	install_profile="$(select_install_profile "$(state_or_default "INSTALL_PROFILE" "daily")")" || return 1
+	case $install_profile in
+		daily)
+			desktop_profile="kde"
+			set_state "EDITOR_CHOICE" "kate" || return 1
+			set_state "INCLUDE_VSCODE" "false" || return 1
+			set_state "CUSTOM_TOOLS" "" || return 1
+			set_state "CUSTOM_CHECKLIST" "" || return 1
+			set_state "CUSTOM_EXTRA" "" || return 1
+			;;
+		dev|custom)
+			desktop_profile="$(select_desktop_profile)" || return 1
+			;;
+		*)
+			return 1
+			;;
+	esac
+
+	if [[ $desktop_profile != "none" ]]; then
+		install_steam="$(select_boolean_value "Steam" "Install Steam gaming support?\n\nTip: this adds multilib and the matching 32-bit graphics userspace when required." "$(state_or_default "INSTALL_STEAM" "false")" "Install Steam" "Skip Steam")" || return 1
+	fi
+
+	if [[ $desktop_profile == "none" ]]; then
+		apply_display_state "$desktop_profile" display_session display_manager greeter || return 1
+	fi
+
+	set_state "INSTALL_PROFILE" "$install_profile" || return 1
+	set_state "DESKTOP_PROFILE" "$desktop_profile" || return 1
+	set_state "INSTALL_STEAM" "$install_steam" || return 1
+	msg "Desktop Saved" "Desktop settings updated.\n\nInstall profile: $(install_profile_label "$install_profile")\nDesktop: $(desktop_profile_label "$desktop_profile")\nSteam: $install_steam"
+	return 0
+}
+
+configure_display_stage() {
+	local desktop_profile=""
+	local display_session=""
+	local display_manager=""
+	local greeter=""
+
+	desktop_profile="$(state_or_default "DESKTOP_PROFILE" "")"
+	if [[ -z $desktop_profile ]]; then
+		msg "Desktop Required" "Open the Desktop screen first so the installer knows whether a graphical session is needed."
+		return 1
+	fi
+
+	if [[ $desktop_profile == "none" ]]; then
+		display_session="wayland"
+		display_manager="none"
+		greeter="none"
+		apply_display_state "$desktop_profile" display_session display_manager greeter || return 1
+		msg "Display Saved" "No graphical display manager will be installed because the desktop profile is set to None."
+		return 0
+	fi
+
+	display_session="$(state_or_default "DISPLAY_SESSION" "wayland")"
+	display_manager="$(state_or_default "DISPLAY_MANAGER" "sddm")"
+	greeter="$(state_or_default "GREETER" "tuigreet")"
+	collect_display_preferences "$desktop_profile" display_session display_manager greeter || return 1
+	apply_display_state "$desktop_profile" display_session display_manager greeter || {
+		error_box "Display Settings" "The chosen display settings were invalid. Please choose supported values only."
+		return 1
+	}
+	msg "Display Saved" "Display settings updated.\n\nSession: $(display_mode_label "$display_session")\nDisplay manager: $(display_manager_label "$display_manager")\nGreeter: $(greeter_frontend_label "$greeter")"
+	return 0
+}
+
+configure_packages_stage() {
+	local install_profile=""
 	local hostname=""
 	local timezone=""
 	local locale=""
@@ -1080,80 +1214,57 @@ configure_install_profile() {
 	local username=""
 	local user_password=""
 	local root_password=""
-	local boot_mode=""
-	local filesystem=""
-	local enable_zram=""
-	local install_profile=""
 	local editor_choice=""
 	local include_vscode="false"
 	local custom_tools=""
 	local custom_checklist=""
 	local custom_extra=""
-	local secure_boot_mode=""
-	local bootloader=""
-	local secure_boot_state=""
-	local desktop_profile=""
-	local display_manager=""
-	local greeter_frontend="none"
-	local display_session=""
-	local enable_luks="false"
-	local luks_password=""
-	local snapshot_provider="none"
-	local install_steam="false"
 	local package_config_warning=""
 
-	refresh_runtime_context || true
+	install_profile="$(state_or_default "INSTALL_PROFILE" "")"
+	if [[ -z $install_profile ]]; then
+		msg "Desktop Required" "Open the Desktop screen first so package defaults match the selected install profile."
+		return 1
+	fi
+
 	if type package_config_warning_text >/dev/null 2>&1; then
 		package_config_warning="$(package_config_warning_text 2>/dev/null || true)"
 		if [[ -n $package_config_warning ]]; then
 			warning_box "Package Config Warning" "$package_config_warning"
 		fi
 	fi
+
 	hostname="$(prompt_required_input "Hostname" "Set the system hostname." "$(state_or_default "HOSTNAME" "archlinux")")" || return 1
 	timezone="$(select_timezone_value "$(state_or_default "TIMEZONE" "Europe/Istanbul")")" || return 1
 	locale="$(select_locale_value "$(state_or_default "LOCALE" "en_US.UTF-8")")" || return 1
 	keymap="$(select_keyboard_layout_value "$(state_or_default "KEYMAP" "us")")" || return 1
 	username="$(prompt_required_input "Username" "Create the primary user account." "$(state_or_default "USERNAME" "archuser")")" || return 1
-	install_profile="$(select_install_profile "$(state_or_default "INSTALL_PROFILE" "daily")")" || return 1
-	filesystem="$(select_filesystem "$(state_or_default "FILESYSTEM" "ext4")")" || return 1
-	enable_luks="$(select_boolean_value "Encryption" "Enable LUKS2 full-disk encryption for the root filesystem?" "$(state_or_default "ENABLE_LUKS" "false")" "Enable LUKS2" "Disable encryption")" || return 1
-	if [[ $enable_luks == "true" ]]; then
-		luks_password="$(prompt_password "LUKS Password")" || return 1
-	fi
-	snapshot_provider="$(select_snapshot_provider "$filesystem" "$install_profile" "$(state_or_default "SNAPSHOT_PROVIDER" "")")" || return 1
-	enable_zram="$(select_zram_preference "$(state_or_default "ENABLE_ZRAM" "$ZRAM")")" || return 1
-	user_password="$(prompt_password "User Password")" || return 1
-	root_password="$(prompt_password "Root Password")" || return 1
-	boot_mode="$(state_or_default "BOOT_MODE" "bios")"
-	bootloader="$(normalize_bootloader "$(state_or_default "BOOTLOADER" "")" "$boot_mode")"
-	secure_boot_state="$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")"
-	secure_boot_mode="$(select_secure_boot_mode "$(state_or_default "SECURE_BOOT_MODE" "disabled")" "$boot_mode" "$secure_boot_state")" || return 1
+	user_password="$(prompt_password_or_keep "User Password" "$INSTALL_USER_PASSWORD")" || return 1
+	root_password="$(prompt_password_or_keep "Root Password" "$INSTALL_ROOT_PASSWORD")" || return 1
 
 	case $install_profile in
 		daily)
-			desktop_profile="kde"
-			display_session="wayland"
-			display_manager="sddm"
-			greeter_frontend="none"
 			editor_choice="kate"
 			include_vscode="false"
+			custom_tools=""
+			custom_checklist=""
+			custom_extra=""
 			;;
 		dev)
-			desktop_profile="$(select_desktop_profile)" || return 1
-			collect_display_preferences "$desktop_profile" display_session display_manager greeter_frontend || return 1
 			editor_choice="$(select_editor_choice "$(state_or_default "EDITOR_CHOICE" "micro")")" || return 1
 			include_vscode="$(select_boolean_value "VS Code" "Include Visual Studio Code in the DEV profile?" "$(state_or_default "INCLUDE_VSCODE" "false")" "Install code" "Skip code")" || return 1
+			custom_tools=""
+			custom_checklist=""
+			custom_extra=""
 			;;
 		custom)
-			desktop_profile="$(select_desktop_profile)" || return 1
-			collect_display_preferences "$desktop_profile" display_session display_manager greeter_frontend || return 1
 			editor_choice="$(select_editor_choice "$(state_or_default "EDITOR_CHOICE" "nano")")" || return 1
 			local _saved_cl
 			_saved_cl="$(state_or_default "CUSTOM_CHECKLIST" "")"
 			_st()     { [[ -z $_saved_cl || " $_saved_cl " == *" $1 "* ]] && printf 'on' || printf 'off'; }
 			_st_off() { [[ -n $_saved_cl && " $_saved_cl " == *" $1 "* ]] && printf 'on' || printf 'off'; }
 			checklist_box "Custom Packages" \
-				"Select the packages to include in your install. All items are pre-selected by default. Use SPACE to toggle." \
+				"Choose the optional packages to add.\n\nTip: leave everything selected for a ready-to-use desktop, or trim it down if you want a smaller install." \
 				22 76 12 \
 				"firefox"   "Web browser"                 "$(_st firefox)"   \
 				"keepassxc" "Password manager"            "$(_st keepassxc)" \
@@ -1162,7 +1273,6 @@ configure_install_profile() {
 			unset -f _st _st_off
 			[[ $DIALOG_STATUS -eq 0 ]] || return 1
 			custom_checklist="$DIALOG_RESULT"
-			# Extract VS Code from checklist — it is handled via include_vscode flag
 			if [[ " $custom_checklist " == *" vscode "* ]]; then
 				include_vscode="true"
 				custom_checklist="${custom_checklist/ vscode/}"
@@ -1196,7 +1306,7 @@ configure_install_profile() {
 					fi
 				done
 				if (( ${#_bad_pkgs[@]} > 0 )); then
-					msg "Invalid Packages" "The following packages were not found in the repositories and will not be added:\n\n  ${_bad_pkgs[*]}\n\nPlease re-enter. Only valid package names are accepted."
+					msg "Invalid Packages" "The following packages were not found in the repositories and will not be added:\n\n  ${_bad_pkgs[*]}\n\nPlease re-enter only valid package names."
 					_extra_saved="$_extra_input"
 					continue
 				fi
@@ -1211,56 +1321,48 @@ configure_install_profile() {
 			;;
 	esac
 
-	if [[ $desktop_profile == "none" ]]; then
-		display_session="wayland"
-		display_manager="none"
-		greeter_frontend="none"
-		install_steam="false"
-	else
-		install_steam="$(select_boolean_value "Steam" "Install Steam gaming support?\n\nThis enables the multilib repository and adds Steam plus matching 32-bit graphics userspace packages when needed." "$(state_or_default "INSTALL_STEAM" "false")" "Install Steam" "Skip Steam")" || return 1
-	fi
-
-	apply_display_state "$desktop_profile" display_session display_manager greeter_frontend || return 1
-
 	set_state "HOSTNAME" "$hostname" || return 1
 	set_state "TIMEZONE" "$timezone" || return 1
 	set_state "LOCALE" "$locale" || return 1
 	set_state "KEYMAP" "$keymap" || return 1
 	set_state "USERNAME" "$username" || return 1
-	set_state "INSTALL_PROFILE" "$install_profile" || return 1
 	set_state "EDITOR_CHOICE" "$editor_choice" || return 1
 	set_state "INCLUDE_VSCODE" "$include_vscode" || return 1
 	set_state "CUSTOM_TOOLS" "$custom_tools" || return 1
 	set_state "CUSTOM_CHECKLIST" "$custom_checklist" || return 1
 	set_state "CUSTOM_EXTRA" "$custom_extra" || return 1
-	set_state "SECURE_BOOT_MODE" "$secure_boot_mode" || return 1
-	set_state "FILESYSTEM" "$filesystem" || return 1
-	set_state "ENABLE_LUKS" "$enable_luks" || return 1
-	set_state "LUKS_MAPPER_NAME" "cryptroot" || return 1
-	set_state "SNAPSHOT_PROVIDER" "$snapshot_provider" || return 1
-	set_state "INSTALL_STEAM" "$install_steam" || return 1
-	set_state "ENABLE_ZRAM" "$enable_zram" || return 1
-	set_state "DESKTOP_PROFILE" "$desktop_profile" || return 1
-	set_state "BOOT_MODE" "$boot_mode" || return 1
-	set_state "BOOTLOADER" "$bootloader" || return 1
 	INSTALL_USER_PASSWORD="$user_password"
 	INSTALL_ROOT_PASSWORD="$root_password"
-	INSTALL_LUKS_PASSWORD="$luks_password"
 	if type sync_install_config_json >/dev/null 2>&1; then
 		sync_install_config_json >/dev/null 2>&1 || true
 	fi
+	msg "Packages Saved" "Identity and package settings updated.\n\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nEditor: $(editor_choice_label "$editor_choice")\nVS Code: $include_vscode"
+	return 0
+}
 
-	msg "Profile Saved" "Installation profile updated.\n\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nInstall profile: $(install_profile_label "$install_profile")\nEditor: $(editor_choice_label "$editor_choice")\nVS Code: $include_vscode\nSteam: $install_steam\nSecure Boot mode: $(secure_boot_mode_label "$secure_boot_mode")\nFilesystem: $filesystem\nEncryption: $enable_luks\nSnapshots: $(snapshot_provider_label "$snapshot_provider")\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay session: $(display_mode_label "$display_session")\nDisplay manager: $(display_manager_label "$display_manager")\nGreeter: $(greeter_frontend_label "$greeter_frontend")\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nBootloader: $(bootloader_label "$bootloader" "$boot_mode")\nUser password: set\nRoot password: set"
+configure_install_profile() {
+	refresh_runtime_context || true
+	configure_partition_stage || return 1
+	configure_desktop_stage || return 1
+	configure_display_stage || return 1
+	configure_packages_stage || return 1
+	msg "Profile Saved" "The staged installer flow has been completed for this session. You can review everything on the Summary screen before starting the install."
 }
 
 validate_install_profile() {
 	local missing=()
 
 	has_state "HOSTNAME" || missing+=("hostname")
+	has_state "INSTALL_SCENARIO" || missing+=("partition layout")
 	has_state "TIMEZONE" || missing+=("timezone")
 	has_state "LOCALE" || missing+=("locale")
 	has_state "KEYMAP" || missing+=("keyboard layout")
 	has_state "USERNAME" || missing+=("user")
+	has_state "INSTALL_PROFILE" || missing+=("install profile")
+	has_state "DESKTOP_PROFILE" || missing+=("desktop selection")
+	has_state "DISPLAY_MANAGER" || missing+=("display manager")
+	has_state "DISPLAY_SESSION" || missing+=("display session")
+	has_state "EDITOR_CHOICE" || missing+=("editor choice")
 	[[ -n $INSTALL_USER_PASSWORD ]] || missing+=("user password")
 	[[ -n $INSTALL_ROOT_PASSWORD ]] || missing+=("root password")
 	if [[ $(state_or_default "ENABLE_LUKS" "false") == "true" && -z ${INSTALL_LUKS_PASSWORD:-} ]]; then
@@ -1327,7 +1429,7 @@ show_state_summary() {
 	keymap="$(state_or_default "KEYMAP" "us")"
 	username="$(state_or_default "USERNAME" "Not configured")"
 	filesystem="$(state_or_default "FILESYSTEM" "ext4")"
-	disk_type="$(normalize_disk_type "$(state_or_default "DISK_TYPE" "unknown")")"
+	disk_type="$(normalize_disk_type "$(state_or_default "DISK_TYPE" "hdd")")"
 	install_scenario="$(state_or_default "INSTALL_SCENARIO" "wipe")"
 	enable_luks="$(state_or_default "ENABLE_LUKS" "false")"
 	snapshot_provider="$(state_or_default "SNAPSHOT_PROVIDER" "none")"
@@ -1439,8 +1541,8 @@ show_disk_menu() {
 		if type emit_menu_entries >/dev/null 2>&1; then
 			mapfile -t dynamic_entries < <(emit_menu_entries disk)
 		fi
-		menu "Disk Setup" "$(installer_context_header)\n\nCurrent disk: $(current_disk_label)" 18 82 $((6 + (${#dynamic_entries[@]} / 2))) \
-			"select" "Discover disks and choose an install target" \
+		menu "Disk" "$(installer_context_header)\n\nCurrent disk: $(current_disk_label)\n\nTip: this screen only chooses the target device. Use the Partition screen next." 18 82 $((6 + (${#dynamic_entries[@]} / 2))) \
+			"select" "Choose the target disk" \
 			"clear" "Clear the saved disk selection" \
 			"${dynamic_entries[@]}" \
 			"back" "Return to the main menu"
@@ -1472,24 +1574,23 @@ show_disk_menu() {
 				if type run_hooks >/dev/null 2>&1; then
 					run_hooks pre_disk || true
 				fi
-				select_disk
+				select_install_target_disk
 				select_status=$?
 				if type run_hooks >/dev/null 2>&1; then
 					run_hooks post_disk || true
 				fi
 				selected_disk="$(get_state "DISK" 2>/dev/null || true)"
 				if [[ $select_status -eq 0 && -n $selected_disk ]]; then
-					set_menu_default_item "config"
+					set_menu_default_item "partition"
 					return 0
 				fi
 				;;
 			clear)
 				unset_state "DISK"
-				unset_state "INSTALL_SCENARIO"
-				unset_state "FORMAT_ROOT"
-				unset_state "FORMAT_EFI"
-				unset_state "EFI_PART"
-				unset_state "ROOT_PART"
+				unset_state "DISK_MODEL"
+				unset_state "DISK_TRANSPORT"
+				unset_state "DISK_TYPE"
+				clear_saved_partition_state
 				msg "Disk Cleared" "The saved disk and partition state were removed."
 				;;
 			back)
@@ -1505,6 +1606,44 @@ show_disk_menu() {
 
 	error_box "Navigation Error" "Disk menu retry limit reached. Returning to the main menu."
 	return 1
+}
+
+show_partition_menu() {
+	local disk=""
+
+	disk="$(state_or_default "DISK" "")"
+	if [[ -z $disk ]]; then
+		msg "Disk Required" "Choose the target disk before opening the Partition screen."
+		return 1
+	fi
+
+	configure_partition_stage || return 1
+	set_menu_default_item "desktop"
+	return 0
+}
+
+main_menu_default_item() {
+	if [[ -z $(state_or_default "DISK" "") ]]; then
+		printf 'disk\n'
+		return 0
+	fi
+	if [[ -z $(state_or_default "INSTALL_SCENARIO" "") ]]; then
+		printf 'partition\n'
+		return 0
+	fi
+	if [[ -z $(state_or_default "INSTALL_PROFILE" "") ]]; then
+		printf 'desktop\n'
+		return 0
+	fi
+	if [[ $(state_or_default "DESKTOP_PROFILE" "") != "none" && -z $(state_or_default "DISPLAY_MANAGER" "") ]]; then
+		printf 'display\n'
+		return 0
+	fi
+	if [[ -z $(state_or_default "HOSTNAME" "") || -z $(state_or_default "USERNAME" "") || -z ${INSTALL_USER_PASSWORD:-} || -z ${INSTALL_ROOT_PASSWORD:-} ]]; then
+		printf 'packages\n'
+		return 0
+	fi
+	printf 'summary\n'
 }
 
 main() {
@@ -1547,16 +1686,17 @@ main() {
 		if type emit_menu_entries >/dev/null 2>&1; then
 			mapfile -t dynamic_entries < <(emit_menu_entries main)
 		fi
-		if [[ $(state_or_default "DISK" "") == "" ]]; then
-			set_menu_default_item "disk"
-		fi
-		menu "Main Menu" "$(installer_context_header)\n\nChoose an installer action." 18 82 $((7 + (${#dynamic_entries[@]} / 2))) \
-			"disk"   "Disk setup and target selection" \
-			"config" "Configure hostname, profile, password, and options" \
-			"install" "Start installation (requires disk and config)" \
-			"state"  "Show saved installer state" \
+		set_menu_default_item "$(main_menu_default_item)"
+		menu "Main Menu" "$(installer_context_header)\n\nFollow the installer from top to bottom for the cleanest setup flow." 20 86 $((10 + (${#dynamic_entries[@]} / 2))) \
+			"disk"      "Choose the target disk" \
+			"partition" "Set filesystem, encryption, and partition strategy" \
+			"desktop"   "Choose install profile, desktop, and Steam" \
+			"display"   "Choose session, display manager, and greeter" \
+			"packages"  "Set hostname, users, editor, and optional apps" \
+			"summary"   "Review the full installation state" \
+			"install"   "Start installation" \
 			"${dynamic_entries[@]}" \
-			"exit"   "Exit the installer"
+			"exit"      "Exit the installer"
 		choice="$DIALOG_RESULT"
 		status=$DIALOG_STATUS
 
@@ -1582,13 +1722,22 @@ main() {
 			disk)
 				show_disk_menu
 				;;
-			config)
-				configure_install_profile || true
+			partition)
+				show_partition_menu || true
+				;;
+			desktop)
+				configure_desktop_stage && set_menu_default_item "display"
+				;;
+			display)
+				configure_display_stage && set_menu_default_item "packages"
+				;;
+			packages)
+				configure_packages_stage && set_menu_default_item "summary"
 				;;
 			install)
 				run_install_flow
 				;;
-			state)
+			summary)
 				show_state_summary
 				;;
 			exit)

@@ -8,6 +8,27 @@ detect_text_matches() {
 	printf '%s\n' "$haystack" | grep -qiE "$pattern" >/dev/null 2>&1
 }
 
+resolve_disk_device() {
+	local device=${1:?block device is required}
+	local device_name=""
+	local parent_name=""
+
+	device_name="$(basename "$device")"
+	if [[ -d /sys/block/$device_name ]]; then
+		printf '%s\n' "$device"
+		return 0
+	fi
+
+	parent_name="$(lsblk -no pkname "$device" 2>/dev/null | head -n 1 || true)"
+	parent_name="${parent_name//[[:space:]]/}"
+	if [[ -n $parent_name && -d /sys/block/$parent_name ]]; then
+		printf '/dev/%s\n' "$parent_name"
+		return 0
+	fi
+
+	printf '%s\n' "$device"
+}
+
 disk_model_value() {
 	local disk=${1:?disk is required}
 	local model=""
@@ -111,8 +132,93 @@ disk_transport_label() {
 		emmc)
 			printf 'eMMC\n'
 			;;
+		vm)
+			printf 'VM\n'
+			;;
 		*)
 			printf 'Unknown bus\n'
+			;;
+	esac
+}
+
+disk_rotational_value() {
+	local disk=${1:?disk is required}
+	local resolved_disk=""
+	local disk_name=""
+	local rotational_path=""
+	local rotational_value=""
+
+	resolved_disk="$(resolve_disk_device "$disk")"
+	disk_name="$(basename "$resolved_disk")"
+	rotational_path="/sys/block/$disk_name/queue/rotational"
+
+	if [[ -r $rotational_path ]]; then
+		read -r rotational_value < "$rotational_path" || true
+		rotational_value="${rotational_value//[[:space:]]/}"
+		if [[ $rotational_value == "0" || $rotational_value == "1" ]]; then
+			printf '%s\n' "$rotational_value"
+			return 0
+		fi
+	fi
+
+	rotational_value="$(lsblk -dn -o ROTA "$resolved_disk" 2>/dev/null | head -n 1 || true)"
+	rotational_value="${rotational_value//[[:space:]]/}"
+	if [[ $rotational_value == "0" || $rotational_value == "1" ]]; then
+		printf '%s\n' "$rotational_value"
+		return 0
+	fi
+
+	return 1
+}
+
+detect_disk_type() {
+	local disk=${1:?disk is required}
+	local resolved_disk=""
+	local disk_name=""
+	local transport=""
+	local model=""
+	local rotational_value=""
+
+	resolved_disk="$(resolve_disk_device "$disk")"
+	disk_name="$(basename "$resolved_disk")"
+	transport="$(disk_transport_value "$resolved_disk" 2>/dev/null || printf 'unknown')"
+	model="$(disk_model_value "$resolved_disk" 2>/dev/null || printf '')"
+
+	if [[ $disk_name == nvme* || $transport == "nvme" ]]; then
+		printf 'nvme\n'
+		return 0
+	fi
+
+	if [[ $transport == "virtio" ]] || detect_text_matches "$disk_name $model" 'vmware|virtualbox|qemu|kvm|hyper-v|hyperv|virtio'; then
+		printf 'vm\n'
+		return 0
+	fi
+
+	if rotational_value="$(disk_rotational_value "$resolved_disk" 2>/dev/null || true)"; then
+		case $rotational_value in
+			0)
+				printf 'ssd\n'
+				return 0
+				;;
+			1)
+				printf 'hdd\n'
+				return 0
+				;;
+		esac
+	fi
+
+	case $transport in
+		emmc)
+			printf 'ssd\n'
+			;;
+		nvme)
+			printf 'nvme\n'
+			;;
+		virtio)
+			printf 'vm\n'
+			;;
+		*)
+			printf 'hdd\n'
 			;;
 	esac
 }

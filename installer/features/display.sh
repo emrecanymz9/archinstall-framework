@@ -243,12 +243,15 @@ apply_display_state() {
 		greeter_ref="none"
 	else
 		resolved_session="$(normalize_display_session "$session_ref")"
+		if [[ $resolved_session != "$session_ref" && $session_ref != "wayland" && $session_ref != "x11" ]]; then
+			return 1
+		fi
 		session_ref="$resolved_session"
 		case $manager_ref in
 			sddm|greetd)
 				;;
 			*)
-				manager_ref="sddm"
+				return 1
 				;;
 		esac
 		if [[ $manager_ref == "greetd" ]]; then
@@ -256,7 +259,7 @@ apply_display_state() {
 				tuigreet|qtgreet)
 					;;
 				*)
-					greeter_ref="tuigreet"
+					return 1
 					;;
 			esac
 		else

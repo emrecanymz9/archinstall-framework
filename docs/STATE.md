@@ -4,7 +4,7 @@
 
 `installer/state.sh` is the single source of truth.
 
-All install decisions must be represented in persisted state before pipeline execution.
+Every install decision must exist in persisted state before the pipeline starts.
 
 ## Core Runtime Keys
 
@@ -30,6 +30,13 @@ All install decisions must be represented in persisted state before pipeline exe
 - `ROOT_MAPPER`
 - `LUKS_PART_UUID`
 
+`DISK_TYPE` is canonicalized to one of:
+
+- `hdd`
+- `ssd`
+- `nvme`
+- `vm`
+
 ## Feature Keys
 
 - `FILESYSTEM`
@@ -52,7 +59,12 @@ All install decisions must be represented in persisted state before pipeline exe
 - `EDITOR_CHOICE`
 - `INCLUDE_VSCODE`
 - `CUSTOM_TOOLS`
+- `CUSTOM_CHECKLIST`
+- `CUSTOM_EXTRA`
 
-## Compatibility
+## State Rules
 
-Older compatibility aliases may still be readable from state, but new code must write canonical keys only.
+- Disk selection and partition strategy are separate states.
+- Guided partitioning must write `INSTALL_SCENARIO` before installation can begin.
+- Display values must remain explicit; invalid values should be rejected rather than auto-corrected during apply.
+- New code should only read and write canonical keys.
