@@ -70,17 +70,13 @@ ensure_greeter_user() {
 write_session_launcher() {
 	install -d -m 0755 /usr/local/bin
 	cat > /usr/local/bin/archinstall-start-session <<'EOT'
-#!/usr/bin/env bash
-set -euo pipefail
-
-case ${1:-wayland} in
-	x11)
-		exec dbus-run-session startplasma-x11
-		;;
-	wayland|*)
-		exec dbus-run-session startplasma-wayland
-		;;
-esac
+#!/bin/bash
+if [[ ${1:-wayland} == "x11" ]]; then
+	export XDG_SESSION_TYPE=x11
+	exec startplasma-x11
+fi
+export XDG_SESSION_TYPE=wayland
+exec startplasma-wayland
 EOT
 	chmod 0755 /usr/local/bin/archinstall-start-session
 }

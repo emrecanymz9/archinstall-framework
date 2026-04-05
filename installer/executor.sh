@@ -59,6 +59,8 @@ safe_source_module "$SCRIPT_DIR/core/hardware.sh" || true
 safe_source_module "$SCRIPT_DIR/core/desktop.sh" || true
 # shellcheck source=installer/postinstall/display-manager.sh
 safe_source_module "$SCRIPT_DIR/postinstall/display-manager.sh" || true
+# shellcheck source=installer/postinstall/packages.sh
+safe_source_module "$SCRIPT_DIR/postinstall/packages.sh" || true
 # shellcheck source=installer/features/secureboot.sh
 safe_source_module "$SCRIPT_DIR/features/secureboot.sh" || true
 # shellcheck source=installer/features/display.sh
@@ -1208,6 +1210,7 @@ if [[ \$TARGET_SECURE_BOOT_MODE == "disabled" || \$BOOT_MODE != "uefi" ]]; then
 	mkinitcpio -P || true
 fi
 
+$(postinstall_packages_chroot_snippet)
 
 $(display_manager_chroot_snippet "$(get_state "DESKTOP_PROFILE" 2>/dev/null || printf 'none')")
 
