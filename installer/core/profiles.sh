@@ -239,26 +239,6 @@ select_install_profile() {
 	esac
 }
 
-select_editor_choice() {
-	local current_editor=${1:-nano}
-
-	menu "Editors" "Choose the preferred editor package.\n\nCurrent: $(editor_choice_label "$current_editor")" 16 70 5 \
-		"nano" "Small and familiar terminal editor" \
-		"micro" "Friendly terminal editor with modern defaults" \
-		"vim" "Modal editor for keyboard-driven workflows" \
-		"kate" "KDE graphical editor"
-
-	case $DIALOG_STATUS in
-		0)
-			printf '%s\n' "$DIALOG_RESULT"
-			return 0
-			;;
-		*)
-			return 1
-			;;
-	esac
-}
-
 profile_default_desktop_profile() {
 	case ${1:-daily} in
 		daily)
@@ -356,6 +336,11 @@ get_user_packages() {
 		dev)
 			append_csv_packages "$(editor_packages_csv "$editor_choice")" package_ref
 			append_csv_packages "$(profile_config_csv "ARCHINSTALL_USER_PACKAGES" "dev" "fastfetch")" package_ref
+			if [[ -n $custom_tools ]]; then
+				local _normalised_custom="${custom_tools//  / }"
+				_normalised_custom="${_normalised_custom// /,}"
+				append_csv_packages "$_normalised_custom" package_ref
+			fi
 			if [[ $include_vscode == "true" ]]; then
 				append_csv_packages "$(config_csv_or_default "ARCHINSTALL_VSCODE_PACKAGES" "code")" package_ref
 			fi

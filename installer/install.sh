@@ -1127,6 +1127,157 @@ configure_display_stage() {
 	return 0
 }
 
+package_checklist_has_tag() {
+	local selection=${1:-}
+	local tag=${2:-}
+
+	[[ -n $tag && " $selection " == *" $tag "* ]]
+}
+
+package_checklist_state() {
+	local saved_selection=${1:-}
+	local tag=${2:?tag is required}
+	local default_enabled=${3:-true}
+
+	if [[ -z $saved_selection ]]; then
+		if [[ $default_enabled == "true" ]]; then
+			printf 'on\n'
+		else
+			printf 'off\n'
+		fi
+		return 0
+	fi
+
+	if package_checklist_has_tag "$saved_selection" "$tag"; then
+		printf 'on\n'
+	else
+		printf 'off\n'
+	fi
+}
+
+select_package_bundle() {
+	local install_profile=${1:?install profile is required}
+	local default_editor=${2:?default editor is required}
+	local current_editor=${3:-$default_editor}
+	local current_include_vscode=${4:-false}
+	local current_checklist=${5:-}
+	local current_extra=${6:-}
+	local -n editor_choice_ref=${7:?editor choice reference is required}
+	local -n include_vscode_ref=${8:?include vscode reference is required}
+	local -n custom_checklist_ref=${9:?custom checklist reference is required}
+	local -n custom_extra_ref=${10:?custom extra reference is required}
+	local -n custom_tools_ref=${11:?custom tools reference is required}
+	local saved_selection=""
+	local checklist_prompt=""
+	local primary_editor=""
+	local manual_requested="false"
+	local selected_tag=""
+	local -a selected_packages=()
+
+	saved_selection="$current_checklist"
+	if [[ -z $saved_selection ]]; then
+		saved_selection="editor-nano editor-micro editor-vim editor-kate"
+		case $install_profile in
+			dev)
+				saved_selection+=" fastfetch vscode"
+				;;
+			custom)
+				saved_selection+=" firefox keepassxc fastfetch vscode"
+				;;
+		esac
+	else
+		if [[ -n $current_editor && $saved_selection != *"editor-"* ]]; then
+			saved_selection+=" editor-$current_editor"
+		fi
+		if [[ $current_include_vscode == "true" ]] && ! package_checklist_has_tag "$saved_selection" "vscode"; then
+			saved_selection+=" vscode"
+		fi
+		if [[ -n $current_extra ]] && ! package_checklist_has_tag "$saved_selection" "manual-packages"; then
+			saved_selection+=" manual-packages"
+		fi
+	fi
+
+	checklist_prompt="Choose the packages to install.\n\nConstraints:\n- all checked items will be installed\n- editor packages are regular checklist items\n- select 'Add manual packages' to enter extra package names after this screen\n\nExample: keep the defaults for a ready-to-use system"
+
+	case $install_profile in
+		dev)
+			checklist_box "Package Selection" "$checklist_prompt" 22 80 12 \
+				"editor-nano" "Editor: nano" "$(package_checklist_state "$saved_selection" "editor-nano" true)" \
+				"editor-micro" "Editor: micro" "$(package_checklist_state "$saved_selection" "editor-micro" true)" \
+				"editor-vim" "Editor: vim" "$(package_checklist_state "$saved_selection" "editor-vim" true)" \
+				"editor-kate" "Editor: kate" "$(package_checklist_state "$saved_selection" "editor-kate" true)" \
+				"fastfetch" "System info tool" "$(package_checklist_state "$saved_selection" "fastfetch" true)" \
+				"vscode" "Visual Studio Code (code)" "$(package_checklist_state "$saved_selection" "vscode" true)" \
+				"manual-packages" "Add manual packages" "$(package_checklist_state "$saved_selection" "manual-packages" false)"
+				|| return 1
+			;;
+		custom)
+			checklist_box "Package Selection" "$checklist_prompt" 22 80 12 \
+				"editor-nano" "Editor: nano" "$(package_checklist_state "$saved_selection" "editor-nano" true)" \
+				"editor-micro" "Editor: micro" "$(package_checklist_state "$saved_selection" "editor-micro" true)" \
+				"editor-vim" "Editor: vim" "$(package_checklist_state "$saved_selection" "editor-vim" true)" \
+				"editor-kate" "Editor: kate" "$(package_checklist_state "$saved_selection" "editor-kate" true)" \
+				"firefox" "Web browser" "$(package_checklist_state "$saved_selection" "firefox" true)" \
+				"keepassxc" "Password manager" "$(package_checklist_state "$saved_selection" "keepassxc" true)" \
+				"fastfetch" "System info tool" "$(package_checklist_state "$saved_selection" "fastfetch" true)" \
+				"vscode" "Visual Studio Code (code)" "$(package_checklist_state "$saved_selection" "vscode" true)" \
+				"manual-packages" "Add manual packages" "$(package_checklist_state "$saved_selection" "manual-packages" false)"
+				|| return 1
+			;;
+		*)
+			return 1
+			;;
+	esac
+
+	custom_checklist_ref="$DIALOG_RESULT"
+	include_vscode_ref="false"
+	custom_extra_ref=""
+	custom_tools_ref=""
+	selected_packages=()
+
+	if package_checklist_has_tag "$custom_checklist_ref" "vscode"; then
+		include_vscode_ref="true"
+	fi
+	if package_checklist_has_tag "$custom_checklist_ref" "manual-packages"; then
+		manual_requested="true"
+	fi
+
+	primary_editor="$default_editor"
+	if package_checklist_has_tag "$custom_checklist_ref" "editor-$current_editor"; then
+		primary_editor="$current_editor"
+	else
+		for selected_tag in nano micro vim kate; do
+			if package_checklist_has_tag "$custom_checklist_ref" "editor-$selected_tag"; then
+				primary_editor="$selected_tag"
+				break
+			fi
+		done
+	fi
+	editor_choice_ref="$primary_editor"
+
+	for selected_tag in nano micro vim kate; do
+		if package_checklist_has_tag "$custom_checklist_ref" "editor-$selected_tag"; then
+			selected_packages+=("$selected_tag")
+		fi
+	done
+	for selected_tag in firefox keepassxc fastfetch; do
+		if package_checklist_has_tag "$custom_checklist_ref" "$selected_tag"; then
+			selected_packages+=("$selected_tag")
+		fi
+	done
+
+	if [[ $manual_requested == "true" ]]; then
+		custom_extra_ref="$(prompt_manual_packages "Manual Packages" "$current_extra")" || return 1
+		if [[ -z $custom_extra_ref ]]; then
+			custom_checklist_ref="${custom_checklist_ref/manual-packages/}"
+			custom_checklist_ref="$(printf '%s\n' "$custom_checklist_ref" | xargs 2>/dev/null || printf '')"
+		fi
+	fi
+
+	custom_tools_ref="${selected_packages[*]}${custom_extra_ref:+ ${custom_extra_ref}}"
+	custom_tools_ref="$(printf '%s\n' "$custom_tools_ref" | xargs 2>/dev/null || printf '%s' "$custom_tools_ref")"
+}
+
 configure_packages_stage() {
 	local install_profile=""
 	local hostname=""
@@ -1173,75 +1324,24 @@ configure_packages_stage() {
 			custom_extra=""
 			;;
 		dev)
-			editor_choice="$(select_editor_choice "$(state_or_default "EDITOR_CHOICE" "micro")")" || return 1
-			include_vscode="$(select_boolean_value "VS Code" "Include Visual Studio Code in the DEV profile?" "$(state_or_default "INCLUDE_VSCODE" "false")" "Install code" "Skip code")" || return 1
-			custom_tools=""
-			custom_checklist=""
-			custom_extra=""
+			select_package_bundle \
+				"$install_profile" \
+				"micro" \
+				"$(state_or_default "EDITOR_CHOICE" "micro")" \
+				"$(state_or_default "INCLUDE_VSCODE" "false")" \
+				"$(state_or_default "CUSTOM_CHECKLIST" "")" \
+				"$(state_or_default "CUSTOM_EXTRA" "")" \
+				editor_choice include_vscode custom_checklist custom_extra custom_tools || return 1
 			;;
 		custom)
-			editor_choice="$(select_editor_choice "$(state_or_default "EDITOR_CHOICE" "nano")")" || return 1
-			local _saved_cl
-			_saved_cl="$(state_or_default "CUSTOM_CHECKLIST" "")"
-			_st()     { [[ -z $_saved_cl || " $_saved_cl " == *" $1 "* ]] && printf 'on' || printf 'off'; }
-			_st_off() { [[ -n $_saved_cl && " $_saved_cl " == *" $1 "* ]] && printf 'on' || printf 'off'; }
-			checklist_box "Custom Packages" \
-				"Choose the optional packages to add.\n\nExample: keep all selections for a ready-to-use desktop.\nConstraint: manual package entry happens only once after this screen." \
-				22 76 12 \
-				"firefox"   "Web browser"                 "$(_st firefox)"   \
-				"keepassxc" "Password manager"            "$(_st keepassxc)" \
-				"fastfetch" "System info tool"            "$(_st fastfetch)" \
-				"vscode"    "Visual Studio Code (code)"  "$(_st_off vscode)"
-			unset -f _st _st_off
-			[[ $DIALOG_STATUS -eq 0 ]] || return 1
-			custom_checklist="$DIALOG_RESULT"
-			if [[ " $custom_checklist " == *" vscode "* ]]; then
-				include_vscode="true"
-				custom_checklist="${custom_checklist/ vscode/}"
-				custom_checklist="${custom_checklist//vscode /}"
-				custom_checklist="${custom_checklist//vscode/}"
-			else
-				include_vscode="false"
-			fi
-			local _extra_saved
-			local _extra_input=""
-			local _extra_error=""
-			local -a _extra_arr=() _bad_pkgs=() _good_pkgs=()
-			_extra_saved="$(state_or_default "CUSTOM_EXTRA" "")"
-			while true; do
-				local _extra_prompt="Enter extra packages to install beyond the checklist (space-separated).\n\nExample: htop btop jq\nConstraint: packages must exist in the enabled repositories. Leave blank for none."
-				if [[ -n $_extra_error ]]; then
-					_extra_prompt+="\n\nError: $_extra_error"
-				fi
-				input_box "Additional Packages" "$_extra_prompt" "$_extra_saved" 12 76
-				[[ $DIALOG_STATUS -eq 0 ]] || return 1
-				_extra_input="$DIALOG_RESULT"
-				if [[ -z $_extra_input ]]; then
-					custom_extra=""
-					break
-				fi
-				_extra_arr=()
-				_bad_pkgs=()
-				_good_pkgs=()
-				read -r -a _extra_arr <<< "$_extra_input"
-				local _pkg
-				for _pkg in "${_extra_arr[@]}"; do
-					[[ -n $_pkg ]] || continue
-					if pacman -Sp "$_pkg" >/dev/null 2>&1; then
-						_good_pkgs+=("$_pkg")
-					else
-						_bad_pkgs+=("$_pkg")
-					fi
-				done
-				if (( ${#_bad_pkgs[@]} > 0 )); then
-					_extra_error="Packages not found: ${_bad_pkgs[*]}"
-					_extra_saved="$_extra_input"
-					continue
-				fi
-				custom_extra="${_good_pkgs[*]}"
-				break
-			done
-			custom_tools="${custom_checklist}${custom_extra:+ $custom_extra}"
+			select_package_bundle \
+				"$install_profile" \
+				"nano" \
+				"$(state_or_default "EDITOR_CHOICE" "nano")" \
+				"$(state_or_default "INCLUDE_VSCODE" "false")" \
+				"$(state_or_default "CUSTOM_CHECKLIST" "")" \
+				"$(state_or_default "CUSTOM_EXTRA" "")" \
+				editor_choice include_vscode custom_checklist custom_extra custom_tools || return 1
 			;;
 		*)
 			return 1
@@ -1265,7 +1365,7 @@ configure_packages_stage() {
 	if type sync_install_config_json >/dev/null 2>&1; then
 		sync_install_config_json >/dev/null 2>&1 || true
 	fi
-	msg "Packages Saved" "Identity and package settings updated.\n\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nUser password: $(password_mode_label "$INSTALL_USER_PASSWORD_MODE")\nRoot password: $(password_mode_label "$INSTALL_ROOT_PASSWORD_MODE")\nEditor: $(editor_choice_label "$editor_choice")\nVS Code: $include_vscode"
+	msg "Packages Saved" "Identity and package settings updated.\n\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nUser password: $(password_mode_label "$INSTALL_USER_PASSWORD_MODE")\nRoot password: $(password_mode_label "$INSTALL_ROOT_PASSWORD_MODE")\nPrimary editor: $(editor_choice_label "$editor_choice")\nVS Code: $include_vscode\nSelected packages: ${custom_tools:-none}"
 	return 0
 }
 

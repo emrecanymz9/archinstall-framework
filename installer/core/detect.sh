@@ -29,6 +29,122 @@ resolve_disk_device() {
 	printf '%s\n' "$device"
 }
 
+os_probe_candidate_filesystem() {
+	case ${1:-} in
+		ext2|ext3|ext4|btrfs|xfs|f2fs|vfat|fat|fat16|fat32|msdos)
+			return 0
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+read_os_release_field() {
+	local os_release_path=${1:?os-release path is required}
+	local field_name=${2:?field name is required}
+	local line=""
+	local value=""
+
+	[[ -r $os_release_path ]] || return 1
+	while IFS= read -r line; do
+		case $line in
+			"$field_name="*)
+				value=${line#"$field_name="}
+				value=${value%\"}
+				value=${value#\"}
+				value=${value%\'}
+				value=${value#\'}
+				printf '%s\n' "$value"
+				return 0
+				;;
+		esac
+	done < "$os_release_path"
+
+	return 1
+}
+
+partition_probe_mountpoint() {
+	local partition=${1:?partition is required}
+	local filesystem=${2:-}
+	local existing_mount=""
+	local temp_mount=""
+
+	os_probe_candidate_filesystem "$filesystem" || return 1
+	existing_mount="$(findmnt -rn -S "$partition" -o TARGET 2>/dev/null | head -n 1 || true)"
+	if [[ -n $existing_mount && -d $existing_mount ]]; then
+		printf '%s\texisting\n' "$existing_mount"
+		return 0
+	fi
+
+	temp_mount="$(mktemp -d /tmp/archinstall-os-probe.XXXXXX 2>/dev/null || true)"
+	if [[ -z $temp_mount ]]; then
+		return 1
+	fi
+	if ! mount -o ro "$partition" "$temp_mount" >/dev/null 2>&1; then
+		rmdir "$temp_mount" >/dev/null 2>&1 || true
+		return 1
+	fi
+
+	printf '%s\ttemporary\n' "$temp_mount"
+}
+
+cleanup_partition_probe_mountpoint() {
+	local mountpoint=${1:-}
+	local mount_mode=${2:-}
+
+	if [[ $mount_mode == "temporary" && -n $mountpoint ]]; then
+		umount "$mountpoint" >/dev/null 2>&1 || true
+		rmdir "$mountpoint" >/dev/null 2>&1 || true
+	fi
+}
+
+detect_partition_installed_systems() {
+	local partition=${1:?partition is required}
+	local filesystem=${2:-}
+	local mount_info=""
+	local mountpoint=""
+	local mount_mode=""
+	local os_name=""
+
+	mount_info="$(partition_probe_mountpoint "$partition" "$filesystem" 2>/dev/null || true)"
+	[[ -n $mount_info ]] || return 0
+	IFS=$'\t' read -r mountpoint mount_mode <<< "$mount_info"
+
+	if [[ -f $mountpoint/etc/os-release ]]; then
+		os_name="$(read_os_release_field "$mountpoint/etc/os-release" PRETTY_NAME 2>/dev/null || true)"
+		if [[ -z $os_name ]]; then
+			os_name="$(read_os_release_field "$mountpoint/etc/os-release" NAME 2>/dev/null || true)"
+		fi
+		printf '%s\n' "${os_name:-Unknown Linux} (${filesystem:-unknown})"
+	fi
+
+	if [[ -f $mountpoint/EFI/Microsoft/Boot/bootmgfw.efi ]]; then
+		printf '%s\n' 'Windows (EFI)'
+	fi
+
+	cleanup_partition_probe_mountpoint "$mountpoint" "$mount_mode"
+}
+
+detect_disk_installed_systems() {
+	local disk=${1:?disk is required}
+	local partition=""
+	local part_type=""
+	local filesystem=""
+	local entry=""
+	local -a entries=()
+
+	while read -r partition part_type filesystem; do
+		[[ $part_type == "part" ]] || continue
+		while IFS= read -r entry; do
+			[[ -n $entry ]] || continue
+			entries+=("$entry")
+		done < <(detect_partition_installed_systems "$partition" "$filesystem")
+	done < <(lsblk -lnpo NAME,TYPE,FSTYPE "$disk" 2>/dev/null)
+
+	printf '%s\n' "${entries[@]}"
+}
+
 disk_model_value() {
 	local disk=${1:?disk is required}
 	local model=""
@@ -375,36 +491,20 @@ detect_hardware_profile_json() {
 
 detect_disk_os_presence() {
 	local disk=${1:?disk is required}
-	local has_windows="false"
-	local has_linux="false"
-	local fstype=""
-	local partlabel=""
+	local entry=""
+	local -a entries=()
 
-	while IFS=$'\t' read -r _ _ fstype partlabel; do
-		case ${fstype,,}:${partlabel,,} in
-			ntfs:*|*:*windows*|*:*microsoft*)
-				has_windows="true"
-				;;
-			ext4:*|btrfs:*|xfs:*|f2fs:*|swap:*|*:*linux*)
-				has_linux="true"
-				;;
-		esac
-	done < <(lsblk -lnpo NAME,SIZE,FSTYPE,PARTLABEL "$disk" 2>/dev/null)
+	while IFS= read -r entry; do
+		[[ -n $entry ]] || continue
+		entries+=("$entry")
+	done < <(detect_disk_installed_systems "$disk")
 
-	if [[ $has_windows == "true" && $has_linux == "true" ]]; then
-		printf 'Windows + Linux detected\n'
-		return 0
-	fi
-	if [[ $has_windows == "true" ]]; then
-		printf 'Windows detected\n'
-		return 0
-	fi
-	if [[ $has_linux == "true" ]]; then
-		printf 'Linux detected\n'
+	if [[ ${#entries[@]} -eq 0 ]]; then
+		printf 'No installed systems detected\n'
 		return 0
 	fi
 
-	printf 'No OS signatures detected\n'
+	printf '%d OS detected: %s\n' "${#entries[@]}" "$(printf '%s, ' "${entries[@]}" | sed 's/, $//')"
 }
 
 detect_network_status() {

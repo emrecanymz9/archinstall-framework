@@ -54,13 +54,21 @@ set_account_password() {
 	local account_name=${1:?account name is required}
 	local account_password=${2-}
 	local status=0
+	local stderr_log="/tmp/archinstall-password-${account_name}.stderr"
 
 	echo "[DEBUG] Preparing password operation for account: $account_name"
 	if [[ -n $account_password ]]; then
 		echo "[DEBUG] Applying password with chpasswd for account: $account_name"
-		echo "$account_name:$account_password" | chpasswd
+		: > "$stderr_log"
+		echo "$account_name:$account_password" | chpasswd 2>"$stderr_log"
 		status=$?
 		echo "[DEBUG] chpasswd exit code for $account_name: $status"
+		if [[ -s $stderr_log ]]; then
+			while IFS= read -r line; do
+				echo "[DEBUG] chpasswd stderr ($account_name): $line"
+			done < "$stderr_log"
+		fi
+		rm -f "$stderr_log"
 		if [[ $status -ne 0 ]]; then
 			echo "[FAIL] chpasswd failed for account: $account_name"
 			return "$status"
@@ -69,9 +77,16 @@ set_account_password() {
 		return 0
 	fi
 
-	echo "[DEBUG] No password provided for account: $account_name; clearing password entry"
+		: > "$stderr_log"
+		passwd -d "$account_name" 2>"$stderr_log"
 	passwd -d "$account_name"
 	status=$?
+		if [[ -s $stderr_log ]]; then
+			while IFS= read -r line; do
+				echo "[DEBUG] passwd stderr ($account_name): $line"
+			done < "$stderr_log"
+		fi
+		rm -f "$stderr_log"
 	echo "[DEBUG] passwd -d exit code for $account_name: $status"
 	if [[ $status -ne 0 ]]; then
 		echo "[FAIL] passwd -d failed for account: $account_name"
@@ -81,19 +96,32 @@ set_account_password() {
 	return 0
 }
 
-log_chroot_step "Creating user accounts and setting passwords"
-if ! id -u "$TARGET_USERNAME" >/dev/null 2>&1; then
-	useradd -m -G wheel -s /bin/bash "$TARGET_USERNAME"
-fi
-if ! id -u "$TARGET_USERNAME" >/dev/null 2>&1; then
-	echo "[FAIL] useradd did not create user '$TARGET_USERNAME'"
-	exit 1
+
+	log_chroot_step "Ensuring password packages are installed"
+	if ! install_packages_if_missing shadow pambase; then
+		echo "[FAIL] Could not install required password packages: shadow pambase"
+		exit 1
+	fi
 fi
 
+	if command -v getent >/dev/null 2>&1; then
+		id shadow >/dev/null 2>&1 || true
+		if ! getent group shadow >/dev/null 2>&1; then
+			echo "[WARN] group 'shadow' does not exist; creating it"
+			if ! groupadd -r shadow; then
+				echo "[FAIL] Could not create required group: shadow"
+				exit 1
+			fi
+		fi
+	fi
 echo "[DEBUG] Validating /etc/shadow before password operations"
 if [[ ! -f /etc/shadow ]]; then
 	echo "[FAIL] /etc/shadow is missing inside the target chroot"
 	exit 1
+	echo "[DEBUG] id shadow output:"
+	id shadow 2>&1 || true
+	echo "[DEBUG] ls -l /etc/shadow output before normalization:"
+	ls -l /etc/shadow 2>&1 || true
 fi
 if ! chown root:shadow /etc/shadow; then
 	echo "[FAIL] Could not set owner root:shadow on /etc/shadow"
@@ -110,8 +138,23 @@ if ! id -u root >/dev/null 2>&1; then
 	exit 1
 fi
 
-echo "[DEBUG] Password execution order: user creation -> root password -> user password"
+echo "[DEBUG] ls -l /etc/shadow output after normalization:"
+ls -l /etc/shadow 2>&1 || true
+
+echo "[DEBUG] Password execution order: root password -> user creation -> user password"
 set_account_password root "$TARGET_ROOT_PASSWORD" || exit 1
+
+if ! id -u "$TARGET_USERNAME" >/dev/null 2>&1; then
+	echo "[DEBUG] Creating user account: $TARGET_USERNAME"
+	if ! useradd -m -G wheel -s /bin/bash "$TARGET_USERNAME"; then
+		echo "[FAIL] useradd failed for '$TARGET_USERNAME'"
+		exit 1
+	fi
+fi
+if ! id -u "$TARGET_USERNAME" >/dev/null 2>&1; then
+	echo "[FAIL] useradd did not create user '$TARGET_USERNAME'"
+	exit 1
+fi
 set_account_password "$TARGET_USERNAME" "$TARGET_USER_PASSWORD" || exit 1
 
 log_chroot_step "Configuring sudo permissions"

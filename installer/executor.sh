@@ -595,7 +595,7 @@ run_step_with_retry() {
 
 is_core_pacstrap_package() {
 	case ${1:-} in
-		base|linux|linux-firmware|mkinitcpio|sudo|networkmanager)
+		base|linux|linux-firmware|mkinitcpio|sudo|networkmanager|shadow|pambase)
 			return 0
 			;;
 		*)
@@ -624,7 +624,7 @@ filter_valid_packages() {
 }
 
 run_pacstrap_install() {
-	local -a core_packages=(base linux linux-firmware mkinitcpio sudo networkmanager)
+	local -a core_packages=(base linux linux-firmware mkinitcpio sudo networkmanager shadow pambase)
 	local -a requested_packages=("$@")
 	local -a optional_packages=()
 	local -a validated_optional_packages=()
@@ -1154,12 +1154,6 @@ log_chroot_step() {
 	echo "[STEP] \$1"
 }
 
-$(postinstall_finalize_chroot_snippet)
-
-$(postinstall_services_chroot_snippet)
-
-$(bootloader_common_chroot_snippet)
-
 build_pacman_opts_array() {
 	local -a opts=()
 	read -r -a opts <<< "\${PACMAN_OPTS:---noconfirm --needed}"
@@ -1189,6 +1183,12 @@ install_packages_if_missing() {
 	pacman -S "\${pacman_opts[@]}" "\${missing[@]}"
 }
 
+$(postinstall_finalize_chroot_snippet)
+
+$(postinstall_services_chroot_snippet)
+
+$(bootloader_common_chroot_snippet)
+
 $(steam_chroot_setup_snippet "$(get_state "INSTALL_STEAM" 2>/dev/null || printf 'false')")
 
 if [[ \$TARGET_ENABLE_ZRAM == "true" ]]; then
@@ -1215,9 +1215,9 @@ if type emit_chroot_snippets >/dev/null 2>&1; then
 	emit_chroot_snippets
 fi
 
-run_postinstall_service_enablement
-
 $(emit_bootloader_chroot_snippet "$(normalize_bootloader "$(get_state "BOOTLOADER" 2>/dev/null || printf '')" "$boot_mode")" "$boot_mode")
+
+run_postinstall_service_enablement
 
 $(secure_boot_chroot_snippet)
 $(postinstall_cleanup_chroot_snippet)

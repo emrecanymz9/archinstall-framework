@@ -164,14 +164,19 @@ disk_label_value() {
 disk_alerts() {
 	local disk=${1:?disk is required}
 	local layout_state=""
-	local has_windows="false"
-	local has_linux="false"
-	local fstype=""
-	local partlabel=""
-	local row=""
+	local entry=""
 	local alerts=()
 
 	layout_state="$(disk_layout_state "$disk")"
+	while IFS= read -r entry; do
+		[[ -n $entry ]] || continue
+		alerts+=("$entry")
+	done < <(detect_disk_installed_systems "$disk")
+	if [[ ${#alerts[@]} -gt 0 ]]; then
+		printf '%d OS detected: %s\n' "${#alerts[@]}" "$(printf '%s, ' "${alerts[@]}" | sed 's/, $//')"
+		return 0
+	fi
+
 	case $layout_state in
 		empty)
 			printf 'No partition table detected (new disk)\n'
@@ -182,26 +187,33 @@ disk_alerts() {
 			return 0
 			;;
 	esac
+	printf 'No installed systems detected\n'
+}
 
-	while IFS=$'\t' read -r _ _ fstype partlabel; do
-		case ${fstype,,}:${partlabel,,} in
-			ntfs:*|*:*windows*|*:*microsoft*)
-				has_windows="true"
-				;;
-			ext4:*|btrfs:*|xfs:*|f2fs:*|swap:*|*:*linux*)
-				has_linux="true"
-				;;
-		esac
-	done < <(lsblk -lnpo NAME,SIZE,FSTYPE,PARTLABEL "$disk" 2>/dev/null)
+disk_detected_systems_report() {
+	local disk=${1:?disk is required}
+	local entry=""
+	local -a report_lines=()
 
-	[[ $has_windows == "true" ]] && alerts+=("Windows detected")
-	[[ $has_linux == "true" ]] && alerts+=("Linux partitions detected")
-	if [[ ${#alerts[@]} -eq 0 ]]; then
-		printf 'No OS signatures detected\n'
+	while IFS= read -r entry; do
+		[[ -n $entry ]] || continue
+		report_lines+=("- $entry")
+	done < <(detect_disk_installed_systems "$disk")
+
+	if [[ ${#report_lines[@]} -eq 0 ]]; then
+		printf '%s\n' '- No installed systems detected'
 		return 0
 	fi
 
-	printf '%s\n' "$(printf '%s; ' "${alerts[@]}")" | sed 's/; $//' 
+	printf '%s\n' "$(printf '%s\n' "${report_lines[@]}")"
+}
+
+disk_has_detected_systems() {
+	local disk=${1:?disk is required}
+	local first_entry=""
+
+	first_entry="$(detect_disk_installed_systems "$disk" 2>/dev/null | head -n 1 || true)"
+	[[ -n $first_entry ]]
 }
 
 disk_partition_rows() {
@@ -564,6 +576,7 @@ show_disk_analysis() {
 	local size_gib=""
 	local label=""
 	local alerts=""
+	local installed_systems=""
 	local partitions=""
 	local layout_message=""
 
@@ -571,10 +584,11 @@ show_disk_analysis() {
 	size_gib="$(disk_size_gib "$disk")"
 	label="$(disk_label_value "$disk")"
 	alerts="$(disk_alerts "$disk")"
+	installed_systems="$(disk_detected_systems_report "$disk")"
 	partitions="$(disk_partition_summary "$disk")"
 	layout_message="$(disk_layout_message "$disk")"
 
-	msg "Disk Analysis" "Disk: $disk\nModel: $model\nSize: $size_gib\nLabel: $label\nStatus: $layout_message\nAlerts: $alerts\n\nPartitions:\n$partitions" 20 90
+	msg "Disk Analysis" "Disk: $disk\nModel: $model\nSize: $size_gib\nLabel: $label\nStatus: $layout_message\nAlerts: $alerts\n\nInstalled systems:\n$installed_systems\nPartitions:\n$partitions" 22 90
 }
 
 prepare_install_state() {
@@ -634,6 +648,7 @@ prepare_free_space_install() {
 	local disk=${1:?disk is required}
 	local boot_mode=${2:-bios}
 	local scenario=${3:-free-space}
+	local installed_systems=""
 	local largest_region=""
 	local start_mib=""
 	local end_mib=""
@@ -654,6 +669,7 @@ prepare_free_space_install() {
 	local layout_state=""
 
 	layout_state="$(disk_layout_state "$disk")"
+	installed_systems="$(disk_detected_systems_report "$disk")"
 	if [[ $layout_state == "empty" ]]; then
 		warning_box "Initialize Disk First" "No partition table detected (new disk).\n\nChoose 'Initialize disk (create GPT)' first, then use this strategy if you want to partition the disk without the full-wipe path."
 		return 1
@@ -678,12 +694,12 @@ prepare_free_space_install() {
 
 	IFS=$'\t' read -r start_mib end_mib size_mib <<< "$largest_region"
 	if (( size_mib < required_total_mib )); then
-		warning_box "Insufficient Free Space" "Largest free region: ${size_mib} MiB\nRequired: ${required_total_mib} MiB\n\nUse Windows Disk Management, another tool, or the manual partition editor to free space safely."
+		warning_box "Insufficient Free Space" "Largest free region: ${size_mib} MiB\nRequired: ${required_total_mib} MiB\n\nUse another partitioning tool or the manual partition editor to free space safely."
 		return 1
 	fi
 
 	if [[ $scenario == "dual-boot" ]]; then
-		warning_box "Windows Installation Detected" "Windows signatures were detected on this disk.\n\nThe installer will avoid wiping the disk and will create Linux partitions only in existing free space."
+		warning_box "Installed Systems Detected" "$installed_systems\n\nThe installer will keep the detected systems and create Linux partitions only in existing free space."
 	fi
 	if ! validate_disk_layout_access "$disk"; then
 		error_box "Disk Access Failed" "Could not read the current partition table for $disk."

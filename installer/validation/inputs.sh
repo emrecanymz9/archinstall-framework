@@ -214,3 +214,61 @@ prompt_password_or_keep() {
 
 	prompt_password "$title" "$allow_empty"
 }
+
+prompt_manual_packages() {
+	local title=${1:-"Manual Packages"}
+	local initial_value=${2-}
+	local value=""
+	local status=0
+	local dialog_body=""
+	local validation_error=""
+	local -a parsed_packages=()
+	local -a invalid_packages=()
+	local package_name=""
+
+	while true; do
+		dialog_body="Add packages after the checklist selection.\n\nConstraints:\n- separate package names with spaces\n- packages must exist in the enabled repositories\n- leave blank to skip manual packages\n\nExample: htop btop jq"
+		if [[ -n $validation_error ]]; then
+			dialog_body+="\n\nError: $validation_error"
+		fi
+
+		input_box "$title" "$dialog_body" "$initial_value" 14 76
+		value="$DIALOG_RESULT"
+		status=$DIALOG_STATUS
+
+		case $status in
+			1|255)
+				return 1
+				;;
+			0)
+				;;
+			*)
+				return 1
+				;;
+		esac
+
+		if [[ -z $value ]]; then
+			printf '\n'
+			return 0
+		fi
+
+		parsed_packages=()
+		invalid_packages=()
+		read -r -a parsed_packages <<< "$value"
+		for package_name in "${parsed_packages[@]}"; do
+			[[ -n $package_name ]] || continue
+			if ! pacman -Sp "$package_name" >/dev/null 2>&1; then
+				invalid_packages+=("$package_name")
+			fi
+		done
+
+		if (( ${#invalid_packages[@]} > 0 )); then
+			validation_error="Packages not found: ${invalid_packages[*]}"
+			initial_value="$value"
+			continue
+		fi
+
+		printf '%s\n' "$value"
+		return 0
+	done
+}

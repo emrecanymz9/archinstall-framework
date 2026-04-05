@@ -142,6 +142,7 @@ select_partition_strategy_for_disk() {
 	local strategy=""
 	local action_status=1
 	local layout_state=""
+	local has_detected_systems="false"
 	local -a strategy_args=()
 
 	if [[ -z $selected_disk ]]; then
@@ -152,15 +153,24 @@ select_partition_strategy_for_disk() {
 	boot_mode="$(state_or_default "BOOT_MODE" "$(detect_boot_mode 2>/dev/null || printf 'bios')")"
 	show_disk_analysis "$selected_disk"
 	layout_state="$(disk_layout_state "$selected_disk")"
-	strategy_args=(
-		"wipe" "Auto partition (recommended): erase the disk and create the guided layout"
-	)
+	if disk_has_detected_systems "$selected_disk"; then
+		has_detected_systems="true"
+		strategy_args=(
+			"dual-boot" "Keep existing (dual boot): preserve detected systems and use free space"
+			"wipe" "Wipe disk: erase detected systems and create the guided layout"
+		)
+	else
+		strategy_args=(
+			"wipe" "Auto partition (recommended): erase the disk and create the guided layout"
+		)
+	fi
 	if [[ $layout_state == "empty" || $layout_state == "corrupt" || $layout_state == "unreadable" ]]; then
 		strategy_args+=("initialize" "Initialize the disk label before partitioning")
 	fi
+	if [[ $has_detected_systems != "true" ]]; then
+		strategy_args+=("free-space" "Use available free space on the selected disk")
+	fi
 	strategy_args+=(
-		"free-space" "Use available free space on the selected disk"
-		"dual-boot" "Preserve detected Windows partitions and use free space"
 		"manual" "Reuse or choose prepared partitions yourself"
 		"back" "Return to the previous menu"
 	)
