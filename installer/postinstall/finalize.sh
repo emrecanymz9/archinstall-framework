@@ -59,16 +59,22 @@ if ! id -u "$TARGET_USERNAME" >/dev/null 2>&1; then
 	exit 1
 fi
 if [[ -n $TARGET_USER_PASSWORD ]]; then
-	echo "$TARGET_USERNAME:$TARGET_USER_PASSWORD" | chpasswd
+	if ! echo "$TARGET_USERNAME:$TARGET_USER_PASSWORD" | chpasswd; then
+		echo "[FAIL] chpasswd failed for user '$TARGET_USERNAME'"
+		exit 1
+	fi
 else
 	passwd -d "$TARGET_USERNAME"
-	echo "[INFO] No password set for $TARGET_USERNAME; account is password-locked until set manually"
+	echo "[INFO] No password set for $TARGET_USERNAME; password entry cleared"
 fi
 if [[ -n $TARGET_ROOT_PASSWORD ]]; then
-	echo "root:$TARGET_ROOT_PASSWORD" | chpasswd
+	if ! echo "root:$TARGET_ROOT_PASSWORD" | chpasswd; then
+		echo "[FAIL] chpasswd failed for root"
+		exit 1
+	fi
 else
 	passwd -d root
-	echo "[INFO] No password set for root; root account is password-locked until set manually"
+	echo "[INFO] No password set for root; password entry cleared"
 fi
 
 log_chroot_step "Configuring sudo permissions"

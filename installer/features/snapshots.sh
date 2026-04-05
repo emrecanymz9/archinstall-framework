@@ -8,17 +8,71 @@ snapshot_provider_label() {
 		snapper)
 			printf 'Snapper\n'
 			;;
+		timeshift)
+			printf 'Timeshift\n'
+			;;
 		*)
 			printf 'None\n'
 			;;
 	esac
 }
 
+snapshot_provider_details() {
+	local provider=${1:-none}
+	local bootloader=${2:-}
+
+	case $provider in
+		snapper)
+			printf 'Snapper (preferred for %s)\n' "$(bootloader_label "$bootloader" "$(state_or_default "BOOT_MODE" "bios")")"
+			;;
+		timeshift)
+			printf 'Timeshift (preferred for %s)\n' "$(bootloader_label "$bootloader" "$(state_or_default "BOOT_MODE" "bios")")"
+			;;
+		*)
+			printf 'None\n'
+			;;
+	esac
+}
+
+normalize_snapshot_provider() {
+	local provider=${1:-none}
+	local filesystem=${2:-ext4}
+	local bootloader=${3:-grub}
+
+	case $provider in
+		snapper)
+			if [[ $filesystem == "btrfs" && $bootloader != "grub" ]]; then
+				printf 'snapper\n'
+				return 0
+			fi
+			printf 'none\n'
+			return 0
+			;;
+		timeshift)
+			if [[ $bootloader == "grub" ]]; then
+				printf 'timeshift\n'
+				return 0
+			fi
+			printf 'none\n'
+			return 0
+			;;
+		*)
+			printf 'none\n'
+			return 0
+			;;
+	esac
+}
+
 snapshot_default_provider() {
 	local filesystem=${1:-ext4}
-	local install_profile=${2:-daily}
+	local bootloader=${2:-grub}
 
-	if [[ $filesystem == "btrfs" && $install_profile == "daily" ]]; then
+	if [[ $bootloader == "grub" ]]; then
+		printf 'timeshift\n'
+		return 0
+	fi
+
+	if [[ $filesystem == "btrfs" ]]; then
 		printf 'snapper\n'
 		return 0
 	fi
@@ -43,6 +97,9 @@ snapshot_required_packages() {
 				fi
 			fi
 			;;
+		timeshift)
+			package_ref=(timeshift)
+			;;
 		*)
 			;;
 	esac
@@ -64,6 +121,15 @@ if command -v snapper >/dev/null 2>&1; then
 fi
 EOF
 			fi
+			;;
+		timeshift)
+			cat <<'EOF'
+log_chroot_step "Preparing Timeshift"
+if command -v timeshift >/dev/null 2>&1; then
+	install -d -m 0755 /etc/timeshift
+	echo "[INFO] Timeshift installed. Initial snapshot policy can be configured after first boot."
+fi
+EOF
 			;;
 		*)
 			;;

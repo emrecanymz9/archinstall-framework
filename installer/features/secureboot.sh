@@ -24,7 +24,7 @@ select_secure_boot_mode() {
 		return 0
 	fi
 
-	menu "Secure Boot" "Choose the Secure Boot strategy.\n\nCurrent firmware state: $(secure_boot_state_label "$secure_boot_state")\n\nDisabled leaves the boot chain unchanged. Setup foundation installs sbctl and ukify, prepares UKIs, and attempts safe enrollment only when firmware setup mode permits it." 18 78 4 \
+	menu "Secure Boot" "Choose the Secure Boot strategy.\n\nCurrent firmware state: $(secure_boot_state_label "$secure_boot_state")\n\nExample: choose Setup Foundation when you want a UKI-ready, best-effort Secure Boot flow.\nConstraint: the final behavior depends on the selected bootloader." 18 78 4 \
 		"disabled" "Do not configure Secure Boot" \
 		"setup" "Prepare a non-fatal sbctl-based Secure Boot foundation"
 
@@ -42,7 +42,8 @@ select_secure_boot_mode() {
 secure_boot_packages() {
 	local secure_boot_mode=${1:-disabled}
 	local boot_mode=${2:-bios}
-	local -n package_ref=${3:?package reference is required}
+	local bootloader=${3:-$(default_bootloader_for_mode "$boot_mode")}
+	local -n package_ref=${4:?package reference is required}
 
 	package_ref=()
 	if [[ $boot_mode != "uefi" ]]; then
@@ -51,7 +52,10 @@ secure_boot_packages() {
 
 	case $secure_boot_mode in
 		setup)
-			package_ref+=(sbctl systemd-ukify)
+			package_ref+=(sbctl)
+			if [[ $bootloader == "systemd-boot" ]]; then
+				package_ref+=(systemd-ukify)
+			fi
 			;;
 		*)
 			;;
@@ -73,7 +77,7 @@ secure_boot_guidance_text() {
 			printf 'Secure Boot configuration is disabled.'
 			;;
 		setup)
-			printf 'Setup foundation mode installs sbctl and systemd-ukify, prepares a UKI workflow, and keeps key enrollment best-effort so the install remains bootable even when firmware ownership is not ready.'
+			printf 'Setup foundation mode installs Secure Boot tooling and keeps the workflow non-fatal. systemd-boot receives the full UKI path. GRUB and Limine remain advanced/manual Secure Boot configurations.'
 			;;
 		*)
 			printf 'Secure Boot mode: %s' "$secure_boot_mode"

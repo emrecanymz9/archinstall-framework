@@ -681,6 +681,7 @@ checklist_box() {
 			--clear \
 			--backtitle "$ARCHINSTALL_BACKTITLE" \
 			--title "$(sanitize_dialog_text "$title")" \
+			--default-button ok \
 			--checklist "$(sanitize_dialog_text "$(with_footer_hints "$body" "SPACE=Toggle, ENTER=Confirm, ESC=Back")")" \
 			"$height" "$width" "$list_height" \
 			"$@" \

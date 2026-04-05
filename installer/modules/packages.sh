@@ -38,7 +38,7 @@ resolve_package_strategy() {
 
 	install_profile_packages "$install_profile" "$editor_choice" "$include_vscode" "$custom_tools" profile_packages || return 1
 	hardware_profile_packages "$environment_vendor" "$gpu_vendor" "$desktop_profile" "$install_steam" "$cpu_vendor" "$environment_type" hardware_packages || return 1
-	secure_boot_packages "$secure_boot_mode" "$boot_mode" secure_boot_packages_ref || return 1
+	secure_boot_packages "$secure_boot_mode" "$boot_mode" "$bootloader" secure_boot_packages_ref || return 1
 	if declare -F bootloader_required_packages >/dev/null 2>&1; then
 		bootloader_required_packages "$bootloader" "$boot_mode" bootloader_packages || return 1
 		append_unique_packages package_ref "${bootloader_packages[@]}"

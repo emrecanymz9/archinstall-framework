@@ -67,7 +67,11 @@ safe_source_module "$SCRIPT_DIR/modules/luks.sh" || true
 safe_source_module "$SCRIPT_DIR/features/snapshots.sh" || true
 
 INSTALL_USER_PASSWORD=${INSTALL_USER_PASSWORD:-""}
+INSTALL_USER_PASSWORD_MODE=${INSTALL_USER_PASSWORD_MODE:-unset}
 INSTALL_ROOT_PASSWORD=${INSTALL_ROOT_PASSWORD:-""}
+INSTALL_ROOT_PASSWORD_MODE=${INSTALL_ROOT_PASSWORD_MODE:-unset}
+INSTALL_LUKS_PASSWORD=${INSTALL_LUKS_PASSWORD:-""}
+INSTALL_LUKS_PASSWORD_MODE=${INSTALL_LUKS_PASSWORD_MODE:-unset}
 INSTALL_SAFE_MODE=${INSTALL_SAFE_MODE:-true}
 ZRAM=${ZRAM:-false}
 LIVE_CONSOLE_FONT=${LIVE_CONSOLE_FONT:-ter-v16n}
@@ -79,6 +83,16 @@ ARCHINSTALL_BOOT_SUMMARY=${ARCHINSTALL_BOOT_SUMMARY:-}
 ARCHINSTALL_ENV_SUMMARY=${ARCHINSTALL_ENV_SUMMARY:-}
 ARCHINSTALL_GPU_LABEL_CACHED=${ARCHINSTALL_GPU_LABEL_CACHED:-}
 ARCHINSTALL_NETWORK_STATUS=${ARCHINSTALL_NETWORK_STATUS:-}
+
+if [[ -n $INSTALL_USER_PASSWORD && $INSTALL_USER_PASSWORD_MODE == "unset" ]]; then
+	INSTALL_USER_PASSWORD_MODE=set
+fi
+if [[ -n $INSTALL_ROOT_PASSWORD && $INSTALL_ROOT_PASSWORD_MODE == "unset" ]]; then
+	INSTALL_ROOT_PASSWORD_MODE=set
+fi
+if [[ -n $INSTALL_LUKS_PASSWORD && $INSTALL_LUKS_PASSWORD_MODE == "unset" ]]; then
+	INSTALL_LUKS_PASSWORD_MODE=set
+fi
 
 log_debug() {
 	local message=${1:-}
@@ -524,26 +538,32 @@ select_boolean_value() {
 
 select_snapshot_provider() {
 	local filesystem=${1:-ext4}
-	local install_profile=${2:-daily}
+	local bootloader=${2:-grub}
 	local current_provider=${3:-}
 
 	if [[ -z $current_provider ]] && declare -F snapshot_default_provider >/dev/null 2>&1; then
-		current_provider="$(snapshot_default_provider "$filesystem" "$install_profile")"
+		current_provider="$(snapshot_default_provider "$filesystem" "$bootloader")"
 	fi
-	current_provider=${current_provider:-none}
+	current_provider="$(normalize_snapshot_provider "${current_provider:-none}" "$filesystem" "$bootloader")"
 
-	if [[ $filesystem != "btrfs" ]]; then
-		printf 'none\n'
-		return 0
+	if [[ $bootloader == "grub" ]]; then
+		menu "Snapshots" "Choose the snapshot strategy.\n\nCurrent: $(snapshot_provider_label "$current_provider")\nBootloader: $(bootloader_label "$bootloader" "$(state_or_default "BOOT_MODE" "bios")")\n\nConstraint: GRUB uses Timeshift and disables Snapper integration." 15 76 3 \
+			"none" "No snapshot integration" \
+			"timeshift" "Timeshift recovery snapshots for the GRUB path"
+	else
+		if [[ $filesystem != "btrfs" ]]; then
+			printf 'none\n'
+			return 0
+		fi
+
+		menu "Snapshots" "Choose the snapshot strategy.\n\nCurrent: $(snapshot_provider_label "$current_provider")\nBootloader: $(bootloader_label "$bootloader" "$(state_or_default "BOOT_MODE" "bios")")\nFilesystem: $filesystem\n\nConstraint: systemd-boot and Limine use Snapper, not Timeshift." 16 78 3 \
+			"none" "No snapshot integration" \
+			"snapper" "Btrfs snapshots with timeline cleanup"
 	fi
-
-	menu "Snapshots" "Choose an optional snapshot engine.\n\nCurrent: $(snapshot_provider_label "$current_provider")\nFilesystem: $filesystem" 15 72 3 \
-		"none" "No snapshot integration" \
-		"snapper" "Btrfs snapshots with timeline cleanup"
 
 	case $DIALOG_STATUS in
 		0)
-			printf '%s\n' "$DIALOG_RESULT"
+			printf '%s\n' "$(normalize_snapshot_provider "$DIALOG_RESULT" "$filesystem" "$bootloader")"
 			return 0
 			;;
 		*)
@@ -981,11 +1001,16 @@ prompt_required_input() {
 	local initial_value=${3-}
 	local value=""
 	local status=0
-	local MAX_RETRY=3
-	local RETRY_COUNT=0
+	local dialog_body=""
+	local validation_error=""
 
-	while (( RETRY_COUNT < MAX_RETRY )); do
-		input_box "$title" "$prompt" "$initial_value" 12 76
+	while true; do
+		dialog_body="$prompt"
+		if [[ -n $validation_error ]]; then
+			dialog_body+="\n\nError: $validation_error"
+		fi
+
+		input_box "$title" "$dialog_body" "$initial_value" 12 76
 		value="$DIALOG_RESULT"
 		status=$DIALOG_STATUS
 		case $status in
@@ -994,38 +1019,35 @@ prompt_required_input() {
 					printf '%s\n' "$value"
 					return 0
 				fi
-				RETRY_COUNT=$((RETRY_COUNT + 1))
-				msg "$title" "A value is required."
+				validation_error="A value is required."
 				;;
 			1|255)
 				return 1
 				;;
 			*)
-				RETRY_COUNT=$((RETRY_COUNT + 1))
-				if (( RETRY_COUNT >= MAX_RETRY )); then
-					error_box "$title" "Input failed repeatedly. Returning to the previous menu."
-					return 1
-				fi
+				return 1
 				;;
 		esac
 		initial_value="$value"
 	done
-
-	error_box "$title" "Input retry limit reached. Returning to the previous menu."
-	return 1
 }
 
-# prompt_username: validates against POSIX username rules before returning.
-# Loops until the user provides a valid name or presses Back/ESC.
 prompt_username() {
 	local title=${1:-"Username"}
 	local initial_value=${2:-"archuser"}
 	local value=""
 	local status=0
+	local dialog_body=""
+	local validation_error=""
 
 	while true; do
+		dialog_body="Create the primary user account.\n\nConstraints:\n- must start with a lowercase letter or underscore\n- allowed: lowercase letters, digits, underscores, hyphens\n- maximum length: 32 characters\n\nExample: archuser"
+		if [[ -n $validation_error ]]; then
+			dialog_body+="\n\nError: $validation_error"
+		fi
+
 		input_box "$title" \
-			"Create the primary user account.\n\nMust start with a letter or underscore.\nAllowed: lowercase letters, digits, underscores, hyphens.\nMax 32 characters.\n\nExample: archuser" \
+			"$dialog_body" \
 			"$initial_value" 14 76
 		value="$DIALOG_RESULT"
 		status=$DIALOG_STATUS
@@ -1042,12 +1064,13 @@ prompt_username() {
 		esac
 
 		if [[ -z $value ]]; then
-			msg "$title" "Username cannot be empty."
+			validation_error="Username cannot be empty."
+			initial_value="$value"
 			continue
 		fi
 
 		if [[ ! $value =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
-			msg "$title" "Invalid username: '$value'\n\nMust start with a lowercase letter or underscore.\nOnly lowercase letters, digits, underscores, and hyphens are allowed.\nMaximum length is 32 characters."
+			validation_error="Invalid username: '$value'"
 			initial_value="$value"
 			continue
 		fi
@@ -1057,18 +1080,61 @@ prompt_username() {
 	done
 }
 
-# prompt_password: collects a password with confirmation.
-# An empty password is allowed; the caller decides how to handle it.
-# Returns the password (possibly empty) via stdout.
-# Returns 1 only when the user presses Back/ESC to cancel entirely.
+password_mode_for_value() {
+	case ${2:-true}:${1-} in
+		false:)
+			printf 'unset\n'
+			;;
+		true:)
+			printf 'empty\n'
+			;;
+		*)
+			printf 'set\n'
+			;;
+	esac
+}
+
+password_mode_label() {
+	case ${1:-unset} in
+		set)
+			printf 'set\n'
+			;;
+		empty)
+			printf 'empty (password cleared)\n'
+			;;
+		*)
+			printf 'not configured\n'
+			;;
+	esac
+}
+
 prompt_password() {
 	local title=${1:?title is required}
+	local allow_empty=${2:-true}
 	local first=""
 	local second=""
 	local status=0
+	local validation_error=""
+	local prompt_text=""
 
 	while true; do
-		password_box "$title" "Enter the password. Leave blank to set no password." 12 76
+		prompt_text="Enter the password."
+		if [[ $allow_empty == "true" ]]; then
+			prompt_text+=" Leave blank to skip password setup."
+		else
+			prompt_text+=" A password is required for this setting."
+		fi
+		prompt_text+="\n\nConstraints:\n- entry is non-interactive\n- non-empty passwords require confirmation"
+		if [[ $allow_empty == "true" ]]; then
+			prompt_text+="\n- blank input clears the password"
+		fi
+		prompt_text+="\n- non-empty values must be 8 to 72 characters"
+		prompt_text+="\n- ':' is not allowed"
+		if [[ -n $validation_error ]]; then
+			prompt_text+="\n\nError: $validation_error"
+		fi
+
+		password_box "$title" "$prompt_text" 15 76
 		first="$DIALOG_RESULT"
 		status=$DIALOG_STATUS
 		case $status in
@@ -1083,11 +1149,26 @@ prompt_password() {
 		esac
 
 		if [[ -z $first ]]; then
-			# Empty password: confirm the user meant to leave it blank
-			if confirm "$title" "No password will be set for this account.\n\nThe account will be password-locked until a password is set manually.\n\nProceed with no password?" 12 76; then
+			if [[ $allow_empty == "true" ]]; then
 				printf ''
 				return 0
 			fi
+			validation_error="A password is required."
+			continue
+		fi
+
+		if [[ $first == *:* ]]; then
+			validation_error="Passwords cannot contain ':'."
+			continue
+		fi
+
+		if (( ${#first} < 8 )); then
+			validation_error="Password must be at least 8 characters long."
+			continue
+		fi
+
+		if (( ${#first} > 72 )); then
+			validation_error="Password must be 72 characters or fewer."
 			continue
 		fi
 
@@ -1106,7 +1187,7 @@ prompt_password() {
 		esac
 
 		if [[ $first != "$second" ]]; then
-			msg "$title" "Passwords did not match. Please try again."
+			validation_error="Passwords did not match. Please try again."
 			continue
 		fi
 
@@ -1118,21 +1199,24 @@ prompt_password() {
 prompt_password_or_keep() {
 	local title=${1:?title is required}
 	local current_password=${2-}
+	local current_mode=${3:-unset}
+	local allow_empty=${4:-true}
 
-	if [[ -n $current_password ]]; then
-		if confirm "$title" "A password is already loaded for this session.\n\nKeep it?" 12 72; then
+	if [[ $current_mode != "unset" ]]; then
+		if confirm "$title" "A password configuration is already loaded for this session.\n\nCurrent state: $(password_mode_label "$current_mode")\n\nKeep it?" 12 72; then
 			printf '%s\n' "$current_password"
 			return 0
 		fi
 	fi
 
-	prompt_password "$title"
+	prompt_password "$title" "$allow_empty"
 }
 
 configure_partition_stage() {
 	local disk=""
 	local boot_mode=""
 	local bootloader=""
+	local boot_experience_level="simple"
 	local filesystem=""
 	local enable_luks="false"
 	local luks_password=""
@@ -1147,17 +1231,27 @@ configure_partition_stage() {
 		return 1
 	fi
 
-	filesystem="$(select_filesystem "$(state_or_default "FILESYSTEM" "ext4")")" || return 1
-	enable_luks="$(select_boolean_value "Encryption" "Enable LUKS2 encryption for the root filesystem?\n\nTip: choose this before partitioning so the disk layout is prepared correctly." "$(state_or_default "ENABLE_LUKS" "false")" "Enable LUKS2" "Disable encryption")" || return 1
-	if [[ $enable_luks == "true" ]]; then
-		luks_password="$(prompt_password_or_keep "LUKS Password" "${INSTALL_LUKS_PASSWORD:-}")" || return 1
-	fi
-	snapshot_provider="$(select_snapshot_provider "$filesystem" "$(state_or_default "INSTALL_PROFILE" "daily")" "$(state_or_default "SNAPSHOT_PROVIDER" "")")" || return 1
-	enable_zram="$(select_zram_preference "$(state_or_default "ENABLE_ZRAM" "$ZRAM")")" || return 1
 	boot_mode="$(state_or_default "BOOT_MODE" "$(detect_boot_mode 2>/dev/null || printf 'bios')")"
-	bootloader="$(normalize_bootloader "$(state_or_default "BOOTLOADER" "")" "$boot_mode")"
 	secure_boot_state="$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")"
+
+	filesystem="$(select_filesystem "$(state_or_default "FILESYSTEM" "ext4")")" || return 1
+	enable_luks="$(select_boolean_value "Encryption" "Choose whether the root filesystem should be protected with LUKS2.\n\nExample: enable this for laptop or shared-device installs.\nConstraint: if enabled, a non-empty LUKS password is required before partitioning continues." "$(state_or_default "ENABLE_LUKS" "false")" "Enable LUKS2" "Disable encryption")" || return 1
+	if [[ $enable_luks == "true" ]]; then
+		luks_password="$(prompt_password_or_keep "LUKS Password" "${INSTALL_LUKS_PASSWORD:-}" "${INSTALL_LUKS_PASSWORD_MODE:-unset}" false)" || return 1
+		INSTALL_LUKS_PASSWORD="$luks_password"
+		INSTALL_LUKS_PASSWORD_MODE=set
+	else
+		INSTALL_LUKS_PASSWORD=""
+		INSTALL_LUKS_PASSWORD_MODE=unset
+	fi
+	enable_zram="$(select_zram_preference "$(state_or_default "ENABLE_ZRAM" "$ZRAM")")" || return 1
 	secure_boot_mode="$(select_secure_boot_mode "$(state_or_default "SECURE_BOOT_MODE" "disabled")" "$boot_mode" "$secure_boot_state")" || return 1
+	boot_experience_level="$(state_or_default "BOOT_EXPERIENCE_LEVEL" "simple")"
+	select_bootloader_value "$boot_mode" "$secure_boot_mode" "$enable_luks" \
+		"$(state_or_default "BOOTLOADER" "")" \
+		"$boot_experience_level" \
+		bootloader boot_experience_level || return 1
+	snapshot_provider="$(select_snapshot_provider "$filesystem" "$bootloader" "$(state_or_default "SNAPSHOT_PROVIDER" "")")" || return 1
 
 	set_state "FILESYSTEM" "$filesystem" || return 1
 	set_state "ENABLE_LUKS" "$enable_luks" || return 1
@@ -1166,11 +1260,11 @@ configure_partition_stage() {
 	set_state "ENABLE_ZRAM" "$enable_zram" || return 1
 	set_state "BOOT_MODE" "$boot_mode" || return 1
 	set_state "BOOTLOADER" "$bootloader" || return 1
+	set_state "BOOT_EXPERIENCE_LEVEL" "$boot_experience_level" || return 1
 	set_state "SECURE_BOOT_MODE" "$secure_boot_mode" || return 1
-	INSTALL_LUKS_PASSWORD="$luks_password"
 
 	select_partition_strategy_for_disk "$disk" || return 1
-	msg "Partition Saved" "Partition settings updated for $disk.\n\nFilesystem: $filesystem\nEncryption: $enable_luks\nSnapshots: $(snapshot_provider_label "$snapshot_provider")\nZram: $enable_zram\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nBootloader: $(bootloader_label "$bootloader" "$boot_mode")"
+	msg "Partition Saved" "Partition settings updated for $disk.\n\nFilesystem: $filesystem\nEncryption: $enable_luks\nSnapshots: $(snapshot_provider_label "$snapshot_provider")\nZram: $enable_zram\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nBootloader: $(bootloader_label "$bootloader" "$boot_mode")\nBoot path: $(bootloader_selection_tag "$bootloader" "$boot_mode" "$secure_boot_mode" "$boot_experience_level")"
 	return 0
 }
 
@@ -1282,8 +1376,8 @@ configure_packages_stage() {
 	locale="$(select_locale_value "$(state_or_default "LOCALE" "en_US.UTF-8")")" || return 1
 	keymap="$(select_keyboard_layout_value "$(state_or_default "KEYMAP" "us")")" || return 1
 	username="$(prompt_username "Username" "$(state_or_default "USERNAME" "archuser")")" || return 1
-	user_password="$(prompt_password_or_keep "User Password" "$INSTALL_USER_PASSWORD")" || return 1
-	root_password="$(prompt_password_or_keep "Root Password" "$INSTALL_ROOT_PASSWORD")" || return 1
+	user_password="$(prompt_password_or_keep "User Password" "$INSTALL_USER_PASSWORD" "$INSTALL_USER_PASSWORD_MODE" true)" || return 1
+	root_password="$(prompt_password_or_keep "Root Password" "$INSTALL_ROOT_PASSWORD" "$INSTALL_ROOT_PASSWORD_MODE" true)" || return 1
 
 	case $install_profile in
 		daily)
@@ -1307,7 +1401,7 @@ configure_packages_stage() {
 			_st()     { [[ -z $_saved_cl || " $_saved_cl " == *" $1 "* ]] && printf 'on' || printf 'off'; }
 			_st_off() { [[ -n $_saved_cl && " $_saved_cl " == *" $1 "* ]] && printf 'on' || printf 'off'; }
 			checklist_box "Custom Packages" \
-				"Choose the optional packages to add.\n\nTip: leave everything selected for a ready-to-use desktop, or trim it down if you want a smaller install." \
+				"Choose the optional packages to add.\n\nExample: keep all selections for a ready-to-use desktop.\nConstraint: manual package entry happens only once after this screen." \
 				22 76 12 \
 				"firefox"   "Web browser"                 "$(_st firefox)"   \
 				"keepassxc" "Password manager"            "$(_st keepassxc)" \
@@ -1324,20 +1418,26 @@ configure_packages_stage() {
 			else
 				include_vscode="false"
 			fi
-			local -a _extra_acc=()
 			local _extra_saved
+			local _extra_input=""
+			local _extra_error=""
+			local -a _extra_arr=() _bad_pkgs=() _good_pkgs=()
 			_extra_saved="$(state_or_default "CUSTOM_EXTRA" "")"
 			while true; do
-				input_box "Additional Packages" \
-					"Enter extra packages to install beyond the checklist (space-separated). Leave blank for none." \
-					"$_extra_saved" 10 76
+				local _extra_prompt="Enter extra packages to install beyond the checklist (space-separated).\n\nExample: htop btop jq\nConstraint: packages must exist in the enabled repositories. Leave blank for none."
+				if [[ -n $_extra_error ]]; then
+					_extra_prompt+="\n\nError: $_extra_error"
+				fi
+				input_box "Additional Packages" "$_extra_prompt" "$_extra_saved" 12 76
 				[[ $DIALOG_STATUS -eq 0 ]] || return 1
-				local _extra_input="$DIALOG_RESULT"
-				_extra_saved=""
+				_extra_input="$DIALOG_RESULT"
 				if [[ -z $_extra_input ]]; then
+					custom_extra=""
 					break
 				fi
-				local -a _extra_arr=() _bad_pkgs=() _good_pkgs=()
+				_extra_arr=()
+				_bad_pkgs=()
+				_good_pkgs=()
 				read -r -a _extra_arr <<< "$_extra_input"
 				local _pkg
 				for _pkg in "${_extra_arr[@]}"; do
@@ -1349,14 +1449,13 @@ configure_packages_stage() {
 					fi
 				done
 				if (( ${#_bad_pkgs[@]} > 0 )); then
-					msg "Invalid Packages" "The following packages were not found in the repositories and will not be added:\n\n  ${_bad_pkgs[*]}\n\nPlease re-enter only valid package names."
+					_extra_error="Packages not found: ${_bad_pkgs[*]}"
 					_extra_saved="$_extra_input"
 					continue
 				fi
-				_extra_acc+=("${_good_pkgs[@]}")
-				confirm "Add More Packages" "All packages validated.\n\nCurrently queued: ${_extra_acc[*]}\n\nAdd more extra packages?" || break
+				custom_extra="${_good_pkgs[*]}"
+				break
 			done
-			custom_extra="${_extra_acc[*]}"
 			custom_tools="${custom_checklist}${custom_extra:+ $custom_extra}"
 			;;
 		*)
@@ -1376,10 +1475,12 @@ configure_packages_stage() {
 	set_state "CUSTOM_EXTRA" "$custom_extra" || return 1
 	INSTALL_USER_PASSWORD="$user_password"
 	INSTALL_ROOT_PASSWORD="$root_password"
+	INSTALL_USER_PASSWORD_MODE="$(password_mode_for_value "$user_password" true)"
+	INSTALL_ROOT_PASSWORD_MODE="$(password_mode_for_value "$root_password" true)"
 	if type sync_install_config_json >/dev/null 2>&1; then
 		sync_install_config_json >/dev/null 2>&1 || true
 	fi
-	msg "Packages Saved" "Identity and package settings updated.\n\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nEditor: $(editor_choice_label "$editor_choice")\nVS Code: $include_vscode"
+	msg "Packages Saved" "Identity and package settings updated.\n\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nUser password: $(password_mode_label "$INSTALL_USER_PASSWORD_MODE")\nRoot password: $(password_mode_label "$INSTALL_ROOT_PASSWORD_MODE")\nEditor: $(editor_choice_label "$editor_choice")\nVS Code: $include_vscode"
 	return 0
 }
 
@@ -1403,12 +1504,13 @@ validate_install_profile() {
 	has_state "USERNAME" || missing+=("user")
 	has_state "INSTALL_PROFILE" || missing+=("install profile")
 	has_state "DESKTOP_PROFILE" || missing+=("desktop selection")
+	has_state "BOOTLOADER" || missing+=("bootloader")
 	has_state "DISPLAY_MANAGER" || missing+=("display manager")
 	has_state "DISPLAY_SESSION" || missing+=("display session")
 	has_state "EDITOR_CHOICE" || missing+=("editor choice")
-	[[ -n $INSTALL_USER_PASSWORD ]] || missing+=("user password")
-	[[ -n $INSTALL_ROOT_PASSWORD ]] || missing+=("root password")
-	if [[ $(state_or_default "ENABLE_LUKS" "false") == "true" && -z ${INSTALL_LUKS_PASSWORD:-} ]]; then
+	[[ ${INSTALL_USER_PASSWORD_MODE:-unset} != "unset" ]] || missing+=("user password policy")
+	[[ ${INSTALL_ROOT_PASSWORD_MODE:-unset} != "unset" ]] || missing+=("root password policy")
+	if [[ $(state_or_default "ENABLE_LUKS" "false") == "true" && ${INSTALL_LUKS_PASSWORD_MODE:-unset} != "set" ]]; then
 		missing+=("LUKS password")
 	fi
 
@@ -1456,11 +1558,15 @@ show_state_summary() {
 	local bootloader
 	local secure_boot_state
 	local secure_boot_mode
+	local boot_experience_level
 	local environment_summary_value
 	local gpu_label_value
 	local install_profile_value
 	local user_password_state
 	local root_password_state
+	local custom_tools_value
+	local snapshot_details
+	local filesystem_details
 
 	disk="$(get_state "DISK" 2>/dev/null || printf 'Not selected')"
 	boot_mode="$(state_or_default "BOOT_MODE" "bios")"
@@ -1486,15 +1592,20 @@ show_state_summary() {
 	greeter="$(state_or_default "GREETER" "none")"
 	secure_boot_state="$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")"
 	secure_boot_mode="$(state_or_default "SECURE_BOOT_MODE" "disabled")"
+	boot_experience_level="$(state_or_default "BOOT_EXPERIENCE_LEVEL" "simple")"
 	environment_summary_value="$(safe_runtime_environment_summary)"
 	gpu_label_value="$(state_or_default "GPU_LABEL" "Generic")"
 	install_profile_value="$(state_or_default "INSTALL_PROFILE" "daily")"
-	user_password_state="not set"
-	root_password_state="not set"
-	[[ -n $INSTALL_USER_PASSWORD ]] && user_password_state="set"
-	[[ -n $INSTALL_ROOT_PASSWORD ]] && root_password_state="set"
+	user_password_state="$(password_mode_label "${INSTALL_USER_PASSWORD_MODE:-unset}")"
+	root_password_state="$(password_mode_label "${INSTALL_ROOT_PASSWORD_MODE:-unset}")"
+	custom_tools_value="$(state_or_default "CUSTOM_TOOLS" "")"
+	snapshot_details="$(snapshot_provider_details "$snapshot_provider" "$bootloader")"
+	filesystem_details="$filesystem"
+	if [[ $filesystem == "btrfs" ]]; then
+		filesystem_details+=" (@, @home, @var, @snapshots)"
+	fi
 
-	msg "Installer State" "Saved state:\n\nEnvironment: $environment_summary_value\nGPU: $gpu_label_value\nDisk: $disk\nDisk model: $(state_or_default "DISK_MODEL" "Unknown")\nDisk transport: $(disk_transport_label "$(state_or_default "DISK_TRANSPORT" "unknown")")\nDisk type: $(post_install_disk_type_label)\nDisk strategy: $install_scenario\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nBootloader: $(bootloader_label "$bootloader" "$boot_mode")\nSecure Boot mode: $(secure_boot_mode_label "$secure_boot_mode")\nEFI: $efi_partition\nRoot: $root_partition\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nInstall profile: $(install_profile_label "$install_profile_value")\nFilesystem: $filesystem\nEncryption: $enable_luks\nSnapshots: $(snapshot_provider_label "$snapshot_provider")\nSteam: $install_steam\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay session: $(display_mode_label "$display_session")\nDisplay manager: $(display_manager_label "$display_manager")\nGreeter: $(greeter_frontend_label "$greeter")\nSafe mode: $INSTALL_SAFE_MODE\nUser password: $user_password_state\nRoot password: $root_password_state\nDEV_MODE: $DEV_MODE\nUI mode: $INSTALL_UI_MODE" 30 82
+	msg "Installer State" "Saved state:\n\nEnvironment: $environment_summary_value\nGPU: $gpu_label_value\nDisk: $disk\nDisk model: $(state_or_default "DISK_MODEL" "Unknown")\nDisk transport: $(disk_transport_label "$(state_or_default "DISK_TRANSPORT" "unknown")")\nDisk type: $(post_install_disk_type_label)\nDisk strategy: $install_scenario\nBoot mode: $(boot_mode_status_label "$boot_mode" "$secure_boot_state")\nBootloader: $(bootloader_label "$bootloader" "$boot_mode")\nBoot path: $(bootloader_selection_tag "$bootloader" "$boot_mode" "$secure_boot_mode" "$boot_experience_level")\nSecure Boot mode: $(secure_boot_mode_label "$secure_boot_mode")\nEFI: $efi_partition\nRoot: $root_partition\nHostname: $hostname\nTimezone: $timezone\nLocale: $locale\nKeyboard: $keymap\nUser: $username\nInstall profile: $(install_profile_label "$install_profile_value")\nFilesystem: $filesystem_details\nEncryption: $enable_luks\nLUKS password: $(password_mode_label "${INSTALL_LUKS_PASSWORD_MODE:-unset}")\nSnapshots: $snapshot_details\nSteam: $install_steam\nZram: $enable_zram\nDesktop: $(desktop_profile_label "$desktop_profile")\nDisplay session: $(display_mode_label "$display_session")\nDisplay manager: $(display_manager_label "$display_manager")\nGreeter: $(greeter_frontend_label "$greeter")\nExtra packages: ${custom_tools_value:-none}\nSafe mode: $INSTALL_SAFE_MODE\nUser password: $user_password_state\nRoot password: $root_password_state\nDEV_MODE: $DEV_MODE\nUI mode: $INSTALL_UI_MODE" 32 84
 }
 
 confirm_installation() {
@@ -1516,7 +1627,7 @@ confirm_installation() {
 
 	validate_install_profile || return 1
 
-	message="$(installer_context_header)\n\nThis will prepare a bootable Arch Linux system on:\n\n$disk\n\nDisk model: $(state_or_default "DISK_MODEL" "Unknown")\nDisk transport: $(disk_transport_label "$(state_or_default "DISK_TRANSPORT" "unknown")")\nDisk type: $(post_install_disk_type_label)\nDisk strategy: $(state_or_default "INSTALL_SCENARIO" "wipe")\nBoot mode: $(boot_mode_status_label "$(state_or_default "BOOT_MODE" "bios")" "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")\nBootloader: $(bootloader_label "$(state_or_default "BOOTLOADER" "")" "$(state_or_default "BOOT_MODE" "bios")")\nSecure Boot mode: $(secure_boot_mode_label "$(state_or_default "SECURE_BOOT_MODE" "disabled")")\nHostname: $(state_or_default "HOSTNAME" "archlinux")\nTimezone: $(state_or_default "TIMEZONE" "Europe/Istanbul")\nLocale: $(state_or_default "LOCALE" "en_US.UTF-8")\nKeyboard: $(state_or_default "KEYMAP" "us")\nUser: $(state_or_default "USERNAME" "archuser")\nInstall profile: $(install_profile_label "$(state_or_default "INSTALL_PROFILE" "daily")")\nFilesystem: $(state_or_default "FILESYSTEM" "ext4")\nEncryption: $(state_or_default "ENABLE_LUKS" "false")\nSnapshots: $(snapshot_provider_label "$(state_or_default "SNAPSHOT_PROVIDER" "none")")\nSteam: $(state_or_default "INSTALL_STEAM" "false")\nZram: $(state_or_default "ENABLE_ZRAM" "false")\nDesktop: $(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")\nDisplay session: $(display_mode_label "$(state_or_default "DISPLAY_SESSION" "wayland")")\nDisplay manager: $(display_manager_label "$(state_or_default "DISPLAY_MANAGER" "none")")\nGreeter: $(greeter_frontend_label "$(state_or_default "GREETER" "none")")\nSafe mode: $(state_or_default "INSTALL_SAFE_MODE" "$INSTALL_SAFE_MODE")\n\nDestructive steps may erase existing data."
+	message="$(installer_context_header)\n\nThis will prepare a bootable Arch Linux system on:\n\n$disk\n\nDisk model: $(state_or_default "DISK_MODEL" "Unknown")\nDisk transport: $(disk_transport_label "$(state_or_default "DISK_TRANSPORT" "unknown")")\nDisk type: $(post_install_disk_type_label)\nDisk strategy: $(state_or_default "INSTALL_SCENARIO" "wipe")\nBoot mode: $(boot_mode_status_label "$(state_or_default "BOOT_MODE" "bios")" "$(state_or_default "CURRENT_SECURE_BOOT_STATE" "unsupported")")\nBootloader: $(bootloader_label "$(state_or_default "BOOTLOADER" "")" "$(state_or_default "BOOT_MODE" "bios")")\nBoot path: $(bootloader_selection_tag "$(state_or_default "BOOTLOADER" "")" "$(state_or_default "BOOT_MODE" "bios")" "$(state_or_default "SECURE_BOOT_MODE" "disabled")" "$(state_or_default "BOOT_EXPERIENCE_LEVEL" "simple")")\nSecure Boot mode: $(secure_boot_mode_label "$(state_or_default "SECURE_BOOT_MODE" "disabled")")\nHostname: $(state_or_default "HOSTNAME" "archlinux")\nTimezone: $(state_or_default "TIMEZONE" "Europe/Istanbul")\nLocale: $(state_or_default "LOCALE" "en_US.UTF-8")\nKeyboard: $(state_or_default "KEYMAP" "us")\nUser: $(state_or_default "USERNAME" "archuser")\nInstall profile: $(install_profile_label "$(state_or_default "INSTALL_PROFILE" "daily")")\nFilesystem: $(state_or_default "FILESYSTEM" "ext4")\nEncryption: $(state_or_default "ENABLE_LUKS" "false")\nSnapshots: $(snapshot_provider_details "$(state_or_default "SNAPSHOT_PROVIDER" "none")" "$(state_or_default "BOOTLOADER" "")")\nSteam: $(state_or_default "INSTALL_STEAM" "false")\nZram: $(state_or_default "ENABLE_ZRAM" "false")\nDesktop: $(desktop_profile_label "$(state_or_default "DESKTOP_PROFILE" "none")")\nDisplay session: $(display_mode_label "$(state_or_default "DISPLAY_SESSION" "wayland")")\nDisplay manager: $(display_manager_label "$(state_or_default "DISPLAY_MANAGER" "none")")\nGreeter: $(greeter_frontend_label "$(state_or_default "GREETER" "none")")\nExtra packages: $(state_or_default "CUSTOM_TOOLS" "none")\nUser password: $(password_mode_label "${INSTALL_USER_PASSWORD_MODE:-unset}")\nRoot password: $(password_mode_label "${INSTALL_ROOT_PASSWORD_MODE:-unset}")\nSafe mode: $(state_or_default "INSTALL_SAFE_MODE" "$INSTALL_SAFE_MODE")\n\nDestructive steps may erase existing data."
 	if flag_enabled "$DEV_MODE"; then
 		message+="\n\nDev mode flags:\nSKIP_PARTITION=$SKIP_PARTITION\nSKIP_PACSTRAP=$SKIP_PACSTRAP\nSKIP_CHROOT=$SKIP_CHROOT\nINSTALL_UI_MODE=$INSTALL_UI_MODE"
 	fi
