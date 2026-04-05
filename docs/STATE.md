@@ -68,3 +68,5 @@ Every install decision must exist in persisted state before the pipeline starts.
 - Guided partitioning must write `INSTALL_SCENARIO` before installation can begin.
 - Display values must remain explicit; invalid values should be rejected rather than auto-corrected during apply.
 - New code should only read and write canonical keys.
+- Chroot execution must derive runtime variables from persisted state through `/root/.install_env`; the environment file is a runtime projection, not a second source of truth.
+- Required values such as locale and username must be validated before chroot handoff.

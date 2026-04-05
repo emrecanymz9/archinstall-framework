@@ -126,6 +126,7 @@ Compatibility wrappers are no longer part of the active target architecture. New
 Additional documentation:
 
 - `docs/architecture.md`
+- `docs/chroot.md`
 - `docs/features.md`
 - `docs/state.md`
 - `docs/roadmap.md`
@@ -191,6 +192,24 @@ Repository cleanup:
 ```bash
 make clean
 ```
+
+## Chroot Safety Rules
+
+All variables used inside chroot MUST be passed via `/root/.install_env` and sourced at runtime. Direct variable interpolation inside heredoc (for example, `arch-chroot /mnt <<EOF`) is FORBIDDEN.
+
+Rules:
+
+- executor writes `/mnt/root/.install_env` from validated installer state before chroot execution
+- chroot logic must begin by sourcing `/root/.install_env`
+- chroot snippets must consume runtime values from the sourced environment, not from host-side heredoc interpolation
+- empty locale or username values must fail before chroot and must fail again inside chroot if missing
+
+Why this is mandatory:
+
+- heredoc interpolation is fragile and can silently turn runtime variables into literal strings
+- escaped variables such as `\$TARGET_LOCALE` break locale and user configuration determinism
+- implicit host-side expansion violates the state-driven execution model
+- environment injection keeps state, execution, and validation responsibilities separated
 
 ## Install Flow
 
