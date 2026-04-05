@@ -46,12 +46,25 @@ build_greetd_command() {
 
 	case $greeter in
 		qtgreet)
-			printf '/usr/bin/qtgreet\n'
+			printf 'qtgreet --cmd %s\n' "$session_command"
 			;;
 		*)
 			printf '/usr/bin/tuigreet --time --cmd %s\n' "$session_command"
 			;;
 	esac
+}
+
+ensure_greeter_user() {
+	if id -u greeter >/dev/null 2>&1; then
+		return 0
+	fi
+
+	echo "[DEBUG] Creating greeter user"
+	if ! useradd -r -M -s /usr/bin/nologin -U greeter; then
+		echo "[FAIL] Failed to create greeter user"
+		return 1
+	fi
+	return 0
 }
 
 write_session_launcher() {
@@ -106,6 +119,10 @@ validate_greetd_setup() {
 				echo "[FAIL] /usr/bin/qtgreet is missing"
 				return 1
 			fi
+			if ! grep -q '^command = "qtgreet --cmd ' /etc/greetd/config.toml; then
+				echo "[FAIL] greetd config does not contain a valid qtgreet command"
+				return 1
+			fi
 			;;
 		*)
 			if [[ ! -x /usr/bin/tuigreet ]]; then
@@ -127,11 +144,18 @@ install_greetd() {
 
 	log_chroot_step "Configuring greetd"
 	if [[ $greeter == "qtgreet" ]]; then
-		install_packages_if_missing greetd greetd-qtgreet || true
+		if ! install_packages_if_missing greetd greetd-qtgreet qt6-base; then
+			echo "[FAIL] Could not install greetd qtgreet packages"
+			return 1
+		fi
 	else
 		greeter="tuigreet"
-		install_packages_if_missing greetd greetd-tuigreet || true
+		if ! install_packages_if_missing greetd greetd-tuigreet; then
+			echo "[FAIL] Could not install greetd tuigreet packages"
+			return 1
+		fi
 	fi
+	ensure_greeter_user || return 1
 	install -d -m 0755 /etc/greetd
 	write_session_launcher
 	write_greetd_failure_logger
@@ -145,11 +169,12 @@ user = "greeter"
 EOT
 	if ! validate_greetd_setup "$greeter"; then
 		echo "[FAIL] greetd validation failed after configuration"
-		exit 1
+		return 1
 	fi
 	echo "[DEBUG] greetd config written to /etc/greetd/config.toml"
 	rm -f /etc/sddm.conf.d/session.conf 2>/dev/null || true
 	write_display_manager_fallback_notice "$session_command"
+	return 0
 }
 
 install_sddm() {
@@ -187,6 +212,7 @@ Session=$(if [[ "$display_session" == "x11" ]]; then printf 'plasma.desktop'; el
 EOT
 	rm -f /etc/greetd/config.toml 2>/dev/null || true
 	write_display_manager_fallback_notice "$session_command"
+	return 0
 }
 
 apply_display_manager() {
@@ -210,10 +236,15 @@ apply_display_manager() {
 	session_command="$(plasma_session_command "$TARGET_RESOLVED_DISPLAY_SESSION")"
 	case $TARGET_DISPLAY_MANAGER in
 		greetd)
-			install_greetd "$TARGET_GREETER" "$session_command"
+			if [[ $TARGET_DESKTOP_PROFILE == "kde" ]]; then
+				echo "[WARN] KDE selected with greetd; falling back to sddm for stability"
+				install_sddm "$TARGET_RESOLVED_DISPLAY_SESSION" "$session_command" || echo "[WARN] SDDM fallback configuration failed"
+			else
+				install_greetd "$TARGET_GREETER" "$session_command" || echo "[WARN] greetd configuration failed; leaving manual session fallback in place"
+			fi
 			;;
 		sddm)
-			install_sddm "$TARGET_RESOLVED_DISPLAY_SESSION" "$session_command"
+			install_sddm "$TARGET_RESOLVED_DISPLAY_SESSION" "$session_command" || echo "[WARN] SDDM configuration failed; leaving manual session fallback in place"
 			;;
 		none)
 			rm -f /etc/greetd/config.toml 2>/dev/null || true
